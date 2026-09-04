@@ -141,6 +141,26 @@ class ProcessingEngine:
         while not self._pause_event.is_set() and not self._cancel_event.is_set():
             await asyncio.to_thread(self._pause_event.wait, 0.05)
 
+    async def _sleep_interruptible(self, seconds: float) -> bool:
+        """分段可取消的退避睡眠.
+
+        v4.1.8.1 (审计 M5): asyncio.sleep 整体不可被 cancel 中断, 旧退避
+        (Retry-After 可达几十秒) 会让用户 cancel 后任务仍卡住不退出. 拆 0.2s
+        小步逐段查 _cancel_event.
+        返回 True = 期间收到取消 (调用方应走取消收尾), False = 完整睡完.
+        """
+        if seconds <= 0:
+            return self._cancel_event.is_set()
+        step = 0.2
+        remaining = float(seconds)
+        while remaining > 0:
+            if self._cancel_event.is_set():
+                return True
+            chunk = min(step, remaining)
+            await asyncio.sleep(chunk)
+            remaining -= chunk
+        return self._cancel_event.is_set()
+
     def prepare_tasks(self, file_paths: list[Path]) -> None:
         """读取文件并加载断点缓存。
 
@@ -390,7 +410,10 @@ class ProcessingEngine:
                     f"(第 {attempt + 1}/{self.config.max_retries} 次)"
                 )
                 if attempt < self.config.max_retries:
-                    await asyncio.sleep(retry_after)
+                    # v4.1.8.1 (M5): 退避期间收到 cancel 立即走取消收尾, 不再傻等
+                    if await self._sleep_interruptible(retry_after):
+                        await self._finalize_cancelled(key, task, start)
+                        return
                     continue
                 # v4.1.8.1 (审计 B1): 重试耗尽走统一 FAILED 收尾. 旧代码 break 到
                 # for 循环外只置状态/存断点/发回调, 漏 stats 计数 + on_stats_update
@@ -409,7 +432,10 @@ class ProcessingEngine:
                 if attempt < self.config.max_retries:
                     delay = 2 ** attempt
                     self._log(f"[重试 {attempt + 1}/{self.config.max_retries}] {task.file_path.name} — {err_type}: {err_msg} — {delay}s 后重试")
-                    await asyncio.sleep(delay)
+                    # v4.1.8.1 (M5): 分段退避可被 cancel 中断
+                    if await self._sleep_interruptible(delay):
+                        await self._finalize_cancelled(key, task, start)
+                        return
                 else:
                     # v4.1.8.1 (审计 B1): 统一 FAILED 收尾 (原 else 内联收尾块已抽走)
                     self._log(f"[重试耗尽] {task.file_path.name} — {err_type}: {err_msg}")
@@ -528,15 +554,23 @@ class ProcessingEngine:
         task_key: str,
         text: str,
         system_prompt_override: Optional[str] = None,
+        stream_prefix: str = "",
     ) -> tuple[str, int]:
         """单块文本的流式调用。
 
         system_prompt_override: 外部传入的 system prompt（Phase 4 跨段上下文用）。
         为 None 时按 self.config 选 base system prompt。
+
+        stream_prefix: 本块之前已完成的全文 (多 chunk 场景). v4.1.8.1 (审计 M4):
+        每次 emit 推 prefix + 当前累积 -> 对前端单调增长, 消除多 chunk 时"块内只
+        推本块 buffer 覆盖掉前面内容"造成的回缩/闪断. 单 chunk 时为空串, 行为不变.
         """
         if system_prompt_override is not None:
             system_prompt = system_prompt_override
-        elif self.config.custom_prompt:
+        elif self.config.prompt_mode == "custom" and self.config.custom_prompt:
+            # v4.1.8.1 (审计 H12): custom_prompt 只在模式显式选"自定义"时生效.
+            # 旧实现 custom_prompt 非空即覆盖任意模式 -> 残留的旧自定义 prompt
+            # 会让 strict/polish 等模式的用户跑在完全不同的 system 下.
             system_prompt = self.config.custom_prompt
         else:
             mode_info = PROMPT_MODES.get(self.config.prompt_mode)
@@ -584,7 +618,8 @@ class ProcessingEngine:
                             or (now - last_emit_time) >= _STREAM_THROTTLE_MS
                         ):
                             # 节流触发时才 "".join 一次 (O(buffer_size))
-                            self.on_stream(task_key, "".join(buffer))
+                            # v4.1.8.1 (M4): 推单调增长全量 (前缀复用同一 str, 不重复 join)
+                            self.on_stream(task_key, stream_prefix + "".join(buffer))
                             last_emit_time = now
 
                 if event.usage:
@@ -600,7 +635,7 @@ class ProcessingEngine:
             raise ValueError("API 返回空内容 (stream 无 token)")
 
         if self.on_stream:
-            self.on_stream(task_key, corrected)
+            self.on_stream(task_key, stream_prefix + corrected)
 
         return corrected, token_count
 
@@ -642,7 +677,8 @@ class ProcessingEngine:
             system_prompt_override: Optional[str] = None
             if context_prefix:
                 # 取 base system prompt (按 _stream_single 的内部逻辑)
-                if self.config.custom_prompt:
+                # v4.1.8.1 (审计 H12): custom_prompt 只在"自定义"模式下生效
+                if self.config.prompt_mode == "custom" and self.config.custom_prompt:
                     base = self.config.custom_prompt
                 else:
                     mode_info = PROMPT_MODES.get(self.config.prompt_mode)
@@ -651,8 +687,12 @@ class ProcessingEngine:
                     base = mode_info["system"]
                 system_prompt_override = f"{base}\n\n{context_prefix}"
 
+            # v4.1.8.1 (M4): stream_prefix = 已完成块拼接, 让 _stream_single 每次
+            # emit 都是单调增长的全文; 块间不再把 UI 内容缩回本块 buffer
             part, tokens = await self._stream_single(
-                task_key, chunk, system_prompt_override=system_prompt_override
+                task_key, chunk,
+                system_prompt_override=system_prompt_override,
+                stream_prefix="".join(all_parts),
             )
             all_parts.append(part)
             total_tokens += tokens
@@ -662,9 +702,8 @@ class ProcessingEngine:
             )
             chunk_results.append(chunk_result)
             completed_chunks.append(chunk_result)
-            # 块完成后 emit 一次完整 partial
-            if self.on_stream:
-                self.on_stream(task_key, "".join(all_parts))
+            # 块完成全量 emit 已由 _stream_single 末尾 emit (prefix+corrected) 保证,
+            # 不再重复推 (旧"块内 buffer / 块完成全量"交替正是闪断来源之一)
         return "".join(all_parts), total_tokens, chunk_results
 
     async def _call_api_stream(self, task_key: str, text: str) -> tuple[str, int, list[FileResult]]:

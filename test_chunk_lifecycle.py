@@ -431,6 +431,149 @@ def test_cancel_before_start_finalizes():
     check("CANCELLED 断点已存", mock_save.await_count == 1)
 
 
+def test_custom_prompt_only_when_mode_custom():
+    """H12 (v4.1.8.1): custom_prompt 残留不再无条件覆盖 prompt 模式.
+
+    旧 bug: _stream_single 里 custom_prompt 非空即覆盖任意模式 -> 切回 strict/
+    polish 后实际仍跑旧自定义 prompt (与 UI 承诺矛盾). 现仅 prompt_mode=custom 生效.
+    """
+    print("\n--- H12: custom_prompt 只在自定义模式生效 ---")
+    import asyncio
+    from app.templates import PROMPT_MODES
+
+    async def run(mode, custom):
+        engine = ProcessingEngine(ProjectConfig(
+            api_base="http://x", model="m", prompt_mode=mode, custom_prompt=custom,
+        ))
+        engine._pause_event = threading.Event()
+        engine._pause_event.set()
+        ev = MagicMock()
+        ev.choices = [MagicMock()]
+        ev.choices[0].delta.content = "ok"
+        ev.usage = None
+
+        async def fs():
+            yield ev
+
+        mc = AsyncMock()
+        mc.chat.completions.create = AsyncMock(return_value=fs())
+        engine._client = mc
+        await engine._stream_single("k", "文本")
+        return mc.chat.completions.create.await_args.kwargs["messages"][0]["content"]
+
+    # strict 模式 + custom_prompt 残留 -> 用 strict system, 不用残留文本
+    sys1 = asyncio.run(run("strict", "残留的旧自定义prompt"))
+    check("strict 忽略残留 custom_prompt (H12)",
+          sys1 == PROMPT_MODES["strict"]["system"] and "残留的旧自定义prompt" not in sys1)
+    # custom 模式 + custom_prompt 有值 -> 用 custom
+    sys2 = asyncio.run(run("custom", "我的自定义prompt"))
+    check("custom 模式用 custom_prompt (H12)", sys2 == "我的自定义prompt")
+    # custom 模式 + custom_prompt 空 -> 兜底 strict system
+    sys3 = asyncio.run(run("custom", ""))
+    check("custom 空 prompt 兜底 strict (H12)", sys3 == PROMPT_MODES["strict"]["system"])
+
+
+def test_m4_stream_monotonic_fulltext():
+    """M4 (v4.1.8.1): 多 chunk 流式 on_stream 单调增长 (前缀链), 不闪断.
+
+    旧 bug: 块内推本块 buffer、块完成推全量 -> 前端替换渲染时块2中途把
+    已显示的块1覆盖成短片段 (回缩). 修后每次 emit = 已完成前缀 + 当前累积.
+    """
+    print("\n--- M4: 多 chunk 流式单调全量 ---")
+    import asyncio
+
+    async def run():
+        cfg = ProjectConfig(api_base="http://x", model="m", chunking_preset="fast")
+        eng = ProcessingEngine(cfg)
+        eng._pause_event = threading.Event()
+        eng._pause_event.set()
+        received = []
+        eng.on_stream = lambda k, t: received.append(t)
+
+        def make_ev(content, total_tokens=None):
+            ev = MagicMock()
+            ev.choices = [MagicMock()]
+            ev.choices[0].delta.content = content
+            ev.usage = None
+            if total_tokens:
+                ev.usage = MagicMock()
+                ev.usage.total_tokens = total_tokens
+            return ev
+
+        calls = {"n": 0}
+
+        async def gen(items):
+            for it in items:
+                yield it
+
+        async def fake_create(**kwargs):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return gen([make_ev("块一甲", 1), make_ev("块一乙", 2)])
+            return gen([make_ev("块二甲", 3), make_ev("块二乙", 4)])
+
+        mc = AsyncMock()
+        mc.chat.completions.create = AsyncMock(side_effect=fake_create)
+        eng._client = mc
+        # >2000 字符, 强制拆多块
+        text = "第一段内容。\n\n" + ("第二段足够长要拆开的句子。" * 250)
+        result, tokens, chunks = await eng._call_api_stream("k", text)
+        return result, received, chunks
+
+    result, received, chunks = asyncio.run(run())
+    check("M4 多块输出完整", "块一甲块一乙" in result and "块二甲块二乙" in result)
+    check("M4 确实拆了 ≥2 块", len(chunks) >= 2)
+    mono = all(received[i + 1].startswith(received[i]) for i in range(len(received) - 1))
+    check("M4 emit 单调前缀链 (不闪断)", len(received) >= 1 and mono)
+    check("M4 最终 emit = 全量", received[-1] == result)
+
+
+def test_m5_backoff_cancel_interrupts():
+    """M5 (v4.1.8.1): 退避 asyncio.sleep 可被 cancel 中断.
+
+    旧 bug: retry_after 5s 的 RateLimit 退避不可中断, cancel 后任务仍卡 5s.
+    修后 0.2s 分段感知 cancel, 立即走 CANCELLED 完整收尾.
+    """
+    print("\n--- M5: 退避可被 cancel 中断 ---")
+    import asyncio
+    from openai import RateLimitError
+
+    async def fake_call_api_stream(self, task_key, text):
+        err = RateLimitError.__new__(RateLimitError)
+        Exception.__init__(err, "rate limit")
+        err.status_code = 429
+        err.retry_after = 5.0  # 旧实现会傻等 5s
+        raise err
+
+    async def run():
+        with patch.object(ProcessingEngine, '_call_api_stream', fake_call_api_stream):
+            engine = ProcessingEngine(ProjectConfig(
+                api_base="http://x", model="m", max_retries=2, concurrency=1,
+            ))
+            engine._pause_event = threading.Event()
+            engine._pause_event.set()
+            engine.stats.start_time = time.time()
+            with patch('app.processor.save_checkpoint_async', new=AsyncMock()):
+                with tempfile.NamedTemporaryFile(
+                    mode='w', suffix='.txt', delete=False, encoding='utf-8'
+                ) as f:
+                    f.write("test")
+                    tmp = Path(f.name)
+                task = FileTask(file_path=tmp, original_text="test")
+                engine.tasks[str(tmp)] = task
+                worker = asyncio.create_task(engine._process_file_async(str(tmp), task))
+                await asyncio.sleep(0.3)
+                engine.cancel()
+                # 2s 兜底: 旧实现 5s 才退出会触发 TimeoutError 暴露 bug
+                await asyncio.wait_for(worker, timeout=2.0)
+                tmp.unlink(missing_ok=True)
+                return engine, task
+
+    engine, task = asyncio.run(run())
+    check("M5 cancel 中断退避 (<2s 内 CANCELLED)", task.status == TaskStatus.CANCELLED)
+    check("M5 取消完整收尾", task.result is not None)
+
+
 def main():
     print("=" * 60)
     print("  chunk 级别 lifecycle 测试")
@@ -447,6 +590,9 @@ def main():
         test_process_file_rate_limit_retries,
         test_rate_limit_exhausted_finalizes_stats,
         test_cancel_before_start_finalizes,
+        test_custom_prompt_only_when_mode_custom,   # v4.1.8.1 H12
+        test_m4_stream_monotonic_fulltext,          # v4.1.8.1 M4
+        test_m5_backoff_cancel_interrupts,          # v4.1.8.1 M5
     ]
     for t in tests:
         try:

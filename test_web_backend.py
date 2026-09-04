@@ -1383,182 +1383,13 @@ def test_v414_push_uses_throttle_33ms():
             check(f"Timer interval=0.033 (33ms), 实测 {args[0]}", abs(args[0] - 0.033) < 0.001)
 
 
-# ==================== v4.1.5 新增测试 (D 方案 incremental Diff) ====================
+# ==================== v4.1.5 新增测试 (主页 UI 重构) ====================
 #
 # 借鉴自 PLAN-v4.1.5-ui-redesign.md §3 (D 方案 incremental 增强版)
-# 测试策略: 在 Python 端 mock JS D 算法的状态机, 验证:
-# 1. 增量前缀匹配 (3 种: 全 ins / 全 span / 混合)
-# 2. partial 倒退保护
-# 3. renderState 清理 (removeFile / clearFiles)
-# 4. 错误态 fallback
-# 5. 模式切换 (streaming ↔ full)
-# 6. onFileStart original 字段 (大文件 50K 阈值)
-# 7. _ORIGINAL_PUSH_LIMIT 阈值常量
-
-
-class MockRenderState:
-    """Python 端 mock JS 的 renderState 状态机 (跟 web/app.js _initRenderState 同步)."""
-
-    def __init__(self):
-        self.lastPartialLen = 0
-        self.renderedHTML = ""
-        self.renderedOriginalLen = 0
-        self.rafScheduled = False
-        self.mode = "streaming"  # 显式默认 'streaming'
-
-    def common_prefix_length(self, a, b):
-        """_commonPrefixLength"""
-        i = 0
-        min_len = min(len(a), len(b))
-        while i < min_len and a[i] == b[i]:
-            i += 1
-        return i
-
-    def render_incremental(self, original, partial, escape):
-        """renderCompare 流式模式 (D 方案 incremental).
-        跟 web/app.js renderCompare 流式分支 1:1 同步.
-        返回 (renderedHTML, updated state)
-        """
-        # 倒退保护
-        if len(partial) < self.lastPartialLen:
-            self.lastPartialLen = 0
-            self.renderedHTML = ""
-            self.renderedOriginalLen = 0
-        # 无新内容
-        if len(partial) == self.lastPartialLen:
-            return self.renderedHTML, self
-        # 增量
-        new_chars = partial[self.lastPartialLen:]
-        prev_rendered = self.renderedOriginalLen
-        new_orig_slice = original[prev_rendered: prev_rendered + len(new_chars)]
-        matches = self.common_prefix_length(new_orig_slice, new_chars)
-        inserted = new_chars[matches:]
-        if matches > 0:
-            self.renderedHTML += f"<span>{escape(new_orig_slice[:matches])}</span>"
-        if inserted:
-            self.renderedHTML += f"<ins>{escape(inserted)}</ins>"
-        self.lastPartialLen = len(partial)
-        self.renderedOriginalLen = prev_rendered + len(new_orig_slice)
-        return self.renderedHTML, self
-
-
-def test_v415_d_algorithm_all_inserted():
-    """v4.1.5: D 算法 - newChars 全部新增 → 全部 <ins>."""
-    print("\n--- v4.1.5: D 算法 newChars 全部新增 → 全部 ins ---", flush=True)
-    state = MockRenderState()
-    escape = lambda s: s.replace("<", "&lt;")
-    # original = "abc", partial = "xyz" (完全不同)
-    html, _ = state.render_incremental("abc", "xyz", escape)
-    check("全部 ins (无 span)", html == "<ins>xyz</ins>")
-
-
-def test_v415_d_algorithm_all_preserved():
-    """v4.1.5: D 算法 - newChars 全部保留 → 全部 <span>."""
-    print("\n--- v4.1.5: D 算法 newChars 全部保留 → 全部 span ---", flush=True)
-    state = MockRenderState()
-    escape = lambda s: s.replace("<", "&lt;")
-    # original = "hello", partial = "hel" (完全匹配前缀)
-    html, _ = state.render_incremental("hello", "hel", escape)
-    check("全部 span (无 ins)", html == "<span>hel</span>")
-
-
-def test_v415_d_algorithm_mixed():
-    """v4.1.5: D 算法 - newChars 部分新增部分保留 → span + ins 混合."""
-    print("\n--- v4.1.5: D 算法 newChars 混合 (span + ins) ---", flush=True)
-    state = MockRenderState()
-    escape = lambda s: s.replace("<", "&lt;")
-    # original = "hello world", partial = "hello AI" (前缀 6 字符匹配, 后 2 字符新增)
-    html, _ = state.render_incremental("hello world", "hello AI", escape)
-    check("混合: span + ins", html == "<span>hello </span><ins>AI</ins>")
-
-
-def test_v415_d_algorithm_incremental_multi_round():
-    """v4.1.5: D 算法 - 多轮 incremental 累积 (模拟流式 token-by-token)."""
-    print("\n--- v4.1.5: D 算法多轮 incremental 累积 ---", flush=True)
-    state = MockRenderState()
-    escape = lambda s: s.replace("<", "&lt;")
-    # 模拟流式: 字符一个一个到
-    original = "你好世界"
-    rounds = ["你", "你好", "你好世", "你好世界", "你好世界!"]
-    html_acc = ""
-    for r in rounds:
-        html_acc, _ = state.render_incremental(original, r, escape)
-    # D 算法按字符增量: 每个 round newChars=1 char, matches=1 char, 所以每个 char 一个 span
-    # 最终 html = "<span>你</span><span>好</span><span>世</span><span>界</span><ins>!</ins>"
-    expected = "<span>你</span><span>好</span><span>世</span><span>界</span><ins>!</ins>"
-    check(f"5 轮累积 HTML 匹配预期: {expected}", html_acc == expected)
-    check("5 轮累积最终 ! 标 ins", html_acc.endswith("<ins>!</ins>"))
-
-
-def test_v415_d_algorithm_partial_reset():
-    """v4.1.5: D 算法 - partial 倒退保护 (retry 场景: partial 变短)."""
-    print("\n--- v4.1.5: D 算法 partial 倒退保护 (retry) ---", flush=True)
-    state = MockRenderState()
-    escape = lambda s: s.replace("<", "&lt;")
-    # 1. 先到 partial = "hello world"
-    state.render_incremental("hello world here", "hello world", escape)
-    check("倒退前 lastPartialLen=11", state.lastPartialLen == 11)
-    # 2. retry 后 partial 变短 = "hi"
-    #    倒退保护: state.lastPartialLen=0, renderedHTML="", renderedOriginalLen=0
-    #    然后从头开始: newChars="hi", originalSlice=original[0:2]="he"
-    #    commonPrefixLength("he", "hi")=1 ('h' 匹配)
-    #    inserted="i", matches="h"
-    #    最终 html = "<span>h</span><ins>i</ins>"
-    html, _ = state.render_incremental("hello world here", "hi", escape)
-    check("倒退后 lastPartialLen=2 (新 partial 长度)", state.lastPartialLen == 2)
-    check("倒退后 renderedHTML 从头重生成", html == "<span>h</span><ins>i</ins>")
-
-
-def test_v415_renderstate_remove_cleanup():
-    """v4.1.5: renderState 在 removeFile / clearFiles 时清理 (无内存泄漏)."""
-    print("\n--- v4.1.5: renderState 清理 ---", flush=True)
-    # 模拟 App.renderState
-    render_state = {
-        "f1.txt": MockRenderState(),
-        "f2.txt": MockRenderState(),
-    }
-    check("初始 2 个 renderState", len(render_state) == 2)
-    # 模拟 removeFile("f1.txt")
-    del render_state["f1.txt"]
-    check("removeFile 后剩 1 个", len(render_state) == 1)
-    check("f1.txt 已删", "f1.txt" not in render_state)
-    # 模拟 clearFiles
-    render_state = {}
-    check("clearFiles 后 0 个", len(render_state) == 0)
-
-
-def test_v415_error_state_fallback():
-    """v4.1.5: 错误态右栏 fallback 显示 error-mark (不显示流式)."""
-    print("\n--- v4.1.5: 错误态 fallback ---", flush=True)
-    # 模拟 App task with error
-    task = {"path": "f1.txt", "original": "hello", "corrected": "hel", "error": "rate limit"}
-    # 验证 renderCompare 流式分支先看 t.error
-    if task["error"]:
-        # 应显示 error-mark
-        check("错误态显示 error-mark (不渲染流式)", True)
-    else:
-        check("错误态显示 error-mark (不渲染流式)", False, "逻辑错了")
-    # 无 error 路径
-    task["error"] = ""
-    check("无 error 时走流式路径", not task["error"])
-
-
-def test_v415_mode_toggle():
-    """v4.1.5: 模式切换 (streaming ↔ full) — state.mode 字段."""
-    print("\n--- v4.1.5: 模式切换 streaming ↔ full ---", flush=True)
-    state = MockRenderState()
-    check("初始 mode='streaming'", state.mode == "streaming")
-    # 切到 full
-    state.mode = "full"
-    check("切到 full", state.mode == "full")
-    # 切回流式: 重置累积
-    state.mode = "streaming"
-    state.lastPartialLen = 0
-    state.renderedHTML = ""
-    state.renderedOriginalLen = 0
-    check("切回 streaming 重置 lastPartialLen", state.lastPartialLen == 0)
-    check("切回 streaming 重置 renderedHTML", state.renderedHTML == "")
-    check("切回 streaming 重置 renderedOriginalLen", state.renderedOriginalLen == 0)
+# v4.1.8.1 (H11): 删除 Python 端 MockRenderState 镜像 D 算法测试 (全 ins/全 span/
+# 混合/多轮/倒退) + 3 个恒真用例 (remove_cleanup/error_state_fallback/mode_toggle)
+# —— 它们复刻 JS renderCompare 而非测试产品代码, 前端真逻辑回归时全绿, 虚增约
+# 20 check. 保留与 Bridge 推送契约相关的用例 (onFileStart original 字段等).
 
 
 def test_v415_on_file_start_with_original():
@@ -2570,14 +2401,8 @@ def main():
         test_v414_export_write_failure,
         test_v414_push_uses_throttle_33ms,
         # v4.1.5 新增 (主页 UI 重构 + D 方案 incremental Diff)
-        test_v415_d_algorithm_all_inserted,
-        test_v415_d_algorithm_all_preserved,
-        test_v415_d_algorithm_mixed,
-        test_v415_d_algorithm_incremental_multi_round,
-        test_v415_d_algorithm_partial_reset,
-        test_v415_renderstate_remove_cleanup,
-        test_v415_error_state_fallback,
-        test_v415_mode_toggle,
+        # v4.1.8.1 (H11): D 算法 Python 镜像测试 + 3 个恒真用例已删除
+        # (MockRenderState 复刻 JS renderCompare, 前端真逻辑回归时全绿, 虚增约 20 check)
         test_v415_on_file_start_with_original,
         test_v415_original_push_limit_constant,
         test_v415_on_file_start_large_file_truncated,
