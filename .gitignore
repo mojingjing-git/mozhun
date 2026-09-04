@@ -1,0 +1,33 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+.venv/
+
+# ---- 构建产物 ----
+build/
+dist/
+*.spec.bak
+
+# ---- 日志 ----
+logs/
+*.log
+.phase0_*.log
+
+# ---- 历史基线备份（v2.0 PySide6 时代，保留在磁盘不入库）----
+.baseline-v2.0/
+
+# ---- 临时 / 测试残留 ----
+*.tmp
+*.bak
+*.bak2
+nul
+tmp.txt
+
+# ---- 一次性验证输出 ----
+results.txt
+results_utf8.txt
+check_exe_out.txt
+post_build_test.txt
+test_out.tmp
+dev_check.ps1
+dev_run.ps1

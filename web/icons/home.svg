@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round">
+  <!-- 借鉴自 https://github.com/microsoft/fluentui-system-icons (MIT) 的 1px 单线风格
+       借鉴内容: 1px 单线 / 24x24 网格 / round cap 视觉风格
+       借鉴方式: 风格借鉴,path 全部项目语言手写,无 path 复制
+       Copyright (c) 2020 Microsoft Corporation
+       完整 LICENSE 见 THIRD_PARTY_NOTICES.md §11
+  -->
+  <!-- 屋顶 (倒 V) -->
+  <path d="M3 10 L12 3 L21 10"/>
+  <!-- 房屋外框 (左右墙 + 底) -->
+  <path d="M5 10 L5 20 L19 20 L19 10"/>
+  <!-- 门 -->
+  <path d="M10 20 L10 14 L14 14 L14 20"/>
+  <!-- 烟囱 -->
+  <path d="M16 6 L16 9 L18 9 L18 5"/>
+</svg>

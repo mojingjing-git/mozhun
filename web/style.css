@@ -1,0 +1,1072 @@
+/* 新时代校对大师 v4.1.8 — Win11 Fluent 2 风格 (完整 token 体系 + 暗色 + 5 类动画 + Acrylic/Smoke)
+   借鉴自 https://learn.microsoft.com/zh-cn/windows/apps/design/ (Microsoft Terms of Use, 文档非版权材料)
+   借鉴内容: 5 设计原则 + 7 签名体验的数值与命名
+   借鉴方式: 思路借鉴,代码自写,token 命名遵循 Microsoft 官方约定
+   Copyright (c) Microsoft Corporation
+*/
+
+/* ===== 浅色 token (默认) ===== */
+:root {
+  /* 颜色 - 17 Win11 色板 token */
+  --colorNeutralBackground1: #FAFAFA;   /* 主背景 */
+  --colorNeutralBackground2: #F5F5F5;   /* 次背景 (sidebar) */
+  --colorNeutralBackground3: #FFFFFF;   /* 卡片 */
+  --colorNeutralBackground4: #FFFFFF;   /* 弹层 */
+  --colorNeutralForeground1: #1A1A1A;   /* 主文本 */
+  --colorNeutralForeground2: #616161;   /* 次文本 */
+  --colorNeutralForeground3: #8A8A8A;   /* 三级 (hint) */
+  --colorNeutralStroke1: #EDEDED;       /* 细边 (separator) */
+  --colorNeutralStroke2: #E0E0E0;       /* 粗边 (input border) */
+  /* Accent 5 档 (rest / hover / pressed / subtle / foreground) */
+  --colorBrandBackground1: #0078D4;     /* accent 静止 */
+  --colorBrandBackground2: #106EBE;     /* accent hover */
+  --colorBrandBackground3: #005A9E;     /* accent pressed */
+  --colorBrandForeground: #0078D4;
+  --colorBrandSubtle: rgba(0, 120, 212, 0.08);
+  --colorStatusSuccess: #107C10;
+  --colorStatusWarning: #9D5D00;
+  --colorStatusError: #C42B1C;
+  /* Diff 专用色 (中性, 不刺眼) */
+  --colorDiffAdd: #0F6E0F;             /* 中性绿 */
+  --colorDiffAddBg: #DFF6DD;
+  --colorDiffDel: #A12E22;             /* 中性红 */
+  --colorDiffDelBg: #FDE7E9;
+  --colorDiffSame: #1A1A1A;
+  /* 状态浅色 (badge bg) */
+  --colorStatusSuccessSubtle: rgba(16, 124, 16, 0.10);
+  --colorStatusErrorSubtle: rgba(196, 43, 28, 0.10);
+  --colorStatusWarningSubtle: rgba(157, 93, 0, 0.10);
+
+  /* 圆角 (Win11 §3.5) */
+  --controlCornerRadius: 4px;
+  --overlayCornerRadius: 8px;
+  --radiusSmall: 2px;  /* 内部小元素 (badge, log chip) */
+
+  /* 间距 (4 模数, 12 档) */
+  --space-1: 4px;   --space-2: 8px;   --space-3: 12px;
+  --space-4: 16px;  --space-5: 20px;  --space-6: 24px;
+  --space-7: 32px;  --space-8: 40px;  --space-9: 48px;
+  --space-10: 56px; --space-11: 64px; --space-12: 80px;
+
+  /* 阴影 (Win11 §3.2 elevation 6 档: 1/2/8/16/32/128) */
+  --shadow-1: 0 0 1px rgba(0,0,0,0.05);                                    /* Layer */
+  --shadow-2: 0 1px 2px rgba(0,0,0,.14), 0 0 2px rgba(0,0,0,.12);          /* Control */
+  --shadow-8: 0 4px 8px rgba(0,0,0,.14), 0 0 2px rgba(0,0,0,.12);          /* Card */
+  --shadow-16: 0 8px 16px rgba(0,0,0,.14), 0 0 2px rgba(0,0,0,.12);        /* Tooltip */
+  --shadow-32: 0 16px 32px rgba(0,0,0,.18), 0 0 4px rgba(0,0,0,.12);       /* Flyout */
+  --shadow-128: 0 64px 128px rgba(0,0,0,.24), 0 0 16px rgba(0,0,0,.12);    /* Dialog */
+
+  /* 字号 (Win11 §3.6.6 type ramp 9 档) */
+  --fontSizeCaption: 12px;        --lineHeightCaption: 16px;
+  --fontSizeBody: 14px;           --lineHeightBody: 20px;
+  --fontSizeBodyStrong: 14px;     --lineHeightBodyStrong: 20px;
+  --fontSizeBodyLarge: 18px;      --lineHeightBodyLarge: 24px;
+  --fontSizeBodyLargeStrong: 18px;--lineHeightBodyLargeStrong: 24px;
+  --fontSizeSubtitle: 20px;       --lineHeightSubtitle: 28px;
+  --fontSizeTitle: 28px;          --lineHeightTitle: 36px;
+  --fontSizeTitleLarge: 40px;     --lineHeightTitleLarge: 52px;
+  --fontSizeDisplay: 68px;        --lineHeightDisplay: 92px;
+
+  /* 字重 (Win11 §3.6.7: Semibold 不用 Bold 不用斜体) */
+  --fontWeightRegular: 400;
+  --fontWeightSemibold: 600;
+
+  /* 动画 (Win11 §3.7.2 5 类 cubic-bezier + 4 时长) */
+  --curveFastIn: cubic-bezier(0, 0, 0, 1);
+  --curvePointToPoint: cubic-bezier(0.55, 0.55, 0, 1);
+  --curveFastOut: cubic-bezier(0, 0, 0, 1);  /* 同 fastIn, 组合 fadeOut */
+  --curveSoftOut: cubic-bezier(1, 0, 1, 1);
+  --curveLinear: linear;
+  --durationSubtle: 83ms;
+  --durationFast: 167ms;
+  --durationNormal: 250ms;
+  --durationSlow: 333ms;
+
+  /* 字体族 */
+  --fontFamilyBase: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+  --fontFamilyMono: "Cascadia Code", "Consolas", "Courier New", monospace;
+
+  /* Smoke 遮罩 (Win11 §3.4.4 半透明黑, 不感知模式) */
+  --colorSmoke: rgba(0, 0, 0, 0.32);
+
+  /* 派生快捷 token */
+  --colorCard: var(--colorNeutralBackground3);
+  --colorText: var(--colorNeutralForeground1);
+  --colorTextSecondary: var(--colorNeutralForeground2);
+  --colorTextTertiary: var(--colorNeutralForeground3);
+  --colorBorder: var(--colorNeutralStroke2);
+  --colorBorderSubtle: var(--colorNeutralStroke1);
+}
+
+/* ===== 暗色 token (完整档) — 独立 :root 块, F1 硬约束: 不能嵌在 :root 内 ===== */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --colorNeutralBackground1: #1F1F1F;
+    --colorNeutralBackground2: #2B2B2B;
+    --colorNeutralBackground3: #2D2D2D;
+    --colorNeutralBackground4: #3C3C3C;
+    --colorNeutralForeground1: #FFFFFF;
+    --colorNeutralForeground2: #C5C5C5;
+    --colorNeutralForeground3: #8A8A8A;
+    --colorNeutralStroke1: #3F3F3F;
+    --colorNeutralStroke2: #4F4F4F;
+    --colorBrandBackground1: #2899F5;
+    --colorBrandBackground2: #4DA8F8;
+    --colorBrandBackground3: #1689D9;
+    --colorBrandForeground: #4DA8F8;
+    --colorBrandSubtle: rgba(40, 153, 245, 0.12);
+    /* 暗色 status / diff 调色 (中等饱和度, 在 #1F1F1F 背景上对比 ≥ 4.5:1) */
+    --colorStatusSuccess: #6CCB5F;
+    --colorStatusWarning: #FCE100;
+    --colorStatusError: #FF99A4;
+    --colorStatusSuccessSubtle: rgba(108, 203, 95, 0.16);
+    --colorStatusErrorSubtle: rgba(255, 153, 164, 0.16);
+    --colorStatusWarningSubtle: rgba(252, 225, 0, 0.16);
+    --colorDiffAdd: #6CCB5F;
+    --colorDiffAddBg: rgba(108, 203, 95, 0.18);
+    --colorDiffDel: #FF99A4;
+    --colorDiffDelBg: rgba(255, 153, 164, 0.18);
+    --colorDiffSame: #FFFFFF;
+    /* 暗色阴影 (更深, 但 Win11 §3.2.4 阴影强度模式感知 — 暗色反而更柔) */
+    --shadow-1: 0 0 1px rgba(0,0,0,0.30);
+    --shadow-2: 0 1px 2px rgba(0,0,0,.40), 0 0 2px rgba(0,0,0,.30);
+    --shadow-8: 0 4px 8px rgba(0,0,0,.40), 0 0 2px rgba(0,0,0,.30);
+    --shadow-16: 0 8px 16px rgba(0,0,0,.44), 0 0 2px rgba(0,0,0,.30);
+    --shadow-32: 0 16px 32px rgba(0,0,0,.50), 0 0 4px rgba(0,0,0,.30);
+    --shadow-128: 0 64px 128px rgba(0,0,0,.60), 0 0 16px rgba(0,0,0,.30);
+  }
+}
+
+/* 主题手动覆盖 (完整档 Settings 加三态切换) — auto 模式不写, 让媒体查询生效 */
+:root[data-theme="light"] {
+  --colorNeutralBackground1: #FAFAFA;
+  --colorNeutralBackground2: #F5F5F5;
+  --colorNeutralBackground3: #FFFFFF;
+  --colorNeutralBackground4: #FFFFFF;
+  --colorNeutralForeground1: #1A1A1A;
+  --colorNeutralForeground2: #616161;
+  --colorNeutralForeground3: #8A8A8A;
+  --colorNeutralStroke1: #EDEDED;
+  --colorNeutralStroke2: #E0E0E0;
+  --colorBrandBackground1: #0078D4;
+  --colorBrandBackground2: #106EBE;
+  --colorBrandBackground3: #005A9E;
+  --colorBrandForeground: #0078D4;
+  --colorBrandSubtle: rgba(0, 120, 212, 0.08);
+  --colorStatusSuccess: #107C10;
+  --colorStatusWarning: #9D5D00;
+  --colorStatusError: #C42B1C;
+  --colorStatusSuccessSubtle: rgba(16, 124, 16, 0.10);
+  --colorStatusErrorSubtle: rgba(196, 43, 28, 0.10);
+  --colorStatusWarningSubtle: rgba(157, 93, 0, 0.10);
+  --colorDiffAdd: #0F6E0F;
+  --colorDiffAddBg: #DFF6DD;
+  --colorDiffDel: #A12E22;
+  --colorDiffDelBg: #FDE7E9;
+  --colorDiffSame: #1A1A1A;
+}
+
+:root[data-theme="dark"] {
+  --colorNeutralBackground1: #1F1F1F;
+  --colorNeutralBackground2: #2B2B2B;
+  --colorNeutralBackground3: #2D2D2D;
+  --colorNeutralBackground4: #3C3C3C;
+  --colorNeutralForeground1: #FFFFFF;
+  --colorNeutralForeground2: #C5C5C5;
+  --colorNeutralForeground3: #8A8A8A;
+  --colorNeutralStroke1: #3F3F3F;
+  --colorNeutralStroke2: #4F4F4F;
+  --colorBrandBackground1: #2899F5;
+  --colorBrandBackground2: #4DA8F8;
+  --colorBrandBackground3: #1689D9;
+  --colorBrandForeground: #4DA8F8;
+  --colorBrandSubtle: rgba(40, 153, 245, 0.12);
+  --colorStatusSuccess: #6CCB5F;
+  --colorStatusWarning: #FCE100;
+  --colorStatusError: #FF99A4;
+  --colorStatusSuccessSubtle: rgba(108, 203, 95, 0.16);
+  --colorStatusErrorSubtle: rgba(255, 153, 164, 0.16);
+  --colorStatusWarningSubtle: rgba(252, 225, 0, 0.16);
+  --colorDiffAdd: #6CCB5F;
+  --colorDiffAddBg: rgba(108, 203, 95, 0.18);
+  --colorDiffDel: #FF99A4;
+  --colorDiffDelBg: rgba(255, 153, 164, 0.18);
+  --colorDiffSame: #FFFFFF;
+  --shadow-1: 0 0 1px rgba(0,0,0,0.30);
+  --shadow-2: 0 1px 2px rgba(0,0,0,.40), 0 0 2px rgba(0,0,0,.30);
+  --shadow-8: 0 4px 8px rgba(0,0,0,.40), 0 0 2px rgba(0,0,0,.30);
+  --shadow-16: 0 8px 16px rgba(0,0,0,.44), 0 0 2px rgba(0,0,0,.30);
+  --shadow-32: 0 16px 32px rgba(0,0,0,.50), 0 0 4px rgba(0,0,0,.30);
+  --shadow-128: 0 64px 128px rgba(0,0,0,.60), 0 0 16px rgba(0,0,0,.30);
+}
+
+/* ===== Reset ===== */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100%; overflow: hidden; }
+
+body {
+  font-family: var(--fontFamilyBase);
+  background: var(--colorNeutralBackground1);
+  color: var(--colorNeutralForeground1);
+  font-size: var(--fontSizeBody);
+  line-height: var(--lineHeightBody);
+  font-weight: var(--fontWeightRegular);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  transition: background-color var(--durationNormal) var(--curvePointToPoint),
+              color var(--durationNormal) var(--curvePointToPoint);
+}
+
+/* ===== 应用布局 ===== */
+.app {
+  display: flex;
+  height: 100vh;
+  width: 100vw;
+}
+
+/* ===== 侧边栏 ===== */
+.sidebar {
+  width: 200px;
+  background: var(--colorNeutralBackground2);
+  border-right: 1px solid var(--colorNeutralStroke1);
+  padding: var(--space-4) var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.sidebar-title {
+  /* F6 修补: Bold 700 -> Semibold 600 (Win11 §3.6.7 不用 Bold) */
+  font-size: var(--fontSizeBodyLarge);
+  font-weight: var(--fontWeightSemibold);
+  color: var(--colorBrandForeground);
+  padding: var(--space-2) var(--space-3);
+  margin-bottom: var(--space-4);
+  letter-spacing: 0.5px;
+  line-height: var(--lineHeightBodyLarge);
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  background: transparent;
+  border: none;
+  border-radius: var(--controlCornerRadius);
+  cursor: pointer;
+  color: var(--colorNeutralForeground2);
+  font-family: var(--fontFamilyBase);
+  font-size: var(--fontSizeBody);
+  text-align: left;
+  width: 100%;
+  /* 5 类动画: pointToPoint 250ms (hover/tab 切换) */
+  transition: background-color var(--durationNormal) var(--curvePointToPoint),
+              color var(--durationNormal) var(--curvePointToPoint);
+  user-select: none;
+}
+
+.nav-item:hover {
+  background: var(--colorBrandSubtle);
+  color: var(--colorNeutralForeground1);
+}
+
+.nav-item.active {
+  background: var(--colorBrandSubtle);
+  color: var(--colorBrandForeground);
+  font-weight: var(--fontWeightSemibold);
+  border-left: 3px solid var(--colorBrandForeground);
+  padding-left: calc(var(--space-3) - 3px);
+}
+
+.nav-icon {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  display: inline-block;
+  background-color: currentColor;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+}
+
+/* 图标 mask 引用 — CSS mask 实现单色 SVG, 颜色跟随 currentColor */
+.nav-icon[data-icon="home"]      { -webkit-mask-image: url("icons/home.svg"); mask-image: url("icons/home.svg"); }
+.nav-icon[data-icon="settings"]  { -webkit-mask-image: url("icons/settings.svg"); mask-image: url("icons/settings.svg"); }
+.nav-icon[data-icon="sparkle"]   { -webkit-mask-image: url("icons/sparkle.svg"); mask-image: url("icons/sparkle.svg"); }
+.nav-icon[data-icon="add"]       { -webkit-mask-image: url("icons/add.svg"); mask-image: url("icons/add.svg"); }
+.nav-icon[data-icon="play"]      { -webkit-mask-image: url("icons/play.svg"); mask-image: url("icons/play.svg"); }
+.nav-icon[data-icon="stop"]      { -webkit-mask-image: url("icons/stop.svg"); mask-image: url("icons/stop.svg"); }
+.nav-icon[data-icon="check"]     { -webkit-mask-image: url("icons/check.svg"); mask-image: url("icons/check.svg"); }
+.nav-icon[data-icon="close"]     { -webkit-mask-image: url("icons/close.svg"); mask-image: url("icons/close.svg"); }
+.nav-icon[data-icon="warning"]   { -webkit-mask-image: url("icons/warning.svg"); mask-image: url("icons/warning.svg"); }
+.nav-icon[data-icon="error"]     { -webkit-mask-image: url("icons/error.svg"); mask-image: url("icons/error.svg"); }
+.nav-icon[data-icon="info"]      { -webkit-mask-image: url("icons/info.svg"); mask-image: url("icons/info.svg"); }
+.nav-icon[data-icon="document"]  { -webkit-mask-image: url("icons/document.svg"); mask-image: url("icons/document.svg"); }
+
+/* ===== 视图 ===== */
+.view {
+  flex: 1;
+  display: none;
+  flex-direction: column;
+  padding: var(--space-6);
+  overflow: hidden;
+}
+.view.active { display: flex; }
+
+.page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-5);
+  flex-shrink: 0;
+}
+
+/* Type ramp 应用: Title 28/36 是页面 H1 */
+.page-header h1 {
+  font-size: var(--fontSizeTitle);
+  font-weight: var(--fontWeightSemibold);
+  color: var(--colorNeutralForeground1);
+  line-height: var(--lineHeightTitle);
+}
+
+.actions { display: flex; gap: var(--space-2); }
+
+/* ===== 卡片 (token 化 elevation 6 档) ===== */
+.card {
+  background: var(--colorNeutralBackground3);
+  border: 1px solid var(--colorNeutralStroke1);
+  border-radius: var(--overlayCornerRadius);
+  padding: var(--space-4);
+  box-shadow: var(--shadow-2);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  transition: background-color var(--durationNormal) var(--curvePointToPoint),
+              border-color var(--durationNormal) var(--curvePointToPoint);
+}
+
+/* Elevation 6 档 (Win11 §3.2.1) */
+.elevation-1   { box-shadow: var(--shadow-1); }
+.elevation-2   { box-shadow: var(--shadow-2); }
+.elevation-8   { box-shadow: var(--shadow-8); }
+.elevation-16  { box-shadow: var(--shadow-16); }
+.elevation-32  { box-shadow: var(--shadow-32); }
+.elevation-128 { box-shadow: var(--shadow-128); }
+
+.card h2 {
+  font-size: var(--fontSizeBodyStrong);
+  font-weight: var(--fontWeightSemibold);
+  color: var(--colorNeutralForeground1);
+  margin-bottom: var(--space-3);
+  flex-shrink: 0;
+  line-height: var(--lineHeightBodyStrong);
+}
+
+/* ===== 网格 ===== */
+.content-grid {
+  display: grid;
+  grid-template-columns: 1fr 1.2fr 1.5fr;
+  gap: var(--space-4);
+  flex: 1;
+  min-height: 0;
+}
+
+.content-grid .card { min-height: 0; }
+
+.content-grid.home-grid {
+  grid-template-columns: 1fr 1.5fr;
+  gap: var(--space-4);
+}
+
+/* ===== 按钮 (WinUI 3 light theme 标准 — 4 档按钮 + 2 size, v4.1.8 微调) =====
+   基础: 32px 高, 8px 12px padding, 4px 圆角, Semibold 600 14/20
+   WinUI 3 pressed 关键: translateY(1px) 模拟按下去 (取代 v4.1.8 scale 0.97) */
+.btn {
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--controlCornerRadius);
+  border: 1px solid var(--colorNeutralStroke2);
+  background: var(--colorNeutralBackground3);
+  cursor: pointer;
+  font-family: var(--fontFamilyBase);
+  font-size: var(--fontSizeBody);
+  font-weight: var(--fontWeightSemibold);
+  color: var(--colorNeutralForeground1);
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  user-select: none;
+  /* 5 类动画: pointToPoint 250ms (hover/pressed 平滑过渡) */
+  transition: background-color var(--durationNormal) var(--curvePointToPoint),
+              border-color var(--durationNormal) var(--curvePointToPoint),
+              color var(--durationNormal) var(--curvePointToPoint);
+}
+.btn:hover { background: var(--colorNeutralBackground1); }
+/* WinUI 3 pressed: 文字轻微下沉 1px 模拟"按下去" (§2.1 毫不费力) */
+.btn:active { transform: translateY(1px); }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* Size variant - WinUI 3: 标准 32px / 小 28px */
+.btn-standard { min-height: 32px; padding: var(--space-2) var(--space-3); }
+.btn-small    { min-height: 28px; padding: 6px 10px; font-size: var(--fontSizeCaption); }
+
+/* Accent 按钮 (主操作, 蓝底白字) */
+.btn-accent {
+  background: var(--colorBrandBackground1);
+  color: #FFFFFF;
+  border-color: var(--colorBrandBackground1);
+}
+.btn-accent:hover { background: var(--colorBrandBackground2); border-color: var(--colorBrandBackground2); }
+.btn-accent:active { background: var(--colorBrandBackground3); border-color: var(--colorBrandBackground3); }
+.btn-accent:disabled { background: var(--colorBrandBackground1); border-color: var(--colorBrandBackground1); }
+
+/* Subtle 按钮 (次要操作, 白底细边) */
+.btn-subtle {
+  background: var(--colorNeutralBackground3);
+  color: var(--colorNeutralForeground1);
+  border-color: var(--colorNeutralStroke2);
+}
+.btn-subtle:hover { background: var(--colorNeutralBackground1); }
+.btn-subtle:active { background: var(--colorNeutralBackground2); }
+
+/* Icon-only 按钮 (WinUI 3: 32x32 圆形, 无背景无边框) */
+.btn-icon-only {
+  width: 32px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+  color: var(--colorNeutralForeground2);
+  font-size: var(--fontSizeBody);
+  /* 5 类动画: pointToPoint 250ms (hover/pressed) */
+  transition: background-color var(--durationNormal) var(--curvePointToPoint),
+              color var(--durationNormal) var(--curvePointToPoint);
+}
+.btn-icon-only:hover { background: var(--colorNeutralBackground2); color: var(--colorNeutralForeground1); }
+.btn-icon-only:active { background: var(--colorNeutralBackground1); }
+
+/* ===== Type ramp 应用 (Win11 §3.6.6) ===== */
+.type-caption          { font-size: var(--fontSizeCaption);          line-height: var(--lineHeightCaption); }
+.type-body             { font-size: var(--fontSizeBody);             line-height: var(--lineHeightBody); }
+.type-body-strong      { font-size: var(--fontSizeBodyStrong);       line-height: var(--lineHeightBodyStrong); font-weight: var(--fontWeightSemibold); }
+.type-body-large       { font-size: var(--fontSizeBodyLarge);        line-height: var(--lineHeightBodyLarge); }
+.type-body-large-strong{ font-size: var(--fontSizeBodyLargeStrong);  line-height: var(--lineHeightBodyLargeStrong); font-weight: var(--fontWeightSemibold); }
+.type-subtitle         { font-size: var(--fontSizeSubtitle);         line-height: var(--lineHeightSubtitle); font-weight: var(--fontWeightSemibold); }
+.type-title            { font-size: var(--fontSizeTitle);            line-height: var(--lineHeightTitle); font-weight: var(--fontWeightSemibold); }
+.type-title-large      { font-size: var(--fontSizeTitleLarge);       line-height: var(--lineHeightTitleLarge); font-weight: var(--fontWeightSemibold); }
+.type-display          { font-size: var(--fontSizeDisplay);          line-height: var(--lineHeightDisplay); font-weight: var(--fontWeightSemibold); }
+
+/* 空状态: type ramp 化, 不用 italic (F5 修补) */
+.type-emptystate {
+  color: var(--colorNeutralForeground3);
+  text-align: center;
+  padding: var(--space-9) var(--space-4);
+  font-size: var(--fontSizeBody);
+  font-style: normal;
+  font-weight: var(--fontWeightRegular);
+  line-height: var(--lineHeightBody);
+}
+
+/* ===== 文件列表 ===== */
+.file-list {
+  list-style: none;
+  flex: 1;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0;
+}
+.file-list li {
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--controlCornerRadius);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--fontSizeBody);
+  cursor: pointer;
+  transition: background-color var(--durationNormal) var(--curvePointToPoint);
+}
+.file-list li:hover { background: var(--colorNeutralBackground2); }
+.file-list li.selected { background: var(--colorBrandSubtle); }
+
+/* F5 修补: italic -> normal */
+.file-list .file-list-empty {
+  color: var(--colorNeutralForeground3);
+  text-align: center;
+  padding: var(--space-7) var(--space-4);
+  cursor: default;
+  font-style: normal;
+  font-weight: var(--fontWeightRegular);
+  justify-content: center;
+}
+.file-list .file-list-empty:hover { background: transparent; }
+
+.file-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.file-status {
+  /* M10 修补: 11px -> 12px (Win11 §3.6.3 最小字号) */
+  font-size: var(--fontSizeCaption);
+  padding: 2px var(--space-2);
+  border-radius: 999px;
+  flex-shrink: 0;
+  font-weight: var(--fontWeightSemibold);
+  line-height: var(--lineHeightCaption);
+}
+/* WinUI 3 浅色档: 5 状态 subtle 背景 + 强 fg (pill 18-20px 高) */
+.file-status.pending   { background: #F5F5F5; color: #616161; }
+.file-status.running   { background: #E8F1FB; color: #0078D4; }
+.file-status.paused    { background: #FFF4E5; color: #9D5D00; }
+.file-status.completed { background: #E8F5E8; color: #107C10; }
+.file-status.failed    { background: #FCE8E6; color: #C42B1C; }
+.file-status.cancelled { background: #F5F5F5; color: #8A8A8A; }
+/* 暗色档: 用现有 dark token (rgba 0.12-0.16 subtle, 在 #1F1F1F 上对比 4.5:1) */
+@media (prefers-color-scheme: dark) {
+  .file-status.running   { background: var(--colorBrandSubtle); }
+  .file-status.paused    { background: var(--colorStatusWarningSubtle); }
+  .file-status.completed { background: var(--colorStatusSuccessSubtle); }
+  .file-status.failed    { background: var(--colorStatusErrorSubtle); }
+  .file-status.cancelled { background: var(--colorNeutralBackground2); }
+}
+:root[data-theme="dark"] .file-status.running   { background: var(--colorBrandSubtle); }
+:root[data-theme="dark"] .file-status.paused    { background: var(--colorStatusWarningSubtle); }
+:root[data-theme="dark"] .file-status.completed { background: var(--colorStatusSuccessSubtle); }
+:root[data-theme="dark"] .file-status.failed    { background: var(--colorStatusErrorSubtle); }
+:root[data-theme="dark"] .file-status.cancelled { background: var(--colorNeutralBackground2); }
+
+.file-remove {
+  width: 20px;
+  height: 20px;
+  border: none;
+  background: transparent;
+  color: var(--colorNeutralForeground3);
+  font-size: var(--fontSizeBodyLarge);
+  line-height: 1;
+  cursor: pointer;
+  border-radius: 50%;
+  flex-shrink: 0;
+  padding: 0;
+  transition: background-color var(--durationNormal) var(--curvePointToPoint),
+              color var(--durationNormal) var(--curvePointToPoint);
+}
+.file-remove:hover { background: var(--colorStatusErrorSubtle); color: var(--colorStatusError); }
+
+/* ===== 拖拽区 ===== */
+.drop-zone {
+  border: 2px dashed var(--colorNeutralStroke2);
+  border-radius: var(--controlCornerRadius);
+  padding: var(--space-4);
+  text-align: center;
+  color: var(--colorNeutralForeground3);
+  margin-bottom: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  flex-shrink: 0;
+  transition: background-color var(--durationNormal) var(--curvePointToPoint),
+              border-color var(--durationNormal) var(--curvePointToPoint);
+  cursor: default;
+}
+.drop-zone p { margin: 0; font-size: var(--fontSizeCaption); line-height: var(--lineHeightCaption); }
+.drop-zone p small { /* M10 修补: 11px -> 12px */
+  font-size: var(--fontSizeCaption);
+  opacity: 0.7;
+}
+.drop-zone.drag-over {
+  border-color: var(--colorBrandBackground1);
+  background: var(--colorBrandSubtle);
+  color: var(--colorBrandForeground);
+}
+
+/* ===== 进度条 (WinUI 3 ProgressBar: 4px 高, 2px 圆角, 250ms 平滑) ===== */
+.progress-bar {
+  width: 100%;
+  height: 4px;
+  background: var(--colorNeutralStroke1);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-bottom: var(--space-3);
+}
+.progress-fill {
+  height: 100%;
+  background: var(--colorBrandBackground1);
+  border-radius: 2px;
+  /* WinUI 3: pointToPoint 250ms (曲线从 83ms linear 改为更平滑的曲线过渡) */
+  transition: width var(--durationNormal) var(--curvePointToPoint);
+}
+
+.stats {
+  font-size: var(--fontSizeCaption);
+  color: var(--colorNeutralForeground2);
+  margin-bottom: var(--space-1);
+  font-family: var(--fontFamilyMono);
+  line-height: var(--lineHeightCaption);
+}
+.stats-secondary {
+  font-size: var(--fontSizeCaption);
+  color: var(--colorNeutralForeground3);
+  margin-bottom: var(--space-2);
+  font-family: var(--fontFamilyMono);
+  line-height: var(--lineHeightCaption);
+}
+
+.form-row.inline {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+.form-row.inline label { margin: 0; min-width: 80px; }
+.form-row.inline select { flex: 1; }
+
+/* 表单提示与校验 */
+.form-hint {
+  font-size: var(--fontSizeCaption);
+  color: var(--colorNeutralForeground3);
+  margin-top: 2px;
+  line-height: var(--lineHeightCaption);
+}
+.form-hint.hint-invalid { color: var(--colorStatusError); }
+.input-invalid {
+  border-color: var(--colorStatusError) !important;
+  box-shadow: 0 0 0 2px var(--colorStatusErrorSubtle) !important;
+}
+.input-with-action {
+  display: flex;
+  gap: var(--space-1);
+  align-items: stretch;
+}
+.input-with-action input { flex: 1; }
+
+/* ===== Diff ===== */
+.diff-tabs {
+  display: flex;
+  gap: var(--space-1);
+  margin-bottom: var(--space-2);
+  overflow-x: auto;
+  flex-shrink: 0;
+}
+.diff-tabs button {
+  padding: var(--space-1) var(--space-3);
+  background: transparent;
+  border: 1px solid var(--colorNeutralStroke1);
+  border-radius: var(--controlCornerRadius);
+  font-size: var(--fontSizeCaption);
+  color: var(--colorNeutralForeground2);
+  cursor: pointer;
+  transition: background-color var(--durationNormal) var(--curvePointToPoint),
+              color var(--durationNormal) var(--curvePointToPoint);
+  white-space: nowrap;
+  font-family: var(--fontFamilyBase);
+  line-height: var(--lineHeightCaption);
+}
+.diff-tabs button:hover { background: var(--colorNeutralBackground2); }
+.diff-tabs button.active {
+  background: var(--colorBrandSubtle);
+  color: var(--colorBrandForeground);
+  border-color: var(--colorBrandBackground1);
+}
+
+.diff-content {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  background: var(--colorNeutralBackground2);
+  border-radius: var(--controlCornerRadius);
+  padding: var(--space-3);
+  font-family: var(--fontFamilyMono);
+  font-size: var(--fontSizeBody);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* F5 修补: italic -> normal */
+.diff-empty {
+  color: var(--colorNeutralForeground3);
+  text-align: center;
+  padding: var(--space-11) var(--space-4);
+  font-style: normal;
+  font-weight: var(--fontWeightRegular);
+}
+
+/* ===== 进度子页面 (v4.1.5 重构) ===== */
+.progress-subpanel {
+  margin-top: auto;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--colorNeutralStroke1);
+  flex-shrink: 0;
+}
+.progress-subpanel h2 {
+  font-size: var(--fontSizeBody);
+  font-weight: var(--fontWeightSemibold);
+  margin-bottom: var(--space-2);
+  line-height: var(--lineHeightBody);
+}
+.progress-subpanel .log {
+  max-height: 120px;
+  overflow-y: auto;
+  margin-top: var(--space-2);
+}
+
+.file-list-card {
+  display: flex;
+  flex-direction: column;
+}
+.file-list-card .file-list {
+  flex: 1;
+  overflow-y: auto;
+  max-height: 300px;
+}
+
+/* ===== compare 2 子栏 ===== */
+.compare-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-3);
+  flex-shrink: 0;
+}
+.compare-header h2 { margin: 0; }
+
+.compare-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1px;
+  background: var(--colorNeutralStroke2);
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  border-radius: var(--controlCornerRadius);
+}
+.compare-original,
+.compare-revised {
+  background: var(--colorNeutralBackground3);
+  font-family: var(--fontFamilyMono), var(--fontFamilyBase);
+  font-size: var(--fontSizeBody);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-y: auto;
+  padding: var(--space-3);
+  min-height: 0;
+}
+
+/* 流式右栏 ins 高亮 (D 方案 incremental) */
+.compare-revised ins {
+  color: var(--colorDiffAdd);
+  background: var(--colorDiffAddBg);
+  text-decoration: none;
+  border-radius: var(--radiusSmall);
+  padding: 0 1px;
+  /* F7 修补: 加 border-left 形状标记 (色盲补救 §3.1.4) */
+  border-left: 2px solid var(--colorDiffAdd);
+}
+/* 全量 diff 模式 del 高亮 */
+.compare-revised del {
+  color: var(--colorDiffDel);
+  background: var(--colorDiffDelBg);
+  text-decoration: line-through;
+  padding: 0 1px;
+  border-radius: var(--radiusSmall);
+  /* F7 修补: 加 border-left 形状标记 */
+  border-left: 2px solid var(--colorDiffDel);
+}
+
+/* F5 修补: italic -> normal */
+.compare-empty {
+  color: var(--colorNeutralForeground3);
+  text-align: center;
+  padding: var(--space-9) var(--space-4);
+  font-style: normal;
+  font-weight: var(--fontWeightRegular);
+}
+
+/* 错误态 fallback */
+.error-mark {
+  background: var(--colorStatusErrorSubtle);
+  color: var(--colorStatusError);
+  padding: var(--space-3);
+  border-radius: var(--controlCornerRadius);
+  font-family: var(--fontFamilyBase);
+  font-size: var(--fontSizeBody);
+  line-height: var(--lineHeightBody);
+  word-break: break-word;
+  border-left: 3px solid var(--colorStatusError);
+}
+
+/* 全局 ins/del (普通 diff 区域也走中性色) */
+ins {
+  color: var(--colorDiffAdd);
+  background: var(--colorDiffAddBg);
+  text-decoration: none;
+  padding: 1px 2px;
+  border-radius: var(--radiusSmall);
+}
+del {
+  color: var(--colorDiffDel);
+  background: var(--colorDiffDelBg);
+  text-decoration: line-through;
+  padding: 1px 2px;
+  border-radius: var(--radiusSmall);
+}
+
+/* ===== 表单 ===== */
+.form-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-bottom: var(--space-3);
+}
+.form-row label {
+  font-size: var(--fontSizeCaption);
+  color: var(--colorNeutralForeground2);
+  font-weight: var(--fontWeightSemibold);
+  line-height: var(--lineHeightCaption);
+}
+/* WinUI 3: 输入框 32px 高, 8px 12px padding, 4px 圆角 */
+.form-row input, .form-row select, .form-row textarea {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--colorNeutralStroke2);
+  border-radius: var(--controlCornerRadius);
+  font-family: var(--fontFamilyBase);
+  font-size: var(--fontSizeBody);
+  color: var(--colorNeutralForeground1);
+  background: var(--colorNeutralBackground3);
+  min-height: 32px;
+  transition: border-color var(--durationNormal) var(--curvePointToPoint),
+              box-shadow var(--durationNormal) var(--curvePointToPoint);
+}
+/* WinUI 3 hover: 边框 #C5C5C5 (略深, 提示可交互) */
+.form-row input:hover, .form-row select:hover, .form-row textarea:hover {
+  border-color: #C5C5C5;
+}
+/* WinUI 3 focus: 2px brand border (1px 边框 + 1px 阴影) + 1px brandSubtle 外圈 */
+.form-row input:focus, .form-row select:focus, .form-row textarea:focus {
+  outline: none;
+  border-color: var(--colorBrandBackground1);
+  box-shadow: 0 0 0 1px var(--colorBrandBackground1),
+              0 0 0 4px var(--colorBrandSubtle);
+}
+.form-row textarea {
+  resize: vertical;
+  font-family: var(--fontFamilyMono);
+  font-size: var(--fontSizeBody);
+  line-height: var(--lineHeightBody);
+}
+
+/* ===== DeAI 步骤 ===== */
+.deai-grid {
+  grid-template-columns: 1fr 1.5fr;
+}
+.deai-steps {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+.deai-step {
+  border: 1px solid var(--colorNeutralStroke1);
+  border-radius: var(--controlCornerRadius);
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  background: var(--colorNeutralBackground2);
+}
+.deai-step-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.deai-step-title {
+  font-size: var(--fontSizeBody);
+  font-weight: var(--fontWeightSemibold);
+  color: var(--colorBrandForeground);
+  line-height: var(--lineHeightBody);
+}
+.deai-step-actions { display: flex; gap: var(--space-1); }
+.deai-step-status {
+  font-size: var(--fontSizeCaption);
+  color: var(--colorNeutralForeground3);
+  font-family: var(--fontFamilyMono);
+  line-height: var(--lineHeightCaption);
+}
+.deai-step-status.status-running { color: var(--colorBrandForeground); }
+.deai-step-status.status-done    { color: var(--colorStatusSuccess); }
+.deai-step-status.status-error   { color: var(--colorStatusError); }
+.deai-step-status.status-ready   { color: var(--colorStatusWarning); }
+
+.deai-output {
+  min-height: 80px;
+  max-height: 220px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.deai-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  overflow-y: auto;
+}
+.deai-footer {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--colorNeutralStroke1);
+}
+.deai-step .log {
+  min-height: 60px;
+  max-height: 180px;
+}
+
+/* ===== 风格 Profile 区域 (v4.1.7) ===== */
+.style-profile-section .input-with-action {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  flex-wrap: wrap;
+}
+.style-profile-section .input-with-action input {
+  flex: 1 1 180px;
+  min-width: 140px;
+}
+.style-profile-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--colorNeutralStroke1);
+  border-radius: var(--radiusSmall);
+  background: var(--colorNeutralBackground2);
+  margin-top: var(--space-2);
+  font-size: var(--fontSizeCaption);
+  line-height: var(--lineHeightCaption);
+}
+.style-profile-card .style-profile-name {
+  font-weight: var(--fontWeightSemibold);
+  color: var(--colorBrandForeground);
+}
+.style-profile-card .style-profile-meta {
+  color: var(--colorNeutralForeground3);
+  font-size: var(--fontSizeCaption);
+}
+.style-profile-loading {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--colorNeutralStroke2);
+  border-top-color: var(--colorBrandBackground1);
+  border-radius: 50%;
+  /* 5 类动画: linear (spinner 匀速旋转) */
+  animation: spin 0.8s linear infinite;
+  margin-right: var(--space-2);
+  vertical-align: middle;
+}
+
+/* ===== Spinner (DeAI 步骤运行中) ===== */
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+.deai-step-status.status-running::before {
+  content: '⟳ ';
+  display: inline-block;
+  /* 5 类动画: linear (spinner 必须匀速, 不能 ease) */
+  animation: spin 1s linear infinite;
+  color: var(--colorBrandBackground1);
+}
+
+/* ===== Log 容器 (深色 monospace 区域) ===== */
+.log {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  background: #1A1A1A;
+  color: #E0E0E0;
+  border-radius: var(--controlCornerRadius);
+  padding: var(--space-2) var(--space-3);
+  font-family: var(--fontFamilyMono);
+  font-size: var(--fontSizeCaption);
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ===== Acrylic 模拟 (Win11 §3.4.2 — flyout/menu 半透明毛玻璃) ===== */
+.acrylic {
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border: 1px solid var(--colorNeutralStroke1);
+  border-radius: var(--overlayCornerRadius);
+  box-shadow: var(--shadow-32);
+}
+@media (prefers-color-scheme: dark) {
+  .acrylic { background: rgba(31, 31, 31, 0.7); }
+}
+:root[data-theme="dark"] .acrylic { background: rgba(31, 31, 31, 0.7); }
+:root[data-theme="light"] .acrylic { background: rgba(255, 255, 255, 0.7); }
+
+/* ===== Smoke 模态遮罩 (Win11 §3.4.4 — 始终半透明黑, 不感知模式) ===== */
+.smoke-overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--colorSmoke);
+  z-index: 9999;
+  /* 5 类动画: softOut 167ms (模态淡出) */
+  animation: smokeFadeIn var(--durationFast) var(--curveSoftOut);
+}
+@keyframes smokeFadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* ===== 主题切换按钮组 (Settings 三态) ===== */
+.theme-switcher {
+  display: inline-flex;
+  background: var(--colorNeutralBackground2);
+  border: 1px solid var(--colorNeutralStroke2);
+  border-radius: var(--controlCornerRadius);
+  padding: 2px;
+  gap: 2px;
+}
+.theme-switcher button {
+  padding: 4px var(--space-3);
+  border: none;
+  background: transparent;
+  color: var(--colorNeutralForeground2);
+  font-family: var(--fontFamilyBase);
+  font-size: var(--fontSizeCaption);
+  font-weight: var(--fontWeightSemibold);
+  border-radius: var(--radiusSmall);
+  cursor: pointer;
+  transition: background-color var(--durationNormal) var(--curvePointToPoint),
+              color var(--durationNormal) var(--curvePointToPoint);
+  line-height: var(--lineHeightCaption);
+}
+.theme-switcher button:hover { color: var(--colorNeutralForeground1); }
+.theme-switcher button.active {
+  background: var(--colorNeutralBackground3);
+  color: var(--colorBrandForeground);
+  box-shadow: var(--shadow-2);
+}
+
+/* ===== 滚动条 (Win11 风格) ===== */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--colorNeutralStroke2); border-radius: var(--controlCornerRadius); }
+::-webkit-scrollbar-thumb:hover { background: var(--colorNeutralForeground3); }

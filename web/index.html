@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<!--
+  新时代校对大师 v4.1.8 前端 (Win11 Fluent 2 完整重构, PLAN-win11-redesign.md)
+
+  借鉴自 https://learn.microsoft.com/zh-cn/windows/apps/design/ (Microsoft Terms of Use, 文档非版权材料) - 5 设计原则 + 7 签名体验
+  借鉴自 https://fluent2.microsoft.design/ (MIT) 的设计令牌命名
+  借鉴自 https://github.com/google/diff-match-patch (Apache-2.0) - 已包含完整 LICENSE
+  借鉴自 https://github.com/markedjs/marked (MIT) - 已包含完整 LICENSE
+  借鉴自 https://github.com/microsoft/fluentui-system-icons (MIT) - 1px 单线 SVG 风格
+  借鉴自 https://pywebview.flowrl.com/ (BSD-3-Clause) - Bridge 模式
+
+  v4.1.8 重构要点:
+  1. Token 体系 v2: 17 Win11 色板 + 5 accent + 6 阴影(elevation 1/2/8/16/32/128) + 9 type ramp + 5 动画 + 3 圆角
+  2. 完整暗色模式: @media (prefers-color-scheme: dark) + data-theme=auto/light/dark 三态切换
+  3. Acrylic (.acrylic) + Smoke (.smoke-overlay) 材料类
+  4. 12 SVG 重画为 1px 单线 stroke=currentColor 风格 (路径全部项目语言手写)
+  5. 按钮语义化: .btn + .btn-standard/.btn-accent/.btn-subtle/.btn-icon-only
+  6. 可访问性: diff 加 border-left 形状标记(色盲补救), 11px -> 12px 字号修正, F5/F6/F7 修补
+  7. type ramp 应用: type-caption/body/body-strong/body-large/subtitle/title 等
+-->
+<html lang="zh-CN" data-theme="auto">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>新时代校对大师 v4.1.8</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="icon" type="image/svg+xml" href="icons/app.svg">
+</head>
+<body>
+  <div class="app">
+    <!-- 侧边栏 - Fluent 200px 固定 -->
+    <nav class="sidebar" id="sidebar">
+      <div class="sidebar-title type-body-large-strong">校对大师</div>
+      <button class="nav-item active" data-view="home" type="button">
+        <span class="nav-icon" data-icon="home"></span>
+        <span>主页</span>
+      </button>
+      <button class="nav-item" data-view="settings" type="button">
+        <span class="nav-icon" data-icon="settings"></span>
+        <span>设置</span>
+      </button>
+      <button class="nav-item" data-view="deai" type="button">
+        <span class="nav-icon" data-icon="sparkle"></span>
+        <span>去AI味</span>
+      </button>
+    </nav>
+
+    <!-- ========== 主页 ========== -->
+    <main id="view-home" class="view active">
+      <div class="page-header">
+        <h1>校对</h1>
+        <div class="actions">
+          <button id="btn-add-files" class="btn btn-standard btn-subtle" type="button">
+            <span class="nav-icon" data-icon="add" style="width:16px;height:16px;"></span>
+            添加文件
+          </button>
+          <button id="btn-clear-files" class="btn btn-standard btn-subtle" type="button" disabled>清空</button>
+          <button id="btn-start" class="btn btn-standard btn-accent" type="button" disabled>
+            <span class="nav-icon" data-icon="play" style="width:16px;height:16px;"></span>
+            开始
+          </button>
+          <button id="btn-pause" class="btn btn-standard btn-subtle" type="button" disabled>暂停</button>
+          <button id="btn-resume" class="btn btn-standard btn-subtle" type="button" disabled>恢复</button>
+          <button id="btn-cancel" class="btn btn-standard btn-subtle" type="button" disabled>取消</button>
+        </div>
+      </div>
+
+      <div class="content-grid home-grid">
+        <!-- 左: 文件列表 + 拖拽区 + 进度子页面 (v4.1.5 重构) -->
+        <section class="card file-list-card">
+          <h2>文件 (<span id="file-count">0</span>)</h2>
+          <div id="drop-zone" class="drop-zone">
+            <span class="nav-icon" data-icon="add" style="width:32px;height:32px;opacity:0.4;"></span>
+            <p>拖拽文件到此处<br><small>或点击"添加文件"</small></p>
+          </div>
+          <ul id="file-list" class="file-list">
+            <li class="file-list-empty">尚未添加文件</li>
+          </ul>
+
+          <!-- v4.1.5: 进度子页面 (替换 v4.0 中央 progress-card) -->
+          <div class="progress-subpanel">
+            <h2>进度</h2>
+            <div class="form-row inline">
+              <!-- chunking 预设挪到设置页, 主页只显示只读 label -->
+              <label>分块</label>
+              <div id="home-chunking-display" class="stats-secondary">分块: 均衡 (3000 字)</div>
+            </div>
+            <div class="progress-bar">
+              <div id="progress-fill" class="progress-fill" style="width:0%"></div>
+            </div>
+            <div id="progress-stats" class="stats">就绪</div>
+            <div id="progress-eta" class="stats-secondary"></div>
+            <pre id="log-output" class="log"></pre>
+          </div>
+        </section>
+
+        <!-- 右: compare 2 子栏 (原文字 + 修改文字) -->
+        <section class="card compare-card">
+          <div class="compare-header">
+            <h2>对比</h2>
+            <div class="actions">
+              <button id="btn-toggle-diff-mode" class="btn btn-standard btn-subtle" type="button" disabled>查看完整 diff</button>
+              <button id="btn-copy-result" class="btn btn-standard btn-subtle" type="button" disabled>复制</button>
+              <button id="btn-export-result" class="btn btn-standard btn-subtle" type="button" disabled>导出</button>
+            </div>
+          </div>
+          <div class="compare-grid">
+            <div class="compare-original" id="compare-original">
+              <div class="type-emptystate">选择文件查看原文</div>
+            </div>
+            <div class="compare-revised" id="compare-revised">
+              <div class="type-emptystate">流式输出将显示在这里</div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <!-- ========== 设置页 ========== -->
+    <main id="view-settings" class="view">
+      <div class="page-header">
+        <h1>设置</h1>
+        <div class="actions">
+          <button id="btn-test-connection" class="btn btn-standard btn-subtle" type="button">测试连接</button>
+          <button id="btn-save-config" class="btn btn-standard btn-accent" type="button">保存</button>
+        </div>
+      </div>
+      <div class="content-grid settings-grid">
+        <section class="card">
+          <h2>API 配置</h2>
+          <div class="form-row">
+            <label>预设模板</label>
+            <select id="cfg-template">
+              <option value="">-- 选择 API 模板 --</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label>API Base URL</label>
+            <input id="cfg-api-base" type="text" placeholder="http://localhost:1234/v1">
+            <span class="form-hint" id="hint-api-base">需为 http:// 或 https:// 开头</span>
+          </div>
+          <div class="form-row">
+            <label>API Key</label>
+            <div class="input-with-action">
+              <input id="cfg-api-key" type="password" placeholder="sk-...">
+              <button id="btn-toggle-key" type="button" class="btn btn-icon-only" title="显示/隐藏">
+                <span class="nav-icon" data-icon="info" style="width:16px;height:16px;"></span>
+              </button>
+            </div>
+            <span class="form-hint">本地 API 可填任意非空值</span>
+          </div>
+          <div class="form-row">
+            <label>Model</label>
+            <div class="input-with-action">
+              <input id="cfg-model" type="text" placeholder="local-model">
+              <button id="btn-fetch-models" type="button" class="btn btn-icon-only" title="拉取模型列表">⟳</button>
+            </div>
+            <select id="cfg-model-list" style="display:none;">
+              <option value="">-- 拉取后选择 --</option>
+            </select>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2>校对参数</h2>
+          <div class="form-row">
+            <label>Prompt 模式</label>
+            <select id="cfg-prompt-mode"></select>
+          </div>
+          <div class="form-row">
+            <label>Temperature (0-2)</label>
+            <input id="cfg-temperature" type="number" step="0.05" min="0" max="2">
+          </div>
+          <div class="form-row">
+            <label>并发数 (1-16)</label>
+            <input id="cfg-concurrency" type="number" min="1" max="16">
+          </div>
+          <div class="form-row">
+            <label>最大重试 (0-10)</label>
+            <input id="cfg-max-retries" type="number" min="0" max="10">
+          </div>
+          <div class="form-row">
+            <label>超时 (10-300s)</label>
+            <input id="cfg-timeout" type="number" min="10" max="300">
+          </div>
+          <div class="form-row">
+            <label>分块预设</label>
+            <select id="cfg-chunking-preset"></select>
+          </div>
+          <div class="form-row">
+            <label>上下文最大字符数 (200-2000)</label>
+            <input id="cfg-context-max-chars" type="number" min="200" max="2000">
+          </div>
+          <div class="form-row">
+            <label>上下文最大 chunk 数 (1-5)</label>
+            <input id="cfg-context-max-chunks" type="number" min="1" max="5">
+          </div>
+        </section>
+
+        <section class="card">
+          <h2>System Prompt (仅 custom 模式生效)</h2>
+          <div class="form-row">
+            <textarea id="cfg-custom-prompt" rows="12" placeholder="选择 custom 模式后,在此输入自定义 system prompt..."></textarea>
+          </div>
+        </section>
+
+        <!-- v4.1.8: 外观主题切换 (完整档 Win11 §3.1.1 暗色模式 + §2.3 个人原则) -->
+        <section class="card">
+          <h2>外观主题</h2>
+          <div class="form-row">
+            <label>主题 (auto 跟随系统, light/dark 强制覆盖)</label>
+            <div class="theme-switcher" id="theme-switcher" role="tablist" aria-label="主题切换">
+              <button type="button" data-theme-value="auto" class="active" role="tab" aria-selected="true">跟随系统</button>
+              <button type="button" data-theme-value="light" role="tab" aria-selected="false">浅色</button>
+              <button type="button" data-theme-value="dark" role="tab" aria-selected="false">深色</button>
+            </div>
+            <span class="form-hint">v4.1.8 完整档: 暗色 token 完整 17 色 + 6 档阴影, 切换即时生效 (250ms 过渡)</span>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <!-- ========== 去 AI 味页 ========== -->
+    <main id="view-deai" class="view">
+      <div class="page-header">
+        <h1>去 AI 味</h1>
+        <span class="stats-secondary">1 步 LLM 调用: 草稿 → 砍废话 → 打破对称 → 加毛边 (合并在 1 次调用中完成)</span>
+      </div>
+      <div class="content-grid deai-grid">
+        <!-- v4.1.7: Step 0 风格 Profile 区域 (借鉴 jianshuo/claude-skills MIT 9 轴思路) -->
+        <section class="card style-profile-section">
+          <h2>风格 Profile (Step 0, 可选)</h2>
+          <div class="form-row">
+            <label>选定 Profile</label>
+            <select id="deai-style-profile">
+              <option value="">-- 不选, 用默认 --</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label>新建 Profile</label>
+            <div class="input-with-action">
+              <input id="deai-new-profile-slug" type="text" placeholder="slug (字母数字下划线, 1-64 字符)">
+              <input id="deai-new-profile-name" type="text" placeholder="显示名">
+              <button id="btn-deai-create-profile" class="btn btn-standard btn-subtle" type="button">创建</button>
+            </div>
+          </div>
+          <div class="form-row">
+            <label>添加范文 (选定 custom profile 后, 至少 3 篇才能蒸馏)</label>
+            <textarea id="deai-sample-content" rows="3" placeholder="粘贴 1 篇范文内容..."></textarea>
+            <button id="btn-deai-add-sample" class="btn btn-standard btn-subtle" type="button" disabled>加入范文</button>
+            <div id="deai-profile-info" class="stats-secondary">未选 profile</div>
+          </div>
+          <div class="form-row">
+            <label>蒸馏 (>= 3 篇范文后可用, 跑 10-30s)</label>
+            <button id="btn-deai-distill" class="btn btn-standard btn-subtle" type="button" disabled>蒸馏 9 轴风格卡</button>
+            <div id="deai-distill-status" class="stats-secondary"></div>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2>输入</h2>
+          <div class="form-row">
+            <label>待处理文本</label>
+            <textarea id="deai-input" rows="10" placeholder="粘贴需要清除 AI 痕迹的文本..."></textarea>
+          </div>
+          <div class="form-row">
+            <label>Few-shot 范文 (可选)</label>
+            <textarea id="deai-sample" rows="4" placeholder="提供人写风格的范文, AI 会学句长、口气、转折、毛边..."></textarea>
+          </div>
+          <div class="form-row">
+            <label>导出格式</label>
+            <select id="deai-export-fmt">
+              <option value="txt">纯文本 (.txt)</option>
+              <option value="md">Markdown (.md)</option>
+            </select>
+          </div>
+        </section>
+
+        <section class="card deai-card">
+          <h2>3 步工作流</h2>
+          <div class="deai-steps">
+            <!-- Step 1: 检测 -->
+            <div class="deai-step" id="deai-step-1">
+              <div class="deai-step-header">
+                <div class="deai-step-title">1. 检测</div>
+                <div class="deai-step-actions">
+                  <button id="btn-deai-step1" class="btn btn-standard btn-accent" type="button">运行检测</button>
+                  <button id="btn-deai-copy-1" class="btn btn-standard btn-subtle" type="button" disabled>复制</button>
+                </div>
+              </div>
+              <div class="deai-step-status" id="deai-status-1">待运行</div>
+              <pre id="deai-output-1" class="log deai-output"></pre>
+            </div>
+
+            <!-- Step 2: 改写 -->
+            <div class="deai-step" id="deai-step-2">
+              <div class="deai-step-header">
+                <div class="deai-step-title">2. 改写</div>
+                <div class="deai-step-actions">
+                  <button id="btn-deai-step2" class="btn btn-standard btn-accent" type="button" disabled>运行改写</button>
+                  <button id="btn-deai-copy-2" class="btn btn-standard btn-subtle" type="button" disabled>复制</button>
+                </div>
+              </div>
+              <div class="deai-step-status" id="deai-status-2">等待 Step 1</div>
+              <pre id="deai-output-2" class="log deai-output"></pre>
+            </div>
+
+            <!-- Step 3: 评分 -->
+            <div class="deai-step" id="deai-step-3">
+              <div class="deai-step-header">
+                <div class="deai-step-title">3. 评分</div>
+                <div class="deai-step-actions">
+                  <button id="btn-deai-step3" class="btn btn-standard btn-accent" type="button" disabled>运行评分</button>
+                  <button id="btn-deai-copy-3" class="btn btn-standard btn-subtle" type="button" disabled>复制</button>
+                </div>
+              </div>
+              <div class="deai-step-status" id="deai-status-3">等待 Step 2</div>
+              <pre id="deai-output-3" class="log deai-output"></pre>
+            </div>
+          </div>
+
+          <div class="deai-footer">
+            <button id="btn-deai-export" class="btn btn-standard btn-subtle" type="button" disabled>导出最终结果</button>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <script src="lib/diff-match-patch.js"></script>
+  <!-- v4.1 (M6): marked.min.js 已无引用 (去 AI 味走 diff-match-patch 字符级 diff), 35KB 减重 -->
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round">
+  <!-- 借鉴自 https://github.com/microsoft/fluentui-system-icons (MIT) 的 1px 单线风格
+       借鉴内容: 1px 单线 / 24x24 网格 / round cap 视觉风格
+       借鉴方式: 风格借鉴,path 全部项目语言手写,无 path 复制
+       Copyright (c) 2020 Microsoft Corporation
+       完整 LICENSE 见 THIRD_PARTY_NOTICES.md §11
+  -->
+  <!-- App 图标 (用于 favicon, 简化的文档 + 校对笔触) -->
+  <path d="M6 3 L6 21 L18 21 L18 8 L13 3 Z"/>
+  <path d="M13 3 L13 8 L18 8"/>
+  <!-- 校对标记 (勾) -->
+  <path d="M9 14 L11 16 L15 12"/>
+</svg>

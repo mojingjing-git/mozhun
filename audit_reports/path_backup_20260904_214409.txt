@@ -1,0 +1,7 @@
+﻿=== PATH 备份 ===
+时间: 2026-09-04T21:44:09.2469818+08:00
+User PATH:
+F:\APP-DATA\MiniMaxcode\.minimax\bin;C:\Users\wrz20\.local\bin;C:\Users\wrz20\.cargo\bin;C:\Users\wrz20\AppData\Local\Microsoft\WindowsApps;C:\Users\wrz20\.lmstudio\bin;C:\Users\wrz20\AppData\Roaming\npm;C:\Users\wrz20\AppData\Local\Microsoft\WinGet\Links;C:\Users\wrz20\go\bin;C:\Program Files\nodejs;C:\Users\wrz20\AppData\Local\Programs\Fiddler
+
+Machine PATH:
+C:\Program Files\coreutils\bin;G:\TestMoves\NVIDIA GPU Computing Toolkit\CUDA\v13.2\bin\x64;G:\TestMoves\NVIDIA GPU Computing Toolkit\CUDA\v13.2\bin;E:\TOOL\Meta Horizon\Support\oculus-runtime;G:\TestMoves\Common Files\Oracle\Java\javapath;C:\WINDOWS\system32;C:\WINDOWS;C:\WINDOWS\System32\Wbem;C:\WINDOWS\System32\WindowsPowerShell\v1.0\;C:\WINDOWS\System32\OpenSSH\;G:\TestMoves\dotnet\;G:\TestMoves (x86)\Windows Kits\8.1\Windows Performance Toolkit\;G:\TestMoves\Microsoft SQL Server\120\Tools\Binn\;G:\TestMoves\Common Files\Autodesk Shared\;G:\TestMoves\Git\cmd;G:\TestMoves\Docker\Docker\resources\bin;G:\TestMoves\nodejs\;G:\TestMoves\NVIDIA Corporation\Nsight Compute 2026.1.1\;G:\TestMoves\Go\bin;G:\TestMoves\NVIDIA Corporation\NVIDIA App\NvDLISR;C:\Program Files\Cloudflare\Cloudflare WARP\

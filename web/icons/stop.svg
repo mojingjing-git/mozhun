@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" fill="currentColor">
+  <!-- 借鉴自 https://github.com/microsoft/fluentui-system-icons (MIT) 的 1px 单线风格
+       借鉴内容: 1px 单线 / 24x24 网格 / round cap 视觉风格
+       借鉴方式: 风格借鉴,path 全部项目语言手写,无 path 复制
+       Copyright (c) 2020 Microsoft Corporation
+       完整 LICENSE 见 THIRD_PARTY_NOTICES.md §11
+  -->
+  <!-- 实心方块 (Stop 是 Segoe Fluent 实心图标) -->
+  <rect x="6" y="6" width="12" height="12" rx="1" fill="currentColor" stroke="none"/>
+</svg>

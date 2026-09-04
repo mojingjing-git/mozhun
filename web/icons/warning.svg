@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round">
+  <!-- 借鉴自 https://github.com/microsoft/fluentui-system-icons (MIT) 的 1px 单线风格
+       借鉴内容: 1px 单线 / 24x24 网格 / round cap 视觉风格
+       借鉴方式: 风格借鉴,path 全部项目语言手写,无 path 复制
+       Copyright (c) 2020 Microsoft Corporation
+       完整 LICENSE 见 THIRD_PARTY_NOTICES.md §11
+  -->
+  <!-- 三角 (圆角顶点) -->
+  <path d="M12 3 L22 20 L2 20 Z"/>
+  <!-- 感叹号竖 -->
+  <path d="M12 10 L12 14"/>
+  <!-- 感叹号点 -->
+  <path d="M12 17.5 L12 17.5"/>
+</svg>

@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round">
+  <!-- 借鉴自 https://github.com/microsoft/fluentui-system-icons (MIT) 的 1px 单线风格
+       借鉴内容: 1px 单线 / 24x24 网格 / round cap 视觉风格
+       借鉴方式: 风格借鉴,path 全部项目语言手写,无 path 复制
+       Copyright (c) 2020 Microsoft Corporation
+       完整 LICENSE 见 THIRD_PARTY_NOTICES.md §11
+  -->
+  <!-- 外齿轮 (8 齿简化成 8 短线段) -->
+  <path d="M12 3 L12 5"/>
+  <path d="M12 19 L12 21"/>
+  <path d="M3 12 L5 12"/>
+  <path d="M19 12 L21 12"/>
+  <path d="M5.6 5.6 L7 7"/>
+  <path d="M17 17 L18.4 18.4"/>
+  <path d="M5.6 18.4 L7 17"/>
+  <path d="M17 7 L18.4 5.6"/>
+  <!-- 齿轮圆环 -->
+  <circle cx="12" cy="12" r="3"/>
+  <!-- 齿轮外圆 (虚线段构成) -->
+  <path d="M12 8.5 A3.5 3.5 0 0 1 15.5 12"/>
+  <path d="M15.5 12 A3.5 3.5 0 0 1 12 15.5"/>
+  <path d="M12 15.5 A3.5 3.5 0 0 1 8.5 12"/>
+  <path d="M8.5 12 A3.5 3.5 0 0 1 12 8.5"/>
+</svg>
