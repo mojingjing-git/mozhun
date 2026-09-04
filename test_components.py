@@ -208,15 +208,27 @@ def test_processor():
     check("prepare_tasks 读取文本", engine2.tasks[str(tmp)].original_text == "test content for prepare")
 
     # prepare_tasks 断点缓存
-    from app.utils import save_checkpoint
+    from app.utils import save_checkpoint, compute_prompt_hash
     with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8') as f:
         f.write("cached content")
         tmp = Path(f.name)
+    # v4.1.8.1 (C5): 断点命中要求 prompt_hash 与配置指纹一致; 测试断点必须带
+    # 正确指纹 (模拟真实断点), 否则空 hash 断点会被 expected_hash 校验判失效.
+    cfg = ProjectConfig(api_base="http://x", model="m")
     task = FileTask(file_path=tmp, original_text="cached content")
     task.status = TaskStatus.COMPLETED
-    task.result = FileResult(original="cached content", corrected="fixed")
+    task.result = FileResult(
+        original="cached content", corrected="fixed",
+        prompt_hash=compute_prompt_hash(
+            cfg.prompt_mode, cfg.model, cfg.custom_prompt,
+            chunking_preset=cfg.chunking_preset,
+            context_max_chars=cfg.context_max_chars,
+            context_max_chunks=cfg.context_max_chunks,
+            temperature=cfg.temperature,
+        ),
+    )
     save_checkpoint(tmp, task)
-    engine3 = ProcessingEngine(ProjectConfig(api_base="http://x", model="m"))
+    engine3 = ProcessingEngine(cfg)
     engine3.prepare_tasks([tmp])
     tmp.unlink(missing_ok=True)
     check("prepare_tasks 加载缓存", engine3.tasks[str(tmp)].is_done)

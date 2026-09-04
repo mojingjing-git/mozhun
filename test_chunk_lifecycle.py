@@ -12,6 +12,7 @@ import sys
 import json
 import tempfile
 import threading
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch, AsyncMock
 
@@ -334,6 +335,102 @@ def test_process_file_rate_limit_retries():
     check("task.status=COMPLETED", task.status == TaskStatus.COMPLETED)
 
 
+def test_rate_limit_exhausted_finalizes_stats():
+    """B1 (v4.1.8.1): RateLimit 重试耗尽必须补 stats 计数 + on_stats_update。
+
+    旧 bug: 429 分支耗尽 break 到 for 循环外只置 FAILED/存断点/发回调, 漏
+    completed_files/failed_files 自增与 on_stats_update -> 进度永远少 1
+    (生产最常见失败路径).
+    """
+    print("\n--- RateLimit 耗尽收尾 (B1) ---")
+    import asyncio
+    from openai import RateLimitError
+
+    call_count = 0
+    stats_updates = []
+
+    async def fake_call_api_stream(self, task_key, text):
+        nonlocal call_count
+        call_count += 1
+        err = RateLimitError.__new__(RateLimitError)
+        Exception.__init__(err, "rate limit")
+        err.status_code = 429
+        err.retry_after = 0.01  # 快速耗尽, 不等真实退避
+        raise err
+
+    async def run():
+        with patch.object(ProcessingEngine, '_call_api_stream', fake_call_api_stream):
+            engine = ProcessingEngine(ProjectConfig(
+                api_base="http://x", model="m", max_retries=1, concurrency=1,
+            ))
+            engine._pause_event = threading.Event()
+            engine._pause_event.set()
+            engine.stats.start_time = time.time()
+            engine.on_stats_update = lambda s: stats_updates.append(s)
+            with patch('app.processor.save_checkpoint_async', new=AsyncMock()) as mock_save:
+                with tempfile.NamedTemporaryFile(
+                    mode='w', suffix='.txt', delete=False, encoding='utf-8'
+                ) as f:
+                    f.write("test")
+                    tmp = Path(f.name)
+                task = FileTask(file_path=tmp, original_text="test")
+                engine.tasks[str(tmp)] = task
+                await engine._process_file_async(str(tmp), task)
+                tmp.unlink(missing_ok=True)
+                return engine, task, mock_save
+
+    engine, task, mock_save = asyncio.run(run())
+    check("RateLimit 耗尽调 2 次 (1+1)", call_count == 2)
+    check("task.status=FAILED", task.status == TaskStatus.FAILED)
+    check("completed_files 已自增 (B1)", engine.stats.completed_files == 1)
+    check("failed_files 已自增 (B1)", engine.stats.failed_files == 1)
+    check("on_stats_update 已推送 (B1)", len(stats_updates) >= 1)
+    check("断点已存 (save_checkpoint_async)", mock_save.await_count >= 1)
+    check("result.error 含 RateLimitError",
+          bool(task.result) and "RateLimitError" in (task.result.error or ""))
+
+
+def test_cancel_before_start_finalizes():
+    """B2 (v4.1.8.1): cancel 落在处理起点/排队的文件必须完整收尾。
+
+    旧 bug: 文件进入 _process_file_async 时若已取消 (排队文件拿到 semaphore
+    才进来, cancel 期间常见), 裸 return -> 无 result/CANCELLED/断点/stats/
+    回调, UI 永远卡"排队中", 进度不收敛.
+    """
+    print("\n--- cancel 早退完整收尾 (B2) ---")
+    import asyncio
+
+    async def run():
+        engine = ProcessingEngine(ProjectConfig(
+            api_base="http://x", model="m", concurrency=1,
+        ))
+        engine._pause_event = threading.Event()
+        engine._pause_event.set()
+        engine.stats.start_time = time.time()
+        engine.cancel()  # 处理开始前就取消
+        done_calls = []
+        engine.on_file_done = lambda k: done_calls.append(k)
+        with patch('app.processor.save_checkpoint_async', new=AsyncMock()) as mock_save:
+            with tempfile.NamedTemporaryFile(
+                mode='w', suffix='.txt', delete=False, encoding='utf-8'
+            ) as f:
+                f.write("test")
+                tmp = Path(f.name)
+            task = FileTask(file_path=tmp, original_text="test")
+            engine.tasks[str(tmp)] = task
+            await engine._process_file_async(str(tmp), task)
+            tmp.unlink(missing_ok=True)
+            return engine, task, done_calls, mock_save
+
+    engine, task, done_calls, mock_save = asyncio.run(run())
+    check("task.status=CANCELLED", task.status == TaskStatus.CANCELLED)
+    check("task.result 已落 (不留空壳)", task.result is not None)
+    check("error_message=用户取消", task.error_message == "用户取消")
+    check("completed_files 已自增", engine.stats.completed_files == 1)
+    check("on_file_done 已回调", len(done_calls) == 1)
+    check("CANCELLED 断点已存", mock_save.await_count == 1)
+
+
 def main():
     print("=" * 60)
     print("  chunk 级别 lifecycle 测试")
@@ -348,6 +445,8 @@ def main():
         test_process_file_chunks_results_filled,
         test_process_file_non_retryable_error_no_retry,
         test_process_file_rate_limit_retries,
+        test_rate_limit_exhausted_finalizes_stats,
+        test_cancel_before_start_finalizes,
     ]
     for t in tests:
         try:

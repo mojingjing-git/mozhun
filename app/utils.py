@@ -68,9 +68,27 @@ def _deobf_until_plain(s: str) -> str:
     return s
 
 
-def compute_prompt_hash(prompt_mode: str, model: str, custom_prompt: str) -> str:
-    """计算 prompt 模式指纹 — 用于让断点缓存跟随 prompt 配置变化而失效。"""
-    raw = f"{prompt_mode}|{model}|{custom_prompt}".encode("utf-8")
+def compute_prompt_hash(
+    prompt_mode: str,
+    model: str,
+    custom_prompt: str,
+    chunking_preset: str = "",
+    context_max_chars: int = 0,
+    context_max_chunks: int = 0,
+    temperature: float | None = None,
+) -> str:
+    """计算 prompt/生成配置指纹 — 断点缓存随配置变化而失效。
+
+    v4.1.8.1 (审计修复 C2): 旧版仅纳入 prompt_mode/model/custom_prompt, 改
+    chunking_preset / context_max_chars / context_max_chunks / temperature
+    会改变生成结果但 hash 不变 -> 静默复用旧断点, 返回与当前档位不符的结果.
+    现全部纳入; hash 算法变更使历史断点一次性失效 (配合 C5 语义, 属预期).
+    """
+    raw = (
+        f"{prompt_mode}|{model}|{custom_prompt}"
+        f"|chunk={chunking_preset}|ctxc={context_max_chars}"
+        f"|ctxn={context_max_chunks}|temp={temperature}"
+    ).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()[:16]
 
 

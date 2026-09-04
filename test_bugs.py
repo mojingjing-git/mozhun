@@ -34,18 +34,33 @@ def check(name, condition, detail=""):
 
 def test_bug1():
     from app.processor import ProcessingEngine
-    from app.utils import ProjectConfig, save_checkpoint, FileTask, FileResult, TaskStatus
+    from app.utils import (
+        ProjectConfig, save_checkpoint, FileTask, FileResult, TaskStatus,
+        compute_prompt_hash,
+    )
     with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8') as f:
         f.write('test'); tmp = Path(f.name)
+    # v4.1.8.1 (C5): 断点命中现在要求 prompt_hash 与当前配置指纹一致 (load_checkpoint
+    # 传 expected_hash), 测试断点必须带正确指纹, 否则空 hash 断点会被判失效.
+    cfg = ProjectConfig(api_base='http://x', model='m')
+    ph = compute_prompt_hash(
+        cfg.prompt_mode, cfg.model, cfg.custom_prompt,
+        chunking_preset=cfg.chunking_preset,
+        context_max_chars=cfg.context_max_chars,
+        context_max_chunks=cfg.context_max_chunks,
+        temperature=cfg.temperature,
+    )
     task = FileTask(file_path=tmp, original_text='test')
     task.status = TaskStatus.COMPLETED
-    task.result = FileResult(original='test', corrected='fixed', token_count=10)
+    task.result = FileResult(original='test', corrected='fixed', token_count=10, prompt_hash=ph)
     save_checkpoint(tmp, task)
-    engine = ProcessingEngine(ProjectConfig(api_base='http://x', model='m'))
+    engine = ProcessingEngine(cfg)
     call_log = []
     import app.utils as utils_mod
     orig = utils_mod.load_checkpoint
-    def track(fp): call_log.append(str(fp)); return orig(fp)
+    # v4.1.8.1 (C5): mock 改为透传签名, 跟上生产传 expected_hash 的契约
+    def track(fp, *args, **kwargs):
+        call_log.append(str(fp)); return orig(fp, *args, **kwargs)
     with patch('app.processor.load_checkpoint', side_effect=track):
         engine.prepare_tasks([tmp])
     tmp.unlink(missing_ok=True)
@@ -110,7 +125,13 @@ def test_bug7():
     import inspect
     from app.processor import ProcessingEngine
     src = inspect.getsource(ProcessingEngine._process_file_async)
-    check("Bug#7 has fallback", "last_error" in src and "未知错误" in src)
+    # v4.1.8.1 (B1): 原断言查 last_error/"未知错误" 兜底串 —— 重构后所有失败路径
+    # (不可重试/RateLimit 耗尽/通用耗尽) 收敛到 _finalize_failed 统一收尾, 循环外
+    # 兜底块已删. 新断言: 失败必走统一收尾 (含断点/回调/stats), B1+B2 源码级防回归.
+    check("Bug#7 has fallback",
+          src.count("_finalize_failed") >= 3
+          and "_finalize_cancelled" in src
+          and "save_checkpoint_async" in src)
 
 def test_bug8():
     from app.utils import ProcessStats

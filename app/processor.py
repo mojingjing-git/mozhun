@@ -144,31 +144,29 @@ class ProcessingEngine:
     def prepare_tasks(self, file_paths: list[Path]) -> None:
         """读取文件并加载断点缓存。
 
-        缓存命中校验 (Bug#3): 用 compute_prompt_hash(prompt_mode|model|custom_prompt)
-        作为指纹。load_checkpoint 在内部已经支持 expected_hash 校验;
-        拿到 cached 后再做一次手动校验 (兼容单参调用方,例如 input_panel)。
+        缓存命中校验 (Bug#3 + v4.1.8.1 C2/C5): 指纹由 compute_prompt_hash 纳入
+        prompt 模式 + 生成配置 (chunking/context/temperature) 计算, 传给
+        load_checkpoint 的 expected_hash 统一比对; 不匹配即判缓存失效。
 
         读取失败 (Bug#16): 原来 silent fail (continue) 会让 UI 永远"等待中"。
         改为创建一个 FAILED 占位 task,UI 能立即看到该文件失败。
         """
-        # 缓存 prompt 指纹 (后续 _process_file_async 写入 FileResult.prompt_hash 复用)
+        # 缓存 prompt/配置指纹 (后续 _process_file_async 写入 FileResult.prompt_hash 复用)
+        # v4.1.8.1 (审计 C2): 纳入 chunking/context/temperature 等影响生成结果的字段
         self._current_prompt_hash = compute_prompt_hash(
-            self.config.prompt_mode, self.config.model, self.config.custom_prompt
+            self.config.prompt_mode, self.config.model, self.config.custom_prompt,
+            chunking_preset=self.config.chunking_preset,
+            context_max_chars=self.config.context_max_chars,
+            context_max_chunks=self.config.context_max_chunks,
+            temperature=self.config.temperature,
         )
 
         for fp in file_paths:
             key = str(fp)
-            # 不传 expected_hash 是为了兼容被 mock 替换的 load_checkpoint (单参签名)。
-            # Bug#3 校验放在下面: 比较 cached.result.prompt_hash。
-            cached = load_checkpoint(fp)
-            if cached and cached.is_done and cached.result is not None:
-                cached_hash = cached.result.prompt_hash or ""
-                if cached_hash and cached_hash != self._current_prompt_hash:
-                    self._log(
-                        f"[缓存失效] {fp.name}: prompt 已变 "
-                        f"(old={cached_hash[:8]} new={self._current_prompt_hash[:8]}),将重新处理"
-                    )
-                    cached = None
+            # v4.1.8.1 (审计 C5): 传 expected_hash, 由 load_checkpoint 统一做指纹比对.
+            # 空 hash 的 v1 旧断点在校验下自然失效 (强制重跑); 原 prepare_tasks 手动
+            # 二次校验 (Bug#3) 与 load_checkpoint 内部逻辑重复, 已删除.
+            cached = load_checkpoint(fp, expected_hash=self._current_prompt_hash)
             if cached and cached.is_done:
                 self.tasks[key] = cached
                 self._log(f"[缓存] {fp.name}: 已有校对结果，跳过")
@@ -286,17 +284,22 @@ class ProcessingEngine:
           - 整文件 result.corrected_full: 拼接 "成功 chunk + 失败 chunk 原文"
           - 整文件 result.failed_chunks: list[int]
         """
+        # v4.1.8.1 (审计 B2): start 提前到取消检查前, 让取消早退也能算 elapsed
+        start = time.time()
         if self._cancel_event.is_set():
+            # 排队文件拿到 semaphore 才进来; 若此时已取消, 走完整收尾 (result/
+            # CANCELLED/断点/stats/回调), 否则 UI 永远卡"排队中"
+            await self._finalize_cancelled(key, task, start)
             return
 
         await self._await_resume()
         if self._cancel_event.is_set():
+            await self._finalize_cancelled(key, task, start)
             return
 
         if self.on_file_start:
             self.on_file_start(key)
 
-        start = time.time()
         text = task.original_text
         prompt_hash = getattr(self, "_current_prompt_hash", "")
         self._log(f"[处理中] {task.file_path.name} ({len(text)} 字符)")
@@ -313,16 +316,14 @@ class ProcessingEngine:
                 f"(preset={preset}, max_chars={max_chars})"
             )
 
-        last_error = None
         for attempt in range(self.config.max_retries + 1):
+            # v4.1.8.1 (审计 B2): attempt 顶部的取消点同样走完整收尾, 不再裸置状态
             if self._cancel_event.is_set():
-                task.status = TaskStatus.CANCELLED
-                task.error_message = "用户取消"
+                await self._finalize_cancelled(key, task, start)
                 return
             await self._await_resume()
             if self._cancel_event.is_set():
-                task.status = TaskStatus.CANCELLED
-                task.error_message = "用户取消"
+                await self._finalize_cancelled(key, task, start)
                 return
 
             try:
@@ -369,61 +370,15 @@ class ProcessingEngine:
                 return
 
             except asyncio.CancelledError:
-                elapsed = time.time() - start if start else 0
-                result = FileResult(
-                    original=text,
-                    corrected=text,
-                    elapsed=elapsed,
-                    error="已取消",
-                    prompt_hash=prompt_hash,
-                    schema_version=2,
-                )
-                with self._lock:
-                    task.status = TaskStatus.CANCELLED
-                    task.result = result
-                    task.error_message = "用户取消"
-                    task.end_time = time.time()
-                with self._stats_lock:
-                    self.stats.completed_files += 1
-                    self.stats.elapsed = time.time() - self.stats.start_time
-                await save_checkpoint_async(task.file_path, task)
-                if self.on_file_done:
-                    self.on_file_done(key)
-                if self.on_file_completed:
-                    self.on_file_completed(key)
-                if self.on_stats_update:
-                    self.on_stats_update(self.stats)
+                # v4.1.8.1 (审计 B2): 统一收尾 (流式中途取消原来就能走到这, 逻辑不变)
+                await self._finalize_cancelled(key, task, start)
                 return
             except _NON_RETRYABLE_ERRORS as e:
                 # 不可重试错误: 立即标 FAILED, 不重试
                 err_type = type(e).__name__
                 err_msg = str(e)
-                elapsed = time.time() - start
                 self._log(f"[不可重试] {task.file_path.name} — {err_type}: {err_msg}")
-                result = FileResult(
-                    original=text,
-                    corrected=text,
-                    elapsed=elapsed,
-                    error=f"{err_type}: {err_msg}",
-                    prompt_hash=prompt_hash,
-                    schema_version=2,
-                )
-                with self._lock:
-                    task.status = TaskStatus.FAILED
-                    task.result = result
-                    task.error_message = f"{err_type}: {err_msg}"
-                    task.end_time = time.time()
-                with self._stats_lock:
-                    self.stats.completed_files += 1
-                    self.stats.failed_files += 1
-                    self.stats.elapsed = time.time() - self.stats.start_time
-                await save_checkpoint_async(task.file_path, task)
-                if self.on_file_done:
-                    self.on_file_done(key)
-                if self.on_file_completed:
-                    self.on_file_completed(key)
-                if self.on_stats_update:
-                    self.on_stats_update(self.stats)
+                await self._finalize_failed(key, task, start, err_type, err_msg)
                 return
             except RateLimitError as e:
                 # 速率限制 — 按 Retry-After 等待后整文件重试
@@ -437,10 +392,18 @@ class ProcessingEngine:
                 if attempt < self.config.max_retries:
                     await asyncio.sleep(retry_after)
                     continue
-                last_error = e
-                break
+                # v4.1.8.1 (审计 B1): 重试耗尽走统一 FAILED 收尾. 旧代码 break 到
+                # for 循环外只置状态/存断点/发回调, 漏 stats 计数 + on_stats_update
+                # (进度永远少 1) — 生产最常见失败路径.
+                self._log(
+                    f"[速率限制耗尽] {task.file_path.name} — "
+                    f"已达最大重试 {self.config.max_retries} 次, 标记失败"
+                )
+                err_type = type(e).__name__
+                err_msg = str(e)
+                await self._finalize_failed(key, task, start, err_type, err_msg)
+                return
             except Exception as e:
-                last_error = e
                 err_type = type(e).__name__
                 err_msg = str(e)
                 if attempt < self.config.max_retries:
@@ -448,57 +411,80 @@ class ProcessingEngine:
                     self._log(f"[重试 {attempt + 1}/{self.config.max_retries}] {task.file_path.name} — {err_type}: {err_msg} — {delay}s 后重试")
                     await asyncio.sleep(delay)
                 else:
-                    elapsed = time.time() - start
+                    # v4.1.8.1 (审计 B1): 统一 FAILED 收尾 (原 else 内联收尾块已抽走)
                     self._log(f"[重试耗尽] {task.file_path.name} — {err_type}: {err_msg}")
-                    result = FileResult(
-                        original=text,
-                        corrected=text,
-                        elapsed=elapsed,
-                        error=f"{err_type}: {err_msg}",
-                        prompt_hash=prompt_hash,
-                        schema_version=2,
-                    )
-                    with self._lock:
-                        task.status = TaskStatus.FAILED
-                        task.result = result
-                        task.error_message = f"{err_type}: {err_msg}"
-                        task.end_time = time.time()
-
-                    with self._stats_lock:
-                        self.stats.completed_files += 1
-                        self.stats.failed_files += 1
-                        self.stats.elapsed = time.time() - self.stats.start_time
-
-                    await save_checkpoint_async(task.file_path, task)
-                    if self.on_file_done:
-                        self.on_file_done(key)
-                    if self.on_file_completed:
-                        self.on_file_completed(key)
-                    if self.on_stats_update:
-                        self.on_stats_update(self.stats)
+                    await self._finalize_failed(key, task, start, err_type, err_msg)
                     return
 
-        # 重试耗尽 (RateLimitError 等可重试错误走到这里)
-        elapsed = time.time() - start
-        err_msg = f"{type(last_error).__name__}: {last_error}" if last_error else "未知错误"
+    async def _finalize_cancelled(self, key: str, task: FileTask, start: float) -> None:
+        """CANCELLED 统一收尾: result/断点/stats/回调 全齐.
+
+        v4.1.8.1 (审计 B2): 排队文件/attempt 顶部/流式中途的取消点统一走这里.
+        旧实现里排队文件 (semaphore 等待) 与 attempt 顶部取消只置 status 或裸
+        return, 无 result/断点/stats/回调 -> UI 永远卡"排队中", 进度不收敛.
+        CANCELLED 断点会被 load_checkpoint 判为强制重跑 (与既有取消语义一致).
+        """
+        elapsed = time.time() - start if start else 0.0
+        text = task.original_text or ""
         result = FileResult(
             original=text,
             corrected=text,
             elapsed=elapsed,
-            error=err_msg,
-            prompt_hash=prompt_hash,
+            error="已取消",
+            prompt_hash=getattr(self, "_current_prompt_hash", ""),
             schema_version=2,
         )
         with self._lock:
-            task.status = TaskStatus.FAILED
+            task.status = TaskStatus.CANCELLED
             task.result = result
-            task.error_message = err_msg
+            task.error_message = "用户取消"
             task.end_time = time.time()
+        with self._stats_lock:
+            self.stats.completed_files += 1
+            self.stats.elapsed = time.time() - self.stats.start_time
         await save_checkpoint_async(task.file_path, task)
         if self.on_file_done:
             self.on_file_done(key)
         if self.on_file_completed:
             self.on_file_completed(key)
+        if self.on_stats_update:
+            self.on_stats_update(self.stats)
+
+    async def _finalize_failed(self, key: str, task: FileTask, start: float,
+                               err_type: str, err_msg: str) -> None:
+        """FAILED 统一收尾: result/断点/stats/回调 全齐.
+
+        v4.1.8.1 (审计 B1): 从 3 处重复失败收尾块 (不可重试/通用耗尽/RateLimit
+        耗尽) 抽出的统一函数, 消除 RateLimit 耗尽路径漏补 stats.completed_files /
+        failed_files + on_stats_update (进度永远少 1) 的 bug.
+        """
+        elapsed = time.time() - start
+        text = task.original_text or ""
+        detail = f"{err_type}: {err_msg}"
+        result = FileResult(
+            original=text,
+            corrected=text,
+            elapsed=elapsed,
+            error=detail,
+            prompt_hash=getattr(self, "_current_prompt_hash", ""),
+            schema_version=2,
+        )
+        with self._lock:
+            task.status = TaskStatus.FAILED
+            task.result = result
+            task.error_message = detail
+            task.end_time = time.time()
+        with self._stats_lock:
+            self.stats.completed_files += 1
+            self.stats.failed_files += 1
+            self.stats.elapsed = time.time() - self.stats.start_time
+        await save_checkpoint_async(task.file_path, task)
+        if self.on_file_done:
+            self.on_file_done(key)
+        if self.on_file_completed:
+            self.on_file_completed(key)
+        if self.on_stats_update:
+            self.on_stats_update(self.stats)
 
     @staticmethod
     def _split_text(text: str, max_chars: int, preset: str = "balanced") -> list[str]:
