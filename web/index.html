@@ -130,8 +130,8 @@
           <h2>API 配置</h2>
           <div class="form-row">
             <label>预设模板</label>
-            <select id="cfg-template">
-              <option value="">-- 选择 API 模板 --</option>
+            <select id="cfg-template" title="预定义的 API endpoint 列表 (OpenAI/DeepSeek/Ollama 等)">
+              <option value="" title="不选择任何模板,手动填写下面 API Base/Key/Model">-- 选择 API 模板 --</option>
             </select>
           </div>
           <div class="form-row">
@@ -155,9 +155,21 @@
               <input id="cfg-model" type="text" placeholder="local-model">
               <button id="btn-fetch-models" type="button" class="btn btn-icon-only" title="拉取模型列表">⟳</button>
             </div>
-            <select id="cfg-model-list" style="display:none;">
-              <option value="">-- 拉取后选择 --</option>
+            <select id="cfg-model-list" style="display:none;" title="点 ⟳ 拉取 API 支持的模型列表后,在此选择">
+              <option value="" title="拉取模型列表后显示可用模型">-- 拉取后选择 --</option>
             </select>
+          </div>
+
+          <!-- v4.1.8.1: 外观主题合并到 API 配置 card (用户要求 1 个框) -->
+          <hr class="form-separator">
+          <div class="form-row">
+            <label>主题 (auto 跟随系统, light/dark 强制覆盖)</label>
+            <div class="theme-switcher" id="theme-switcher" role="tablist" aria-label="主题切换">
+              <button type="button" data-theme-value="auto" class="active" role="tab" aria-selected="true" title="跟随系统设置自动切换浅色/深色">跟随系统</button>
+              <button type="button" data-theme-value="light" role="tab" aria-selected="false" title="强制使用浅色主题 (不跟随系统)">浅色</button>
+              <button type="button" data-theme-value="dark" role="tab" aria-selected="false" title="强制使用深色主题 (不跟随系统)">深色</button>
+            </div>
+            <span class="form-hint"></span>
           </div>
         </section>
 
@@ -165,7 +177,7 @@
           <h2>校对参数</h2>
           <div class="form-row">
             <label>Prompt 模式</label>
-            <select id="cfg-prompt-mode"></select>
+            <select id="cfg-prompt-mode" title="校对 prompt 模式: 严格校对 / 轻度润色 / 自定义 (在下方填写 prompt)"></select>
           </div>
           <div class="form-row">
             <label>Temperature (0-2)</label>
@@ -185,7 +197,7 @@
           </div>
           <div class="form-row">
             <label>分块预设</label>
-            <select id="cfg-chunking-preset"></select>
+            <select id="cfg-chunking-preset" title="单次发给 LLM 的文本块大小: fast(2000) / balanced(3000) / high_context(4000) / large(6000) / whole_file(整篇不分块)"></select>
           </div>
           <div class="form-row">
             <label>上下文最大字符数 (200-2000)</label>
@@ -203,20 +215,6 @@
             <textarea id="cfg-custom-prompt" rows="12" placeholder="选择 custom 模式后,在此输入自定义 system prompt..."></textarea>
           </div>
         </section>
-
-        <!-- v4.1.8: 外观主题切换 (完整档 Win11 §3.1.1 暗色模式 + §2.3 个人原则) -->
-        <section class="card">
-          <h2>外观主题</h2>
-          <div class="form-row">
-            <label>主题 (auto 跟随系统, light/dark 强制覆盖)</label>
-            <div class="theme-switcher" id="theme-switcher" role="tablist" aria-label="主题切换">
-              <button type="button" data-theme-value="auto" class="active" role="tab" aria-selected="true">跟随系统</button>
-              <button type="button" data-theme-value="light" role="tab" aria-selected="false">浅色</button>
-              <button type="button" data-theme-value="dark" role="tab" aria-selected="false">深色</button>
-            </div>
-            <span class="form-hint">v4.1.8 完整档: 暗色 token 完整 17 色 + 6 档阴影, 切换即时生效 (250ms 过渡)</span>
-          </div>
-        </section>
       </div>
     </main>
 
@@ -232,8 +230,8 @@
           <h2>风格 Profile (Step 0, 可选)</h2>
           <div class="form-row">
             <label>选定 Profile</label>
-            <select id="deai-style-profile">
-              <option value="">-- 不选, 用默认 --</option>
+            <select id="deai-style-profile" title="蒸馏好的文风 profile (9 轴风格卡), 选定后改写 prompt 会按此风格输出">
+              <option value="" title="不应用任何文风, 用系统默认改写">-- 不选, 用默认 --</option>
             </select>
           </div>
           <div class="form-row">
@@ -269,9 +267,9 @@
           </div>
           <div class="form-row">
             <label>导出格式</label>
-            <select id="deai-export-fmt">
-              <option value="txt">纯文本 (.txt)</option>
-              <option value="md">Markdown (.md)</option>
+            <select id="deai-export-fmt" title="导出最终改写结果的格式">
+              <option value="txt" title="纯文本格式,不含任何 markdown 标记">纯文本 (.txt)</option>
+              <option value="md" title="Markdown 格式,保留标题/列表/代码块等标记">Markdown (.md)</option>
             </select>
           </div>
         </section>

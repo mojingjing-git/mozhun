@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import os
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
@@ -45,6 +46,26 @@ def _deobf(s: str) -> str:
         ).decode("utf-8")
     except Exception:
         return ""
+
+
+def _deobf_until_plain(s: str) -> str:
+    """循环解混淆直到不再带 obf: 前缀。
+
+    v4.1.8.1 (审计修复 H2): 修复历史 api_key 双重混淆污染数据.
+    旧版链路缺陷 (web_backend.get_config 回显混淆串 -> 用户保存 -> set_config 把
+    obf:xxx 当明文写回 -> 磁盘 obf(obf(key)) 永久损坏) 已产生的损坏配置,
+    用本函数在加载时解到底, 自动恢复为明文.
+    """
+    if not s or not s.startswith("obf:"):
+        return s
+    seen = 0
+    while s.startswith("obf:") and seen < 8:  # 8 层上限, 防死循环
+        nxt = _deobf(s)
+        if nxt == s:  # 解不动 (损坏数据), 停止
+            break
+        s = nxt
+        seen += 1
+    return s
 
 
 def compute_prompt_hash(prompt_mode: str, model: str, custom_prompt: str) -> str:
@@ -198,7 +219,7 @@ class ProjectConfig:
     def from_dict(cls, d: dict) -> "ProjectConfig":
         return cls(
             api_base=d.get("api_base", ""),
-            api_key=_deobf(d.get("api_key", "")),
+            api_key=_deobf_until_plain(d.get("api_key", "")),
             model=d.get("model", ""),
             timeout=d.get("timeout", 120),
             max_retries=d.get("max_retries", 3),
@@ -288,7 +309,17 @@ async def save_checkpoint_async(file_path: Path, task: FileTask) -> None:
     await asyncio.to_thread(save_checkpoint, file_path, task)
 
 
-CONFIG_DIR = Path.home() / ".proofreader"
+# 配置/断点根目录.
+# 支持环境变量 PROOFREADER_HOME 覆盖 (v4.1.8.1 审计修复 H10):
+# 测试套件用它指向临时目录, 杜绝污染用户真实 ~/.proofreader.
+def _default_config_dir() -> Path:
+    override = os.environ.get("PROOFREADER_HOME")
+    if override:
+        return Path(override)
+    return Path.home() / ".proofreader"
+
+
+CONFIG_DIR = _default_config_dir()
 CONFIG_DIR.mkdir(exist_ok=True)
 CONFIG_FILE = CONFIG_DIR / "last_config.json"
 CHECKPOINT_DIR = CONFIG_DIR / "checkpoints"

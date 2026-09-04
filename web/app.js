@@ -240,6 +240,9 @@ const App = {
       const opt = document.createElement('option');
       opt.value = it.key;
       opt.textContent = it.label;
+      // v4.1.8.1: tooltip 兜底 (动态填充的 option 也显示 label 当 title)
+      // 后端可传 it.tooltip 覆盖 (更具体的描述优先)
+      opt.title = it.tooltip || it.label;
       if (it.key === currentVal) opt.selected = true;
       sel.appendChild(opt);
     }

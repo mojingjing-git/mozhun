@@ -638,6 +638,13 @@ body {
   line-height: var(--lineHeightCaption);
 }
 .form-hint.hint-invalid { color: var(--colorStatusError); }
+
+/* v4.1.8.1: 表单内分组分隔线 (主题切换 vs API 配置) */
+.form-separator {
+  border: none;
+  border-top: 1px solid var(--colorNeutralStroke1);
+  margin: var(--space-4) 0;
+}
 .input-invalid {
   border-color: var(--colorStatusError) !important;
   box-shadow: 0 0 0 2px var(--colorStatusErrorSubtle) !important;

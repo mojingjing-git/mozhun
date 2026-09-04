@@ -23,6 +23,7 @@ if sys.platform == "win32":
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 sys.path.insert(0, str(Path(__file__).parent))
+import test_isolate  # noqa: F401  测试隔离: 重定向 ~/.proofreader 到临时目录
 
 passed = 0
 failed = 0

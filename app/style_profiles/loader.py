@@ -10,6 +10,7 @@ Copyright (c) 2026 Jianshuo Wang
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import threading
@@ -28,7 +29,16 @@ logger = setup_logging()
 # 原项目: ~/code/style-cards/<author-slug>/{samples, style-card.md, rewrites}
 # 本项目: ~/.proofreader/styles/<slug>/{samples, style-card.md, meta.json}
 # 改点: 路径跟项目现有 CONFIG_DIR/CHECKPOINT_DIR 一致 (app/utils.py:291-295)
-STYLES_DIR = Path.home() / ".proofreader" / "styles"
+# v4.1.8.1 (审计修复 H10): 支持 PROOFREADER_HOME 环境变量覆盖 (测试隔离用),
+# 与 app/utils.py 的 CONFIG_DIR 指向同一根目录.
+def _styles_dir() -> Path:
+    override = os.environ.get("PROOFREADER_HOME")
+    if override:
+        return Path(override) / "styles"
+    return Path.home() / ".proofreader" / "styles"
+
+
+STYLES_DIR = _styles_dir()
 
 
 # === 借鉴自 jianshuo/claude-skills 的 '9 轴 schema' 思路 (字段名全自定) ===

@@ -98,7 +98,18 @@ class Backend:
     # ==================== 配置 API ====================
 
     def get_config(self) -> dict:
-        return self._config.to_dict()
+        """返回给前端渲染的配置 (明文 key, 不泄露混淆串).
+
+        v4.1.8.1 (审计修复 H2): 旧实现直接返回 ``to_dict()``, 而 to_dict 对
+        api_key 恒 ``_obf`` (磁盘混淆) -> 前端密码框回显混淆串 -> 用户保存时
+        set_config 把混淆串当明文写回 -> 磁盘 obf(obf(key)) 永久损坏且 Bearer
+        变 obf:xxx 全线 401. 修复: 混淆只发生在"磁盘 <-> 内存"边界 (save_config
+        落盘 obf / load_config 读盘 deobf), Bridge 层一律给明文, 前端不再需要
+        认识混淆格式.
+        """
+        cfg = self._config.to_dict()
+        cfg["api_key"] = self._config.api_key  # 明文回显 (内存即明文)
+        return cfg
 
     def set_config(self, key: str, value) -> None:
         # JS 端做 500ms 防抖, Python 这边只 set
@@ -113,6 +124,16 @@ class Backend:
                 value = int(value)
         except (AttributeError, KeyError, TypeError, ValueError):
             pass
+        if key == "api_key":
+            # v4.1.8.1 (审计修复 H2): 拒绝把混淆串当明文写回 (旧版前端残留 /
+            # 用户误粘贴 obf: 值). 只接受真正的明文新 key.
+            if isinstance(value, str) and value.startswith("obf:"):
+                logger.warning("set_config 忽略 obf: 前缀的 api_key (疑似混淆串回写)")
+                return
+            if value == "":
+                # 空串 = 用户清空 key (允许), 仅在有旧值且前端误传空时需小心;
+                # 此处按语义允许显式清空.
+                pass
         setattr(self._config, key, value)
 
     def save_config(self) -> dict:
@@ -333,7 +354,29 @@ class Backend:
     def start_proofread(self, file_paths: list[str], mode_key: str,
                         custom_prompt: str = "",
                         chunking_preset: str = "balanced") -> dict:
-        """启动校对任务 (后台线程), 立即返回 task_id."""
+        """启动校对任务 (后台线程), 立即返回 task_id.
+
+        v4.1.8.1 (审计修复 H1): 并发重入保护.
+        旧实现每次调用都无条件重建 engine + 起新线程, 不检查上一任务是否在跑:
+          - 重复 start -> 旧引擎线程仍在跑, 其回调闭包读动态 self._engine.tasks[k]
+            (已被新 engine 替换) -> KeyError -> 被当普通错误反复整文件重试误标 FAILED;
+          - 更糟时两个线程 run_until_complete 同一 engine, 交叉写断点.
+        修复: 若上一任务线程仍存活, 先 cancel 并 join 等它退出 (最多 5s),
+        再启动新任务; 若旧线程迟迟不退则拒绝启动并返回错误.
+        """
+        # --- 并发重入保护: 先清理上一任务 (若有) ---
+        prev_thread = self._current_task_thread
+        if prev_thread is not None and prev_thread.is_alive():
+            logger.warning("start_proofread: 上一任务仍在运行, 先取消并等待退出")
+            if self._engine is not None:
+                self._engine.cancel()
+            prev_thread.join(timeout=5.0)
+            if prev_thread.is_alive():
+                return {
+                    "ok": False,
+                    "error": "上一个任务未能及时退出, 请稍后重试",
+                }
+
         # 设置 config
         self._config.prompt_mode = mode_key
         if custom_prompt:
@@ -347,32 +390,33 @@ class Backend:
         self._current_task_id = task_id
 
         # 准备任务
-        self._engine = ProcessingEngine(self._config)
-        self._engine.prepare_tasks([Path(p) for p in file_paths])
+        engine = ProcessingEngine(self._config)
+        engine.prepare_tasks([Path(p) for p in file_paths])
+        self._engine = engine  # 供 pause/cancel/resume/_collect_results 引用
 
-        # 回调注册: 把事件转 evaluate_js 推送
-        self._engine.on_log = lambda msg: self._push("onLog", msg)
-        self._engine.on_stream = lambda k, t: self._push("onStream", {
+        # 回调注册: 把事件转 evaluate_js 推送.
+        # v4.1.8.1 (H1): 回调闭包一律捕获局部 engine 引用 (默认参数绑定),
+        # 不再运行时读动态 self._engine — 否则上一任务线程跑回调时若
+        # self._engine 已被新任务替换, tasks[k] 直接 KeyError.
+        engine.on_log = lambda msg: self._push("onLog", msg)
+        engine.on_stream = lambda k, t: self._push("onStream", {
             "file_key": k, "partial": t,
         })
         # v4.1.5 (🔴 修复 1): onFileStart 带 original 字段, 让前端左栏原文字
         # 在流式开始就有数据 (不再等 onTaskComplete).
         # 大文件 (> _ORIGINAL_PUSH_LIMIT 字) 不推 original, 前端 fallback
         # 调 read_file(path) 读 — 避免 JSON 序列化开销 + evaluate_js payload 过大.
-        self._engine.on_file_start = lambda k: self._push("onFileStart", {
-            "file_key": k,
-            "original": (
-                self._engine.tasks[k].original_text
-                if len(self._engine.tasks[k].original_text) <= _ORIGINAL_PUSH_LIMIT
-                else None
-            ),
-            "original_truncated": (
-                len(self._engine.tasks[k].original_text) > _ORIGINAL_PUSH_LIMIT
-            ),
-        })
-        self._engine.on_file_done = lambda k: self._push("onFileDone", k)
-        self._engine.on_file_completed = lambda k: self._push("onFileCompleted", k)
-        self._engine.on_stats_update = lambda s: self._push("onStatsUpdate", {
+        def _on_file_start(k: str, _eng: ProcessingEngine = engine) -> None:
+            original = _eng.tasks[k].original_text
+            self._push("onFileStart", {
+                "file_key": k,
+                "original": original if len(original) <= _ORIGINAL_PUSH_LIMIT else None,
+                "original_truncated": len(original) > _ORIGINAL_PUSH_LIMIT,
+            })
+        engine.on_file_start = _on_file_start
+        engine.on_file_done = lambda k: self._push("onFileDone", k)
+        engine.on_file_completed = lambda k: self._push("onFileCompleted", k)
+        engine.on_stats_update = lambda s: self._push("onStatsUpdate", {
             "total_files": s.total_files,
             "completed_files": s.completed_files,
             "total_tokens": s.total_tokens,
@@ -382,7 +426,7 @@ class Backend:
         })
 
         # 后台线程跑 (避免阻塞 pywebview 主线程)
-        def run():
+        def run(_eng: ProcessingEngine = engine):
             # v4.1 (I6): 顶层 try/except 兜底, 防止 run_async 抛未预期异常
             # 导致前端 isProcessing 永远卡在 true.
             loop = asyncio.new_event_loop()
@@ -390,7 +434,7 @@ class Backend:
             self._loop = loop
             try:
                 try:
-                    loop.run_until_complete(self._engine.run_async())
+                    loop.run_until_complete(_eng.run_async())
                 except Exception as e:
                     logger.error(f"run_async 未预期异常: {e}")
                     self._push("onTaskComplete", {"error": str(e)})
@@ -403,8 +447,8 @@ class Backend:
                 logger.error(f"start_proofread run() 异常: {e}")
                 self._push("onTaskComplete", {"error": str(e)})
                 return
-            # 跑完推送给前端
-            self._push("onTaskComplete", self._collect_results())
+            # 跑完推送给前端 (collect 用 engine 局部引用, 不受 self._engine 后续变化影响)
+            self._push("onTaskComplete", self._collect_results(_eng))
 
         self._current_task_thread = threading.Thread(target=run, daemon=True)
         self._current_task_thread.start()
@@ -985,12 +1029,18 @@ class Backend:
 
     # ==================== 内部 ====================
 
-    def _collect_results(self) -> dict:
-        """遍历 self._engine.tasks, 返回 {file_key: result_dict}."""
-        if not self._engine:
+    def _collect_results(self, engine: Optional[ProcessingEngine] = None) -> dict:
+        """遍历 engine.tasks, 返回 {file_key: result_dict}.
+
+        v4.1.8.1 (H1): 支持显式传 engine (start_proofread 的 run() 线程用它
+        绑定的局部 engine 调用), 不再无条件读 self._engine — 避免旧任务线程
+        收尾时 self._engine 已被新任务替换导致错收新任务的结果.
+        """
+        eng = engine if engine is not None else self._engine
+        if eng is None:
             return {}
         results = {}
-        for file_key, task in self._engine.tasks.items():
+        for file_key, task in eng.tasks.items():
             if task.result is not None:
                 results[file_key] = {
                     "file_path": str(task.file_path),

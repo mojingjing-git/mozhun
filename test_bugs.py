@@ -15,6 +15,7 @@ if sys.platform == "win32":
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 sys.path.insert(0, str(Path(__file__).parent))
+import test_isolate  # noqa: F401  测试隔离: 重定向 ~/.proofreader 到临时目录
 
 passed = 0
 failed = 0
@@ -137,15 +138,24 @@ def test_bug11():
     原 Bug#11 验证 _on_processing_finished 的 None 保护.
     现等价语义: 验证 web_backend._collect_results() 有 'not self._engine' 保护.
     同时验证 main_window.py 不再存在 (已迁 web 前端).
+    v4.1.8.1 (H1): _collect_results 改为支持显式 engine 参数,
+    None 保护写为 `if eng is None` (eng 默认取 self._engine).
     """
     # 1. 旧 PySide6 模块已删
     src_path = Path(__file__).parent / "app" / "main_window.py"
     check("Bug#11 v4.0+ main_window.py 已删 (Phase 3 完成)", not src_path.exists())
-    # 2. 等价保护逻辑搬到 web_backend._collect_results
+    # 2. 等价保护逻辑搬到 web_backend._collect_results (engine=None 时返回空 dict)
     from app.web_backend import Backend
     import inspect
     src = inspect.getsource(Backend._collect_results)
-    check("Bug#11 _collect_results None 保护", "not self._engine" in src or "if not self._engine" in src)
+    check(
+        "Bug#11 _collect_results None 保护",
+        "not self._engine" in src or "if not self._engine" in src or "if eng is None" in src,
+    )
+    # 行为级验证: 无 engine 时返回 {} 不抛
+    b = Backend(window=None)
+    b._engine = None
+    check("Bug#11 _collect_results 无 engine 返回 {} 不抛", b._collect_results() == {})
 
 def test_bug12():
     """Bug#12: v4.0+ Phase 3 删除 PySide6 input_panel.py.
