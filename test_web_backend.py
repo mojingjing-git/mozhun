@@ -2046,6 +2046,37 @@ def test_v417_deai_step2_without_style_card_backward_compat():
     check("带 sample prompt 含 '范文学习'", "范文学习" in sys_prompt2)
 
 
+def test_v418_builtin_style_card_injected():
+    """v4.1.8.1 (H9/E1): 预置 profile (builtin) 选中后对 deai step2/3 生效.
+
+    旧 bug: loader.get_style_card 只读 ~/.proofreader/styles/<slug>/style-card.md,
+    builtin slug 无落盘卡恒返 "" -> _build_deai_prompt 注入空 -> step2 不按该
+    风格改写 / step3 跳过 8 轴自评 (界面显示"已选", 实际静默 no-op).
+    修复: get_style_card 对 builtin key 回退把内置 JSON 渲染成 9 轴 markdown.
+    """
+    print("\n--- v4.1.8.1: builtin style card 注入 (H9) ---", flush=True)
+    from app.web_backend import Backend
+    b = Backend(window=None)
+
+    # 1) get_style_card 对 3 个 builtin slug 返回渲染卡 (不再空串)
+    for slug in ("plain_tech", "narrative_general", "daily_colloquial"):
+        card = b._style_loader.get_style_card(slug)
+        check(f"{slug} 渲染非空 (H9)", bool(card and card.strip()))
+        check(f"{slug} 含 9 轴段 (H9)",
+              card and "## 1_sentence_rhythm" in card and "## 9_avoid" in card)
+
+    # 2) 非 builtin 不存在 slug 仍返空串 (原语义不变)
+    check("未知 slug 仍空串",
+          b._style_loader.get_style_card("no-such-slug-v418") == "")
+
+    # 3) deai step2/3 prompt 实际注入 builtin 卡内容
+    p2 = b._build_deai_prompt("rewrite", sample="", style_card_slug="plain_tech")
+    check("step2 prompt 含 '9 轴风格指纹卡'", "9 轴风格指纹卡" in p2)
+    check("step2 prompt 含 builtin 卡内容", "通用技术文" in p2 or "预置抽象化" in p2)
+    p3 = b._build_deai_prompt("audit", sample="", style_card_slug="narrative_general")
+    check("step3 prompt 含 '9 轴风格指纹卡'", "9 轴风格指纹卡" in p3)
+
+
 def test_v417_deai_step3_audit_8_axis_prompt():
     """v4.1.7: deai_step3_audit 带 style_card_slug, prompt 含 8 轴自评."""
     print("\n--- v4.1.7: deai_step3 audit 8 轴自评 ---", flush=True)
@@ -2567,6 +2598,7 @@ def main():
         test_v417_deai_step2_with_style_card_prompt,
         test_v417_deai_step2_without_style_card_backward_compat,
         test_v417_deai_step3_audit_8_axis_prompt,
+        test_v418_builtin_style_card_injected,  # v4.1.8.1 (H9/E1)
         test_v417_style_card_path_traversal,
         test_v417_distill_concurrent_no_interference,
         # v4.1.8 新增 (Win11 Fluent 2 完整重构: token 体系 + 暗色 + 图标 1px 单线 + Acrylic/Smoke)

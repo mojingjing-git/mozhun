@@ -304,12 +304,64 @@ class StyleProfileLoader:
             }
 
     def get_style_card(self, slug: str) -> str:
-        """读 style-card.md, 不存在返空串."""
+        """读 style-card.md; 不存在时对 builtin key 回退渲染内置 JSON, 否则空串.
+
+        v4.1.8.1 (审计修复 H9/E1): builtin slug 无落盘 style-card.md (builtin
+        只存 axes JSON), 原恒返 "" -> 去 AI 味 step2/3 选中预置 profile 拿不到
+        9 轴卡静默 no-op (界面显示"已选", 实际空转). 现对 builtin key 回退把
+        内置 JSON 渲染成与蒸馏产物同构的 markdown (兼容 _parse_style_card_axes).
+        """
         _validate_slug(slug)
         p = _style_card_path(slug)
-        if not p.exists():
+        if p.exists():
+            return p.read_text(encoding="utf-8")
+        # custom 未蒸馏 + slug 命中 builtin key (或 custom 与 builtin 同名但无卡) 时回退
+        try:
+            return self._render_builtin_card(slug)
+        except FileNotFoundError:
             return ""
-        return p.read_text(encoding="utf-8")
+        except Exception as e:
+            logger.error(f"渲染 builtin style card {slug} 失败: {e}")
+            return ""
+
+    def _render_builtin_card(self, key: str) -> str:
+        """把 builtin JSON 渲染成与蒸馏 style-card.md 同构的 9 轴 markdown.
+
+        v4.1.8.1 (审计修复 H9/E1): builtin 预置 profile 只存 axes JSON, 从未被
+        渲染成可注入 markdown. 渲染结构兼容 _parse_style_card_axes (每个 9 轴是
+        '## N_axis' 段), 使内置卡与 custom 蒸馏卡同构, step2/3 可同路径注入.
+        key 非 builtin 时抛 FileNotFoundError (由 get_style_card 转空串).
+        """
+        data = self.get_builtin(key)  # FileNotFoundError 上抛
+        lines = [
+            f"# {data.get('name', key)}",
+            "",
+            data.get("summary", ""),
+            "",
+            "> 预置抽象化 profile (abstract=True), 由 builtin JSON 渲染, 非真人作家蒸馏.",
+            "",
+        ]
+        axes = data.get("axes", {}) or {}
+        for axis_key in AXIS_KEYS:
+            axis = axes.get(axis_key) or {}
+            lines.append(f"## {axis_key}")
+            if axis.get("observe"):
+                lines.append(f"- 观察 (observe): {axis['observe']}")
+            if axis.get("rule"):
+                lines.append(f"- 可执行规则 (rule): {axis['rule']}")
+            anchors = axis.get("anchor_examples") or []
+            if anchors:
+                lines.append("- 锚点原句:")
+                for a in anchors:
+                    lines.append(f"  - {a}")
+            lines.append("")
+        tells = data.get("ai_tells_counter") or []
+        if tells:
+            lines.append("## ai_tells_counter")
+            for t in tells:
+                lines.append(f"- {t}")
+            lines.append("")
+        return "\n".join(lines).strip()
 
     # ==================== 蒸馏入口 ====================
 
