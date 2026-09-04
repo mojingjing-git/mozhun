@@ -29,6 +29,9 @@ hiddenimports = [
     'app.templates',
     'app.logger',
     'app.web_backend',
+    # v4.1.8.1 (审计 D2): 显式收集 style_profiles 模块 (防动态引用路径被静态分析漏掉)
+    'app.style_profiles',
+    'app.style_profiles.loader',
 ]
 
 # 排除 GUI 冲突 / 减重
@@ -61,6 +64,11 @@ a = Analysis(
     datas=[
         # 整个 web/ 前端资源打包到 exe 内部
         ('web', 'web'),
+        # v4.1.8.1 (审计 D2): style_profiles builtin JSON 之前漏打包, 打包版 DeAI
+        # 预置 profile 会静默失效 (list_builtin/get_builtin 找不到文件).
+        # dest 保持 'app/style_profiles/builtin' 与 loader.py 的
+        # Path(__file__).parent/'builtin' 对齐 (frozen 下 __file__ 指向 _MEIPASS).
+        ('app/style_profiles/builtin', 'app/style_profiles/builtin'),
     ],
     hiddenimports=hiddenimports,
     hookspath=[],

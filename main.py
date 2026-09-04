@@ -99,12 +99,25 @@ def main():
         # 兜底: 系统 WebView2 不可用时提示安装
         msg = str(e)
         if "WebView2" in msg or "webview" in msg.lower() or "edge" in msg.lower():
-            sys.stderr.write(
+            err_text = (
                 "\n" + "=" * 50 + "\n"
                 "ERROR: 系统未安装 WebView2 Runtime\n"
                 "请访问 https://developer.microsoft.com/microsoft-edge/webview2/ 下载安装\n"
                 "=" * 50 + "\n"
             )
+            # v4.1.8.1 (审计 D3): windowed 打包 (console=False) 下 sys.stderr 为 None,
+            # 直接 .write() 会 AttributeError 二次崩溃 -> 判空 + 原生弹窗兜底.
+            if sys.stderr is not None:
+                sys.stderr.write(err_text)
+            else:
+                try:
+                    import ctypes
+                    # MB_ICONERROR (0x10), 宽字符 API, ctypes 自动把 str 转 UTF-16
+                    ctypes.windll.user32.MessageBoxW(
+                        None, err_text, "新时代校对大师 - 启动失败", 0x10
+                    )
+                except Exception:
+                    pass  # 弹窗也失败就静默, 至少不再二次崩溃
         raise
 
 
