@@ -31,3 +31,6 @@ post_build_test.txt
 test_out.tmp
 dev_check.ps1
 dev_run.ps1
+
+# WorkBuddy 项目数据 (内存/会话)
+.workbuddy/
