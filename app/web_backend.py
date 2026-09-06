@@ -516,6 +516,10 @@ class Backend:
         engine = ProcessingEngine(self._config)
         engine.prepare_tasks([Path(p) for p in file_paths], force_rerun=force_rerun)
         self._engine = engine  # 供 pause/cancel/resume/_collect_results 引用
+        # v4.3.4: 标点不平衡报告 — prepare 阶段 _log 未接回调, 在此补推 (评审 E-1)
+        for msg in list(engine.punct_reports):
+            self._push("onLog", msg)
+        engine.punct_reports.clear()
 
         # 回调注册: 把事件转 evaluate_js 推送.
         # v4.1.8.1 (H1): 回调闭包一律捕获局部 engine 引用 (默认参数绑定),

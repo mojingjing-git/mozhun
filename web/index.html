@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!--
-  新时代校对大师 v4.3.3 前端 (Win11 Fluent 2 完整重构, PLAN-win11-redesign.md)
+  新时代校对大师 v4.3.4 前端 (Win11 Fluent 2 完整重构, PLAN-win11-redesign.md)
 
   借鉴自 https://learn.microsoft.com/zh-cn/windows/apps/design/ (Microsoft Terms of Use, 文档非版权材料) - 5 设计原则 + 7 签名体验
   借鉴自 https://fluent2.microsoft.design/ (MIT) 的设计令牌命名
@@ -22,7 +22,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>新时代校对大师 v4.3.3</title>
+  <title>新时代校对大师 v4.3.4</title>
   <link rel="stylesheet" href="style.css">
   <link rel="icon" type="image/svg+xml" href="icons/app.svg">
 </head>
@@ -61,7 +61,7 @@
         <span class="nav-icon" data-icon="info"></span>
         <span>外观与关于</span>
       </button>
-      <div class="sidebar-footer">v4.3.3</div>
+      <div class="sidebar-footer">v4.3.4</div>
     </nav>
 
     <!-- ========== 校对 (v4.2.0: 一屏一件事 - 只管文件与任务) ========== -->
@@ -220,6 +220,22 @@
             </label>
             <span class="form-hint">半角引号→中文成对引号、半角逗号/冒号/问号等→全角 (纯规则脚本, 不消耗 LLM; 数字与纯英文不受影响)。选「仅标点修复」模式时全程本地、无需配置 API</span>
           </div>
+          <div class="form-row inline">
+            <label>引号风格</label>
+            <select id="cfg-punct-quote-style" title="弯引号“” (推荐) / 直角引号「」 (轻小说风格; 指北列为争议项)">
+              <option value="curly">弯引号 “”</option>
+              <option value="rect">直角引号 「」</option>
+            </select>
+          </div>
+          <div class="form-row checkbox-row">
+            <label class="checkbox-label"><input type="checkbox" id="cfg-punct-fullwidth-alnum"> <span>全角字母/数字归一化 (ＡＢＣ１２３ → ABC123)</span></label>
+          </div>
+          <div class="form-row checkbox-row">
+            <label class="checkbox-label"><input type="checkbox" id="cfg-punct-dash-tilde"> <span>破折号/波浪补齐 (--→——, ~→～, GB/T 15834)</span></label>
+          </div>
+          <div class="form-row checkbox-row">
+            <label class="checkbox-label"><input type="checkbox" id="cfg-punct-repeat-compress"> <span>重复标点压缩 (！！！→！, 默认关闭)</span></label>
+          </div>
           <div class="form-row">
             <label>Temperature (0-2)</label>
             <input id="cfg-temperature" type="number" step="0.05" min="0" max="2">
@@ -281,7 +297,7 @@
         </section>
         <section class="card">
           <h2>关于</h2>
-          <div class="about-row"><span class="about-label">版本</span><span>v4.3.3 (pywebview)</span></div>
+          <div class="about-row"><span class="about-label">版本</span><span>v4.3.4 (pywebview)</span></div>
           <div class="about-row"><span class="about-label">定位</span><span>LLM 批量文本校对 + 去 AI 味, 支持任意 OpenAI 兼容 API</span></div>
           <div class="about-row"><span class="about-label">运行日志</span><span class="font-mono">~/.proofreader/app.log</span></div>
           <div class="about-row"><span class="about-label">快捷键</span><span>Ctrl+O 添加文件 · Ctrl+Enter 开始校对 · Ctrl+, API 接口 · Ctrl+. 去 AI 味</span></div>

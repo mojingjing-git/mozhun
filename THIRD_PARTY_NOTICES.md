@@ -631,6 +631,44 @@ SOFTWARE.
 
 ---
 
+## 12. woct0rdho/typeset + typeset-rs (v4.3.4 新增)
+
+- **URL**: https://github.com/woct0rdho/typeset (Rust 版: https://github.com/woct0rdho/typeset-rs)
+- **License**: MIT License (Copyright (c) 2017, 2026 woctordho)
+- **借鉴内容**: 省略号权重归一化算法 (…=3 其余=1)、全角字母/数字折叠思路、"隔一个空格回看"的上下文判定
+- **借鉴方式**: 思路借鉴（A 类），无代码复制
+- **落点**: app/punct_fix.py (v4.3.4 权重法省略号/全角折叠/空格感知上下文)
+- MIT License 全文: 见上文 §1 (标准 MIT 模板, 版权行替换为上方 Copyright)
+
+## 13. huacnlee/autocorrect (v4.3.4 新增)
+
+- **URL**: https://github.com/huacnlee/autocorrect
+- **License**: MIT License
+- **Copyright**: (c) 2013-2026 huacnlee 及贡献者
+- **借鉴内容**: 分号永不转换原则 (代码/HTML 实体高危)、URL/路径整段免疫 (PATH_RE 思路)、
+  标点危险度分档 (逗号低危/句冒叹高危)、规则三态配置 (off/fix/report) 设计
+- **借鉴方式**: 思路借鉴（A 类），无代码复制
+- **落点**: app/punct_fix.py (分号原则/URL 掩蔽/逗号低危档)；规则配置化设计供后续参考
+- MIT License 全文: 见上文 §1 (标准 MIT 模板)
+
+## 14. yongzhuo/macro-correct (v4.3.4 新增)
+
+- **URL**: https://github.com/yongzhuo/macro-correct
+- **License**: Apache License 2.0
+- **Copyright**: (c) 2025 yongzhuo (Macropodus)
+- **借鉴内容**: 全半角 0xFEE0 偏移转换算法 (q2b/b2q)、成对标点计数校验思路 (check_double)
+- **借鉴方式**: 思路借鉴（A 类），无代码复制 (其"不成对即删除"策略改造为"只报告")
+- **落点**: app/punct_fix.py (全角字母数字归一化/不平衡报告)
+
+## 15. sparanoid/chinese-copywriting-guidelines + GB/T 15834-2011 (v4.3.4 新增)
+
+- **URL**: https://github.com/sparanoid/chinese-copywriting-guidelines
+- **License**: MIT License (指北); GB/T 15834-2011《标点符号用法》为国家标准 (可自由引用规范条目)
+- **借鉴内容**: 标点使用规范权威依据 — 重复标点 (B1)、全形标点 (B2)、数字半形 (B4)、
+  直角引号争议项 (C1)、省略号……/破折号——/波浪～规范形态 (GB/T 补充)
+- **借鉴方式**: 规范引用 (规则依据), 无代码复制
+- **落点**: app/punct_fix.py 规则表 + 校对参数页文案
+
 ## 借鉴来源文件头注释约定
 
 为满足 MIT / BSD 协议"在修改文件标注"要求，所有借鉴思路的源文件首部加注释：

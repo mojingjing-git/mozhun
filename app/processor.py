@@ -32,7 +32,7 @@ from openai import (
 from app.context_builder import ContextBuilder
 from app.logger import setup_logging
 from app.templates import PROMPT_MODES
-from app.punct_fix import fix_punctuation
+from app.punct_fix import fix_punctuation_ex
 from app.utils import (
     FileTask,
     FileResult,
@@ -109,6 +109,8 @@ class ProcessingEngine:
         self._lock = threading.Lock()
         self._stats_lock = threading.Lock()
         self._client: AsyncOpenAI | None = None
+        # v4.3.4: 标点不平衡报告 (只报不改) — 桥接层在 prepare 后/run 结束后推送
+        self.punct_reports: list[str] = []
 
         self.on_file_done: Optional[Callable[[str, str], None]] = None
         self.on_file_start: Optional[Callable[[str], None]] = None
@@ -135,6 +137,27 @@ class ProcessingEngine:
         logger.info(msg)
         if self.on_log:
             self.on_log(msg)
+
+    def _punct_options(self) -> dict:
+        """从配置组装标点修复选项 (v4.3.4; 默认值与 punct_fix._DEFAULT_OPTIONS 一致)."""
+        return {
+            "quote_style": self.config.punct_quote_style,
+            "fullwidth_alnum": self.config.punct_fullwidth_alnum,
+            "repeat_compress": self.config.punct_repeat_compress,
+            "dash_tilde": self.config.punct_dash_tilde,
+        }
+
+    def _collect_punct_reports(self, file_name: str, punct_stats: dict) -> None:
+        """把引号不平衡报告转成可读日志行 (v4.3.4; 只报不改 — 宁漏勿误互补)."""
+        for rep in punct_stats.get("imbalance", []):
+            line_no = rep.get("line", "?")
+            if "count" in rep:
+                detail = f"引号落单 (共 {rep['count']} 个)"
+            else:
+                detail = f"引号不平衡 (开 {rep.get('open', 0)}/闭 {rep.get('close', 0)})"
+            self.punct_reports.append(
+                f"{file_name} 第 {line_no} 行 {detail}: {rep.get('line_text', '')}"
+            )
 
     def _emit(self, cb, *args) -> None:
         """统一回调保护.
@@ -214,6 +237,10 @@ class ProcessingEngine:
             temperature=self.config.temperature,
             api_base=self.config.api_base,
             punct_fix=self.config.punct_fix,
+            punct_quote_style=self.config.punct_quote_style,
+            punct_fullwidth_alnum=self.config.punct_fullwidth_alnum,
+            punct_repeat_compress=self.config.punct_repeat_compress,
+            punct_dash_tilde=self.config.punct_dash_tilde,
         )
 
         for fp in file_paths:
@@ -257,9 +284,10 @@ class ProcessingEngine:
             # 原始状态, 修复发生在 _call_api_stream 本地分支, 否则 corrected ==
             # original, 结果对比页 diff 完全为空 (无法审计改了什么)
             if self.config.punct_fix and self.config.prompt_mode != "punct_local":
-                text, punct_n = fix_punctuation(text)
-                if punct_n:
-                    self._log(f"[标点] {fp.name}: 本地修复 {punct_n} 处半角标点")
+                text, punct_stats = fix_punctuation_ex(text, self._punct_options())
+                if punct_stats["total"]:
+                    self._log(f"[标点] {fp.name}: 本地修复 {punct_stats['total']} 处半角标点")
+                self._collect_punct_reports(fp.name, punct_stats)
             task = FileTask(file_path=fp, original_text=text)
             self.tasks[key] = task
             self._log(f"[就绪] {fp.name}: {len(text)} 字符")
@@ -825,7 +853,7 @@ class ProcessingEngine:
             out_parts: list[str] = []
             local_results: list[FileResult] = []
             for c in chunks:
-                fixed, _n = fix_punctuation(c)
+                fixed, punct_stats = fix_punctuation_ex(c, self._punct_options())
                 out_parts.append(fixed)
                 local_results.append(FileResult(original=c, corrected=fixed))
             self._log(f"[标点] 本地修复完成 ({len(chunks)} 块, 未调用 LLM)")

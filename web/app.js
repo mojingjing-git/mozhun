@@ -100,7 +100,7 @@ const App = {
     this.bindEvents();
     this.startEventLoop();
     this.setView('home');
-    this.appendLog('[就绪] v4.3.3 pywebview 前端已加载');
+    this.appendLog('[就绪] v4.3.4 pywebview 前端已加载');
     // v4.1.7: 加载风格 profile 列表 (异步, 不阻塞 init)
     this.loadStyleProfiles();
     // v4.1.9 (S2.3 个人原则): 恢复持久化主题 (auto/light/dark)
@@ -458,6 +458,18 @@ const App = {
     {
       const cb = document.getElementById('cfg-punct-fix');
       if (cb) cb.checked = this.config.punct_fix !== false;
+    }
+    // v4.3.4: 标点修复 v2 规则选项
+    {
+      const qs = document.getElementById('cfg-punct-quote-style');
+      if (qs) qs.value = this.config.punct_quote_style || 'curly';
+      const setCb = (id, val, dflt) => {
+        const cb = document.getElementById(id);
+        if (cb) cb.checked = val === undefined ? dflt : !!val;
+      };
+      setCb('cfg-punct-fullwidth-alnum', this.config.punct_fullwidth_alnum, true);
+      setCb('cfg-punct-repeat-compress', this.config.punct_repeat_compress, false);
+      setCb('cfg-punct-dash-tilde', this.config.punct_dash_tilde, true);
     }
 
     // 初始 URL 校验
@@ -1875,6 +1887,20 @@ const App = {
       punct_fix:          (() => {
         const cb = document.getElementById('cfg-punct-fix');
         return cb ? cb.checked : (this.config.punct_fix !== false);
+      })(),
+      // v4.3.4: 标点修复 v2 规则选项 (checkbox 缺失时回退当前配置)
+      punct_quote_style:  this.getVal('cfg-punct-quote-style') || this.config.punct_quote_style || 'curly',
+      punct_fullwidth_alnum: (() => {
+        const cb = document.getElementById('cfg-punct-fullwidth-alnum');
+        return cb ? cb.checked : (this.config.punct_fullwidth_alnum !== false);
+      })(),
+      punct_repeat_compress: (() => {
+        const cb = document.getElementById('cfg-punct-repeat-compress');
+        return cb ? cb.checked : (this.config.punct_repeat_compress === true);
+      })(),
+      punct_dash_tilde: (() => {
+        const cb = document.getElementById('cfg-punct-dash-tilde');
+        return cb ? cb.checked : (this.config.punct_dash_tilde !== false);
       })(),
     };
   },

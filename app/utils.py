@@ -78,6 +78,10 @@ def compute_prompt_hash(
     temperature: float | None = None,
     api_base: str = "",
     punct_fix: bool = True,
+    punct_quote_style: str = "curly",
+    punct_fullwidth_alnum: bool = True,
+    punct_repeat_compress: bool = False,
+    punct_dash_tilde: bool = True,
 ) -> str:
     """计算 prompt/生成配置指纹 — 断点缓存随配置变化而失效。
 
@@ -94,6 +98,8 @@ def compute_prompt_hash(
         f"|chunk={chunking_preset}|ctxc={context_max_chars}"
         f"|ctxn={context_max_chunks}|temp={temperature}"
         f"|base={api_base}|punct={punct_fix}"
+        f"|pq={punct_quote_style}|pa={punct_fullwidth_alnum}"
+        f"|pr={punct_repeat_compress}|pd={punct_dash_tilde}"
     ).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()[:16]
 
@@ -232,6 +238,11 @@ class ProjectConfig:
     context_max_chunks: int = 2    # NEW (v3.0+): 跨段上下文取最近几个 chunk
     ui_theme: str = "auto"  # NEW (v4.1.9): 主题三态 (auto/light/dark), Win11 §2.3 个人原则 — 主题持久化
     punct_fix: bool = True  # NEW (v4.3.3): 发送 LLM 前先本地修复半角标点 (app/punct_fix.py, 零成本)
+    # v4.3.4: 标点修复 v2 规则选项 (默认值与 app/punct_fix.py::_DEFAULT_OPTIONS 严格一致)
+    punct_quote_style: str = "curly"    # 引号风格: curly=弯“” (推荐) / rect=直角「」 (指北争议项)
+    punct_fullwidth_alnum: bool = True   # 全角字母/数字归一化 (ＡＢＣ１２３→ABC123; 指北 B4)
+    punct_repeat_compress: bool = False  # 重复标点压缩 ！！！→！ (指北 B1, 默认关)
+    punct_dash_tilde: bool = True        # 破折号——/波浪～ 补齐 (GB/T 15834)
 
     def to_dict(self) -> dict:
         return {
@@ -252,6 +263,10 @@ class ProjectConfig:
             "context_max_chunks": self.context_max_chunks,
             "ui_theme": self.ui_theme,
             "punct_fix": self.punct_fix,
+            "punct_quote_style": self.punct_quote_style,
+            "punct_fullwidth_alnum": self.punct_fullwidth_alnum,
+            "punct_repeat_compress": self.punct_repeat_compress,
+            "punct_dash_tilde": self.punct_dash_tilde,
         }
 
     @classmethod
@@ -274,6 +289,10 @@ class ProjectConfig:
             context_max_chunks=d.get("context_max_chunks", 2),
             ui_theme=d.get("ui_theme") or "auto",
             punct_fix=bool(d.get("punct_fix", True)),
+            punct_quote_style=d.get("punct_quote_style") or "curly",
+            punct_fullwidth_alnum=bool(d.get("punct_fullwidth_alnum", True)),
+            punct_repeat_compress=bool(d.get("punct_repeat_compress", False)),
+            punct_dash_tilde=bool(d.get("punct_dash_tilde", True)),
         )
 
 

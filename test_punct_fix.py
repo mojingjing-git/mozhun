@@ -50,7 +50,7 @@ def test_single_quote_apostrophe():
     print("\n--- 单引号/撇号 ---")
     from app.punct_fix import fix_punctuation
     r, n = fix_punctuation("他说 'don't' 好")
-    check("撇号保护 + 外侧配对", r == "他说 ‘don't’ 好" and n == 2, repr(r))
+    check("撇号保护 + 外侧配对 + 字形规范", r == "他说 ‘don’t’ 好" and n == 3, repr(r))
     r, n = fix_punctuation("it's fine")
     check("纯英文撇号不动", r == "it's fine" and n == 0, repr(r))
 
@@ -112,6 +112,84 @@ def test_crossline_and_digit_comma():
     check("千分位 1,000 不动", r == '共 1,000 人' and n == 0, repr(r))
     r, n = fix_punctuation('3,14万')
     check("3,14万 不动", r == '3,14万' and n == 0, repr(r))
+
+
+def test_v434_research_rules():
+    """v4.3.4: 调研落地规则回归 (省略号权重法/属格撇号/全角折叠/低危逗号/
+    分号原则/URL 掩蔽/破折号波浪/不平衡报告/直角引号计数)."""
+    print()
+    print("--- v4.3.4: 调研落地规则 ---")
+    from app.punct_fix import fix_punctuation, fix_punctuation_ex
+    cases = [
+        # 省略号权重法 (GB/T: 省略号后不加句号)
+        ("他说。。。", "他说……"),
+        ("他...。说了", "他……说了"),
+        ("……。", "……"),
+        ("。。。", "……"),
+        ("end...", "end..."),          # 纯英文行不动
+        ("。。", "。。"),               # 权重 2 不动
+        # 属格撇号
+        ("他拿了 James' 包", "他拿了 James’ 包"),
+        ("players'更衣室", "players’更衣室"),
+        # 缩略撇号字形
+        ("他说 'don't' 好", "他说 ‘don’t’ 好"),
+        # 逗号低危档 (autocorrect 两档设计)
+        ("1937,战争爆发了。", "1937，战争爆发了。"),
+        ("iPhone,好开心", "iPhone，好开心"),
+        ("John, 他说", "John， 他说"),
+        ("3,14", "3,14"),
+        ("1,000", "1,000"),
+        # 分号永不转换
+        ("中文;英文", "中文;英文"),
+        ("&quot;测试&quot;", "&quot;测试&quot;"),
+        # 破折号/波浪 (GB/T: ——/～ 形态)
+        ("他--走了", "他——走了"),
+        ("他—走了", "他——走了"),
+        ("他——走了", "他——走了"),
+        ("你~好", "你～好"),
+        ("3-5", "3-5"),
+        # 全角字母/数字折叠 (指北 B4)
+        ("版本２０２６", "版本2026"),
+        ("ＡＢＣ测试", "ABC测试"),
+        # URL 掩蔽 (评审 P5)
+        ("测试中文,https://a.com/foo?x=1,详见",
+         "测试中文，https://a.com/foo?x=1,详见"),
+        ('他说"https://a.com"就好', "他说“https://a.com”就好"),
+    ]
+    for src, want in cases:
+        if want is None:
+            r, st = fix_punctuation(src)
+            check("跨行降级: 落单引号保守跳过", r.count('"') == src.count('"'), repr(r))
+            continue
+        r, n = fix_punctuation(src)
+        check(f"{src!r} -> {want!r}", r == want, repr(r))
+    # 跨行降级 (FP-1 回归): 引号含真实换行, 逐行处理不跨行配对
+    src = '他说:"今晚' + chr(10) + '回来吗?"她说,"我又不想走了。"'
+    r, st = fix_punctuation(src)
+    check("跨行降级: 落单引号保守跳过",
+          r.count('"') == src.count('"'), repr(r))
+    # 不平衡报告 (评审 P1: 撇号字形不触发假报告)
+    for txt in ("James’刀", "O’Brien 说你好"):
+        r, st = fix_punctuation_ex(txt)
+        check(f"撇号不触发假报告: {txt!r}",
+              not any(e["kind"] == "single" for e in st["imbalance"]))
+    # schema 统一 (评审 P2)
+    r, st = fix_punctuation_ex('他说"落单')
+    e0 = st["imbalance"][0] if st["imbalance"] else {}
+    check("不平衡条目含 line", e0.get("line") == 1, str(e0))
+    # NUL 不串号 (评审 P4)
+    r, st = fix_punctuation_ex("前" + chr(0) + "0" + chr(0) + "后 https://a.com/x")
+    check("NUL 剥离不串号", r.count("https") == 1 and r == "前0后 https://a.com/x", repr(r))
+    # 重复标点压缩计数 (评审 P7)
+    r, st = fix_punctuation_ex("wow!! 好看", {"repeat_compress": True})
+    check("压缩计入统计", st["total"] >= 1, str(st["total"]))
+    # 直角引号计数 (评审 P8)
+    r, st = fix_punctuation_ex('他说："测试。"', {"quote_style": "rect"})
+    check("直角引号计数", st["total"] >= 2, str(st["total"]))
+    # 幂等
+    r1, _ = fix_punctuation('他说："你好,世界。"他说。。。')
+    r2, _ = fix_punctuation(r1)
+    check("幂等", r1 == r2)
 
 
 def test_config_and_hash():
@@ -206,6 +284,7 @@ def main():
         test_engine_punct_local_mode,
         test_prepare_tasks_applies_fix,
         test_crossline_and_digit_comma,
+        test_v434_research_rules,
     ]
     for t in tests:
         try:
