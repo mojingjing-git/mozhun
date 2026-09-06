@@ -143,9 +143,10 @@ def test_get_prompt_modes():
     backend = Backend(window=None)
     modes = backend.get_prompt_modes()
     check("返回 list", isinstance(modes, list))
-    check("至少 7 个模式 (含 deai)", len(modes) >= 7)
+    check("至少 7 个模式", len(modes) >= 7)
     check("每个 mode 有 key + label", all("key" in m and "label" in m for m in modes))
-    check("deai 模式存在", any(m["key"] == "deai" for m in modes))
+    # v4.1.8.2 (审计 C4): deai 是去AI味视图专用遗留模式, 已从校对下拉过滤
+    check("deai 模式已过滤", all(m["key"] != "deai" for m in modes))
     check("strict 模式存在", any(m["key"] == "strict" for m in modes))
 
 
@@ -189,8 +190,8 @@ def test_read_file():
         f.write("hello world")
         tmp_path = f.name
     try:
-        text = backend.read_file(tmp_path)
-        check("read_file 返回 'hello world'", text == "hello world")
+        r = backend.read_file(tmp_path)
+        check("read_file 返回 'hello world'", r["ok"] is True and r["content"] == "hello world")
     finally:
         Path(tmp_path).unlink(missing_ok=True)
 
@@ -203,8 +204,8 @@ def test_read_file_chinese():
         f.write("中文校对测试")
         tmp_path = f.name
     try:
-        text = backend.read_file(tmp_path)
-        check("read_file 中文返回正确", text == "中文校对测试")
+        r = backend.read_file(tmp_path)
+        check("read_file 中文返回正确", r["ok"] is True and r["content"] == "中文校对测试")
     finally:
         Path(tmp_path).unlink(missing_ok=True)
 
@@ -459,6 +460,15 @@ def test_get_api_templates():
     for t in templates:
         check(f"模板 {t.get('name', '?')} 有 api_base", "api_base" in t)
         check(f"模板 {t.get('name', '?')} 有 model", "model" in t)
+    # v4.3.2: 用户指定预设清单 (顺序即下拉顺序, 自定义收尾)
+    expected_names = ["LM Studio", "OpenCodeGo", "OpenRouter", "MiniMax", "阿里百炼",
+                      "智谱清言", "火山引擎", "硅基流动", "DeepSeek", "自定义"]
+    actual_names = [t.get("name") for t in templates]
+    check("预设清单与指定一致", actual_names == expected_names, str(actual_names))
+    for t in templates:
+        if t["name"] == "自定义":
+            continue
+        check(f"预设 {t['name']} base 非空或为自定义", t["api_base"] != "" or t["name"] == "自定义")
 
 
 def test_get_chunking_presets():
@@ -929,32 +939,35 @@ def test_f3_deai_error_no_complete():
     之前同时推两个, _flush 合并时 onDeaiComplete 覆盖 onDeaiError,
     前端 handleDeaiComplete 把 status 设为 'done' 完全没看 error.
 
-    v4.1.4 修复: 之前用 "onDeaiComplete" in block 会被注释里的"不推 onDeaiComplete"误判.
-    改用精确匹配 _push("onDeaiComplete" 调用, 排除注释.
+    v4.3.0: _deai_run 分块重构后源码位置解析失准, 改为行为断言 —
+    mock AsyncOpenAI 让 create 抛错, 直接 await _deai_run 收集推送.
     """
-    print("\n--- F3: deai 错误路径只推 onDeaiError ---", flush=True)
+    print("\n--- F3: deai 错误路径只推 onDeaiError (行为断言) ---", flush=True)
+    import asyncio
+    from unittest.mock import patch, MagicMock, AsyncMock
     from app.web_backend import Backend
-    import inspect
 
-    src = inspect.getsource(Backend)
-    # 检查 _deai_run 的 except 块: 不应有 onDeaiComplete 推送
-    deai_run_block = src.split("async def _deai_run")[1].split("def _build_deai_prompt")[0]
-    # 第一个 except (创建 client 失败) 之后, 不应该有 onDeaiComplete
-    client_create_except = deai_run_block.split("except Exception as e:", 1)[1].split("return", 1)[0]
-    has_complete_push = '_push("onDeaiComplete"' in client_create_except or "_push('onDeaiComplete'" in client_create_except
-    check("AsyncOpenAI 创建失败 except 不推 onDeaiComplete (精确匹配 _push 调用)",
-          not has_complete_push)
-    has_error_push = '_push("onDeaiError"' in client_create_except or "_push('onDeaiError'" in client_create_except
-    check("AsyncOpenAI 创建失败 except 推 onDeaiError",
-          has_error_push)
-    # LLM 流式异常 except
-    stream_except = deai_run_block.split("except Exception as e:", 2)[2].split("return", 1)[0]
-    has_complete_push2 = '_push("onDeaiComplete"' in stream_except or "_push('onDeaiComplete'" in stream_except
-    check("LLM 流式异常 except 不推 onDeaiComplete (精确匹配 _push 调用)",
-          not has_complete_push2)
-    has_error_push2 = '_push("onDeaiError"' in stream_except or "_push('onDeaiError'" in stream_except
-    check("LLM 流式异常 except 推 onDeaiError",
-          has_error_push2)
+    b = Backend(window=None)
+    pushes = []
+    b._push = lambda name, data=None: pushes.append((name, data))
+
+    class _FailingCreate:
+        async def __call__(self, **kwargs):
+            raise RuntimeError("mock: LLM 不可达")
+
+    fake_client = MagicMock()
+    fake_client.chat.completions.create = _FailingCreate()
+    fake_client.close = AsyncMock()
+    fake_ctor = MagicMock(return_value=fake_client)
+
+    with patch("app.web_backend.AsyncOpenAI", fake_ctor):
+        asyncio.run(b._deai_run("deai_f3_test", "detect", "hello world", "", "", ""))
+
+    names = [n for n, _ in pushes]
+    check("异常路径推 onDeaiError", "onDeaiError" in names)
+    check("异常路径不推 onDeaiComplete (F3 语义)", "onDeaiComplete" not in names)
+    err = next((d for n, d in pushes if n == "onDeaiError"), {})
+    check("onDeaiError 带 task_id", err.get("task_id") == "deai_f3_test")
 
 
 def test_f3_deai_top_level_no_complete():
@@ -1200,7 +1213,8 @@ def test_v414_throttle_constants():
     import inspect
 
     src = inspect.getsource(Backend._push)
-    check("含 elapsed >= 0.033 阈值", "elapsed >= 0.033" in src)
+    # v4.1.8.2 (审计 B5): 同步 flush 死分支已删, 节流常量走 Timer(0.033)
+    check("含 Timer(0.033) 节流", "threading.Timer(0.033" in src)
     check("Timer(0.033) 启动", "Timer(0.033" in src)
     check("无 0.1 (旧 100ms)", "0.1" not in src and "0,1" not in src)
 
@@ -1361,6 +1375,8 @@ def test_v414_export_write_failure():
     # 不强制 check, 只要返回 dict 即可
 
 
+# v4.1.8.2 (审计 K15): 0.033 是契约值 (v4.1.4 30FPS 决策), 此断言
+# 属实现细节断言 — 改动节流间隔需同步更新这里与 AGENTS.md.
 def test_v414_push_uses_throttle_33ms():
     """v4.1.4: _push 用 33ms Timer (vs v4.1.3 100ms Timer)."""
     print("\n--- v4.1.4: _push Timer 33ms ---", flush=True)
@@ -1518,24 +1534,23 @@ def test_v416_save_config_error_handling():
     """v4.1.6 (P3): utils.save_config 写盘失败时, 后端 save_config 不抛,
     而是返回 {ok: False, error: <msg>}, 前端能拿 r.error 显示.
 
-    注意: app.utils.save_config 内部 try/except 仅 log 不 re-raise,
-    验证 web_backend.save_config 的 except 兜底需直接 mock 它引用的 save_config.
+    v4.1.8.2 (审计 B4): utils.save_config 现返回 bool (写盘失败 False 而非
+    抛错/吞错), bridge 据此如实返回 {ok: False}.
     """
     print("\n--- v4.1.6 save_config 写盘失败返 ok=False ---", flush=True)
     from app.web_backend import Backend
     import app.web_backend as wb
     b = Backend(window=None)
     b.set_config("model", "v416-fail-model")
-    # 备份 web_backend.save_config 引用, 替换为抛错版本
+    # 备份 web_backend.save_config 引用, 替换为返 False 版本 (磁盘满/只读)
     orig_save_config = wb.save_config
     def fake_save_config(cfg):
-        raise OSError("v4.1.6 mock: 磁盘满 / 只读 / 权限拒绝")
+        return False
     try:
         wb.save_config = fake_save_config
         r = b.save_config()
         check("save_config 写盘失败不抛", isinstance(r, dict))
         check("写盘失败返 ok=False", r.get("ok") is False, str(r))
-        check("写盘失败返 error 字段含信息", "error" in r and "v4.1.6 mock" in r["error"], str(r))
     finally:
         wb.save_config = orig_save_config
 
@@ -2055,6 +2070,10 @@ _STYLE_CSS = _WEB_DIR / "style.css"
 _ICONS_DIR = _WEB_DIR / "icons"
 
 
+def _read_app_js():
+    return (_WEB_DIR / "app.js").read_text(encoding="utf-8")
+
+
 def _read_style_css():
     return _STYLE_CSS.read_text(encoding="utf-8")
 
@@ -2320,6 +2339,518 @@ def test_v418_acrylic_and_smoke_classes():
 
 # ==================== 主程序 ====================
 
+
+# ============================================================
+# v4.1.9: Win11 视觉完全体 (设计文档 7 签名体验落地核验)
+# ============================================================
+
+def test_v419_win11_polish():
+    """v4.1.9: Win11 视觉完全体静态核验.
+
+    对照 Windows11-设计原则.md:
+    - 3.4.3 Mica 近似基层 (body radial-gradient)
+    - 3.6.1 Segoe UI Variable 光学尺寸
+    - 3.4.4 ContentDialog (Smoke + 不透明面板 + elevation 128)
+    - 3.4.2 Acrylic 上下文菜单 (JS 组合 .menu-flyout.acrylic)
+    - 3.7.3 页面转换 (顶级页上滑入场) + prefers-reduced-motion
+    - 3.2.1 Card elevation=8; 硬编码色清理 (file-status/.log/hover)
+    """
+    print()
+    print("--- v4.1.9: Win11 视觉完全体 ---", flush=True)
+    css = _read_style_css()
+    js = _read_app_js()
+    html = (_WEB_DIR / "index.html").read_text(encoding="utf-8")
+
+    # 3.4.3 Mica 近似: body 用中性色 radial-gradient 叠加
+    check("body Mica 近似渐变", "radial-gradient" in css and "background-attachment: fixed" in css)
+    # 3.6.1 字体: Segoe UI Variable + 光学尺寸
+    check("body font-optical-sizing: auto", "font-optical-sizing: auto" in css)
+    check("字体栈含 Segoe UI Variable", '"Segoe UI Variable"' in css)
+    # 3.2.1 Card elevation=8
+    card_idx = css.find(".card {")
+    card_block = css[card_idx:card_idx + 400] if card_idx > 0 else ""
+    check("Card elevation=8 (shadow-8)", "var(--shadow-8)" in card_block)
+    # 3.4.4 ContentDialog
+    check(".content-dialog 定义", ".content-dialog {" in css)
+    check("对话框 elevation=128", "var(--shadow-128)" in css[css.find(".content-dialog"):css.find(".content-dialog") + 500])
+    check(".dialog-smoke 用 --colorSmoke", "var(--colorSmoke)" in css[css.find(".dialog-smoke"):css.find(".dialog-smoke") + 300])
+    check("index.html 有 dialog-root", 'id="dialog-root"' in html)
+    check("app.js 有 showConfirmDialog", "showConfirmDialog" in js)
+    check("clearFiles 不再用原生 confirm",
+          "if (!confirm(" not in js and "window.confirm" not in js)
+    # 3.4.2 Acrylic flyout
+    check(".menu-flyout 定义", ".menu-flyout {" in css)
+    check("flyout 组合 acrylic 材料", 'menu-flyout acrylic' in js)
+    check("app.js 有右键菜单绑定", "bindFileContextMenu" in js and "contextmenu" in js)
+    # 3.7.3 页面转换 + reduced-motion
+    check("@keyframes pageTransitionIn", "@keyframes pageTransitionIn" in css)
+    check(".view.active 应用入场动画", "pageTransitionIn var(--durationFast)" in css)
+    check("prefers-reduced-motion 守卫", "@media (prefers-reduced-motion: reduce)" in css)
+    # 焦点可见 (a11y)
+    check(":focus-visible 焦点环", ":focus-visible" in css)
+    # 硬编码色清理
+    fs_idx = css.find(".file-status.pending")
+    fs_block = css[fs_idx:fs_idx + 700] if fs_idx > 0 else ""
+    check("file-status 全 token 化", "var(--color" in fs_block and "#E8F1FB" not in fs_block)
+    log_idx = css.find("\n.log {")
+    log_block = css[log_idx:log_idx + 300] if log_idx > 0 else ""
+    check(".log 主题感知 token 化", "var(--colorNeutralBackground2)" in log_block and "#1A1A1A" not in log_block)
+    check("input hover token 化", "var(--colorNeutralStrokeHover)" in css and "border-color: #C5C5C5" not in css)
+    # 死代码清理
+    check(".diff-tabs 死类已删", ".diff-tabs" not in css)
+    check(".btn-small 死类已删", ".btn-small" not in css)
+    check(".compare-empty 死类已删", ".compare-empty" not in css)
+    check(".style-profile-card 死类已删", ".style-profile-card" not in css)
+
+
+def test_v419_ui_theme_roundtrip():
+    """v4.1.9: ui_theme 主题持久化字段 — 默认 auto + 往返一致 + 旧配置兼容."""
+    print()
+    print("--- v4.1.9: ui_theme 往返 ---", flush=True)
+    from app.utils import ProjectConfig
+    cfg = ProjectConfig()
+    check("ui_theme 默认 auto", cfg.ui_theme == "auto")
+    cfg.ui_theme = "dark"
+    d = cfg.to_dict()
+    check("to_dict 含 ui_theme", d.get("ui_theme") == "dark")
+    cfg2 = ProjectConfig.from_dict(d)
+    check("from_dict 还原 dark", cfg2.ui_theme == "dark")
+    # 旧配置 (v4.1.8 以前) 无 ui_theme 字段 -> 默认 auto
+    cfg3 = ProjectConfig.from_dict({k: v for k, v in d.items() if k != "ui_theme"})
+    check("旧配置兼容 (缺字段 -> auto)", cfg3.ui_theme == "auto")
+    # bridge set_config 可写
+    from app.web_backend import Backend
+    b = Backend(window=None)
+    r = b.set_config("ui_theme", "light")
+    check("set_config 可写 ui_theme", r.get("ok") is True and b._config.ui_theme == "light")
+
+
+
+def test_v420_nav_split():
+    """v4.2.0: 3 视图 -> 7 视图拆分 (Win11 设置应用式分组导航).
+
+    核验: 7 个视图 id 齐全 / 分组导航 / 关键元素 id 单一存在 (JS 绑定不变) /
+    结果页文件下拉 / cfg 字段分布两页后防抖选择器覆盖 / CSS 新组件。
+    """
+    print()
+    print("--- v4.2.0: 7 视图导航拆分 ---", flush=True)
+    html = (_WEB_DIR / "index.html").read_text(encoding="utf-8")
+    js = _read_app_js()
+    css = _read_style_css()
+
+    # 7 视图齐全
+    for vid in ("view-home", "view-results", "view-deai", "view-styles",
+                "view-api", "view-params", "view-appearance"):
+        check(f"视图 {vid} 存在", f'id="{vid}"' in html)
+    # 分组导航
+    for dv in ("home", "results", "deai", "styles", "api", "params", "appearance"):
+        check(f"导航项 data-view={dv}", f'data-view="{dv}"' in html)
+    check("导航分组「工作区」", ">工作区</div>" in html)
+    check("导航分组「设置」", ">设置</div>" in html)
+    # 关键元素 id 全局唯一 (拆分最容易引入重复 id)
+    for eid in ("compare-original", "compare-revised", "log-output", "progress-fill",
+                "theme-switcher", "dialog-root", "deai-style-profile",
+                "styles-profile-select", "btn-start", "btn-save-config",
+                "result-file-select", "file-list", "drop-zone"):
+        check(f"id 唯一: {eid}", html.count(f'id="{eid}"') == 1)
+    # cfg 12 字段齐全
+    cfg_ids = ["cfg-template", "cfg-api-base", "cfg-api-key", "cfg-model",
+               "cfg-temperature", "cfg-concurrency", "cfg-max-retries", "cfg-timeout",
+               "cfg-chunking-preset", "cfg-context-max-chars", "cfg-context-max-chunks",
+               "cfg-custom-prompt", "cfg-prompt-mode"]
+    for cid in cfg_ids:
+        check(f"配置项存在: {cid}", f'id="{cid}"' in html)
+    # JS 适配
+    check("结果页下拉渲染函数", "renderResultFileSelect" in js)
+    check("点击文件跳转结果页", "this.setView('results')" in js)
+    check("防抖选择器覆盖 view-api/params/appearance",
+          "#view-api input" in js and "#view-params input" in js)
+    check("Ctrl+, 指向 API 接口页", "this.setView('api')" in js)
+    check("风格库下拉镜像绑定", "styles-profile-select" in js)
+    # CSS 新组件
+    for cls in (".nav-group {", ".sidebar-footer {", ".content-narrow {",
+                ".result-select {", ".about-row {"):
+        check(f"CSS 组件 {cls.strip()} ", cls in css)
+    check("home-grid 两列等宽", "grid-template-columns: 1fr 1fr;" in css)
+    check("运行状态卡日志撑满", ".run-card .log { max-height: none; }" in css)
+    # 页面转换动画对 7 视图统一生效 (v4.1.9 的 .view.active 规则)
+    check("页面转换仍作用于全部视图", "pageTransitionIn var(--durationFast)" in css)
+
+
+
+def test_v430_deai_longtext():
+    """v4.3.0: DeAI 长文本支持 (分块/降级推送/取消/落盘/引用/截断).
+
+    实施前评审 (agent 审计) 确认的设计要点逐条核验:
+    - 分块: 按分块预设切块逐块调用; rewrite 纯拼接; detect/audit 分节
+    - whole_file 兜底: 超阈值回退 large(6000)
+    - 降级推送: partial > 5 万字只推尾部预览, 完整结果落盘 deai_results/
+    - 取消: 结构化 payload (cancelled: true) 区分失败; registry 登记 cancel_event
+    - step3 引用: source_task_id 后端直读, 全文不过 IPC
+    - sample 截断: 2 万字上限
+    """
+    print()
+    print("--- v4.3.0: DeAI 长文本支持 ---", flush=True)
+    import asyncio
+    import tempfile
+    from unittest.mock import patch, MagicMock, AsyncMock
+    from pathlib import Path
+    from app.web_backend import Backend
+    from app.style_profiles import loader as loader_mod
+
+    def make_backend():
+        b = Backend(window=None)
+        pushes = []
+        b._push = lambda name, data=None: pushes.append((name, data))
+        return b, pushes
+
+    def make_fake_llm(chunks_out, fail_on=None):
+        """fake client: 每次 create 依次消费 chunks_out 中的一个字符串作流式输出."""
+        calls = {"n": 0, "prompts": []}
+        client = MagicMock()
+
+        class _Stream:
+            def __init__(self, text):
+                self.text = text
+            def __aiter__(self):
+                self._i = 0
+                return self
+            async def __anext__(self):
+                if self._i >= len(self.text):
+                    raise StopAsyncIteration
+                ev = MagicMock()
+                ev.choices = [MagicMock()]
+                ev.choices[0].delta.content = self.text[self._i]
+                self._i += 1
+                return ev
+
+        async def create(**kwargs):
+            calls["n"] += 1
+            calls["prompts"].append(kwargs["messages"][1]["content"])
+            if fail_on is not None and calls["n"] == fail_on:
+                raise RuntimeError("mock: LLM 不可达")
+            out = chunks_out[min(calls["n"], len(chunks_out)) - 1]
+            return _Stream(out)
+
+        client.chat.completions.create = create
+        client.close = AsyncMock()
+        return MagicMock(return_value=client), calls
+
+    # --- 1) 分块: detect 多块 -> 分节报告 + 每块一次调用 ---
+    with tempfile.TemporaryDirectory(prefix="v430_") as tmp:
+        orig_dir = loader_mod.STYLES_DIR
+        loader_mod.STYLES_DIR = Path(tmp) / "styles"
+        try:
+            b, pushes = make_backend()
+            fake_ctor, calls = make_fake_llm(["块1报告", "块2报告", "块3报告"])
+            long_text = "这是测试句子。" * 800  # 9600 字 -> balanced(3000) 切 4 块? 实际按 split_text
+            with patch("app.web_backend.AsyncOpenAI", fake_ctor):
+                b._config.chunking_preset = "fast"  # 2000 字/块 -> 5 块
+                asyncio.run(b._deai_run("deai_t1", "detect", long_text, "", "", ""))
+            check("多块: 每块一次 LLM 调用", calls["n"] >= 3, f"实际 {calls['n']} 次")
+            names = [n for n, _ in pushes]
+            check("多块: onDeaiComplete 恰好一次", names.count("onDeaiComplete") == 1)
+            comp = next(d for n, d in pushes if n == "onDeaiComplete")
+            check("detect 分节符存在", "=== 第" in comp.get("result", ""))
+            check("detect 短结果不降级", comp.get("truncated") is False)
+            last_stream = [d for n, d in pushes if n == "onDeaiStream"][-1]
+            check("complete 带 progress 总块数", last_stream.get("progress", {}).get("total") >= 3)
+        finally:
+            loader_mod.STYLES_DIR = orig_dir
+
+    # --- 2) rewrite 纯拼接: 无分节符, 块间衔接 prompt 注入 ---
+    with tempfile.TemporaryDirectory(prefix="v430_") as tmp:
+        orig_dir = loader_mod.STYLES_DIR
+        loader_mod.STYLES_DIR = Path(tmp) / "styles"
+        try:
+            b, pushes = make_backend()
+            fake_ctor, calls = make_fake_llm(["改写甲", "改写乙", "改写丙", "改写丁"])
+            long_text = "这是需要改写的句子。" * 800  # ~8000 字
+            with patch("app.web_backend.AsyncOpenAI", fake_ctor):
+                b._config.chunking_preset = "fast"
+                asyncio.run(b._deai_run("deai_t2", "rewrite", long_text, "", "", ""))
+            comp = next(d for n, d in pushes if n == "onDeaiComplete")
+            check("rewrite 纯拼接无分节符", "=== 第" not in comp.get("result", ""))
+            check("rewrite 拼接顺序正确", comp.get("result", "").startswith("改写甲"))
+            check("rewrite 块间衔接 prompt", any("前文已改写部分的结尾" in p for p in calls["prompts"][1:]))
+        finally:
+            loader_mod.STYLES_DIR = orig_dir
+
+    # --- 3) 降级推送 + 落盘 ---
+    with tempfile.TemporaryDirectory(prefix="v430_") as tmp:
+        orig_dir = loader_mod.STYLES_DIR
+        loader_mod.STYLES_DIR = Path(tmp) / "styles"
+        import app.web_backend as wb
+        orig_home = wb.CONFIG_DIR
+        try:
+            wb.CONFIG_DIR = Path(tmp) / "home"
+            b, pushes = make_backend()
+            big = "长" * 30000  # 单块输出 30000 字 x2 块 -> full 60000 > 50000 阈值
+            fake_ctor, calls = make_fake_llm([big, big])
+            with patch("app.web_backend.AsyncOpenAI", fake_ctor):
+                b._config.chunking_preset = "fast"
+                asyncio.run(b._deai_run("deai_t3", "rewrite", "句子。" * 1000, "", "", ""))
+            streams = [d for n, d in pushes if n == "onDeaiStream"]
+            check("超阈值流式降级 (truncated)", any(st.get("truncated") for st in streams))
+            check("降级时 partial 是尾部预览", any(len(st.get("partial", "")) < 5000 for st in streams if st.get("truncated")))
+            comp = next(d for n, d in pushes if n == "onDeaiComplete")
+            check("complete truncated=True", comp.get("truncated") is True)
+            check("complete 带 result_file", bool(comp.get("result_file")))
+            rf = Path(comp["result_file"])
+            check("落盘文件存在且内容完整", rf.exists() and len(rf.read_text(encoding="utf-8")) == 60000)
+            check("落盘路径含 task_id", "deai_t3" in rf.name)
+            # copy/save bridge
+            r = b.deai_copy_result("deai_t3")
+            check("deai_copy_result 直读落盘 (mock 剪贴板失败也返回结构)", isinstance(r, dict))
+            r2 = b.deai_copy_result("不存在的任务")
+            check("deai_copy_result 未知 id 报错", r2.get("ok") is False)
+        finally:
+            wb.CONFIG_DIR = orig_home
+            loader_mod.STYLES_DIR = orig_dir
+
+    # --- 4) 取消: 结构化 payload + registry cancel_event ---
+    with tempfile.TemporaryDirectory(prefix="v430_") as tmp:
+        orig_dir = loader_mod.STYLES_DIR
+        loader_mod.STYLES_DIR = Path(tmp) / "styles"
+        try:
+            b, pushes = make_backend()
+            tid = "deai_t4"
+            import threading
+            b._deai_tasks[tid] = {"step": "rewrite", "cancel_event": threading.Event()}
+            b._deai_tasks[tid]["cancel_event"].set()  # 启动前已取消
+            fake_ctor, calls = make_fake_llm(["x"])
+            with patch("app.web_backend.AsyncOpenAI", fake_ctor):
+                b._config.chunking_preset = "balanced"
+                asyncio.run(b._deai_run(tid, "rewrite", "一些文本", "", "", ""))
+            err = next((d for n, d in pushes if n == "onDeaiError"), None)
+            check("取消走 onDeaiError", err is not None)
+            check("取消 payload 结构化 (cancelled: True)", err is not None and err.get("cancelled") is True)
+            check("取消不推 onDeaiComplete", all(n != "onDeaiComplete" for n, _ in pushes))
+            check("取消时不调 LLM", calls["n"] == 0)
+            r = b.deai_cancel(tid)
+            check("deai_cancel 已结束任务返 not-running", r.get("ok") is False)
+        finally:
+            loader_mod.STYLES_DIR = orig_dir
+
+    # --- 5) step3 引用落盘结果 (source_task_id) ---
+    with tempfile.TemporaryDirectory(prefix="v430_") as tmp:
+        orig_dir = loader_mod.STYLES_DIR
+        loader_mod.STYLES_DIR = Path(tmp) / "styles"
+        import app.web_backend as wb
+        orig_home = wb.CONFIG_DIR
+        try:
+            wb.CONFIG_DIR = Path(tmp) / "home"
+            b, pushes = make_backend()
+            saved = b._save_deai_result("deai_step2_src", "这是 step2 的完整改写结果")
+            check("结果落盘成功", bool(saved))
+            fake_ctor, calls = make_fake_llm(["评分报告"])
+            with patch("app.web_backend.AsyncOpenAI", fake_ctor):
+                asyncio.run(b._deai_run("deai_t5", "audit", "", "", "", "deai_step2_src"))
+            check("step3 引用: 后端直读落盘文本", any("这是 step2 的完整改写结果" in p for p in calls["prompts"]))
+            # 未知引用
+            pushes.clear()
+            n0 = calls["n"]
+            with patch("app.web_backend.AsyncOpenAI", fake_ctor):
+                asyncio.run(b._deai_run("deai_t6", "audit", "", "", "", "不存在的源"))
+            names = [n for n, _ in pushes]
+            check("未知引用报错不调 LLM", "onDeaiError" in names and calls["n"] == n0)
+        finally:
+            wb.CONFIG_DIR = orig_home
+            loader_mod.STYLES_DIR = orig_dir
+
+    # --- 6) whole_file 兜底 ---
+    with tempfile.TemporaryDirectory(prefix="v430_") as tmp:
+        orig_dir = loader_mod.STYLES_DIR
+        loader_mod.STYLES_DIR = Path(tmp) / "styles"
+        try:
+            b, pushes = make_backend()
+            fake_ctor, calls = make_fake_llm(["块甲", "块乙", "块丙", "块丁"])
+            long_text = "整本书内容。" * 4000  # 24000 字 > 20000 兜底阈值
+            with patch("app.web_backend.AsyncOpenAI", fake_ctor):
+                b._config.chunking_preset = "whole_file"
+                asyncio.run(b._deai_run("deai_t7", "rewrite", long_text, "", "", ""))
+            check("whole_file 兜底回退分块 (不单次调用)", calls["n"] >= 2, f"实际 {calls['n']} 块")
+        finally:
+            loader_mod.STYLES_DIR = orig_dir
+
+    # --- 7) sample 截断 ---
+    b = Backend(window=None)
+    big_sample = "范" * 25000
+    prompt = b._build_deai_prompt("rewrite", big_sample, "")
+    check("sample 超 2 万字截断", "已截断" in prompt and len(prompt) < 30000)
+    small_prompt = b._build_deai_prompt("rewrite", "短范文", "")
+    check("短 sample 不截断", "短范文" in small_prompt and "已截断" not in small_prompt)
+
+    # --- 8) 前端挂载点 (静态) ---
+    js = _read_app_js()
+    html = (_WEB_DIR / "index.html").read_text(encoding="utf-8")
+    check("前端: textarea 拖入绑定", "bindDeaiTextDrop" in js)
+    check("前端: 文件拖入 Python 通道", "onDeaiTextDrop" in js and "_on_textarea_drop" in open(
+        str(_WEB_DIR.parent / "app" / "web_backend.py"), encoding="utf-8").read())
+    check("前端: 字符计数元素", "deai-input-chars" in html and "deai-sample-chars" in html)
+    check("前端: 运行中按钮变取消", "'取消'" in js and "deai_cancel" in js)
+    check("前端: 对话框第三按钮", "dialog-btn-close" in html and "closeText" in js)
+    check("前端: 取消分流渲染", "data.cancelled" in js or "data.get" in js)
+
+
+# ==================== v4.3.1 新增 (UX #7: 强制重跑 + 缓存命中上报 + 块级进度) ====================
+
+def test_v431_force_rerun_and_progress():
+    """v4.3.1 (UX #7): force_rerun 通道 + cached_files 上报 + onChunkProgress 块级进度.
+
+    a) prepare_tasks 默认: 命中断点缓存 -> engine.cached_files 含路径 + original_text 来自缓存
+    b) prepare_tasks(force_rerun=True): 跳过缓存重读文件 (磁盘内容已变) -> cached_files 为空
+    c) start_proofread 返回 dict 含 cached_files (命中/强制两态, mock 掉线程启动)
+    d) _stream_chunked 每块完成触发 on_file_progress (3 块 -> (k,1,3)/(k,2,3)/(k,3,3));
+       _call_api_stream 单块分支 (whole_file) 不触发
+    e) bridge 注册 engine.on_file_progress -> 推 onChunkProgress {file_key, chunk, total}
+    """
+    print("\n--- v4.3.1: 强制重跑 / cached_files / 块级进度 ---", flush=True)
+    import asyncio
+    from unittest.mock import patch, MagicMock, AsyncMock
+    from app.utils import (
+        ProjectConfig, FileTask, FileResult, TaskStatus,
+        save_checkpoint, compute_prompt_hash,
+    )
+    from app.processor import ProcessingEngine
+    from app.web_backend import Backend
+
+    def _make_cache(fp: Path, cfg: ProjectConfig) -> None:
+        """参照 test_components.py: 造一个带正确指纹的 COMPLETED 断点缓存."""
+        task = FileTask(file_path=fp, original_text="cached content")
+        task.status = TaskStatus.COMPLETED
+        task.result = FileResult(
+            original="cached content", corrected="cached fixed",
+            prompt_hash=compute_prompt_hash(
+                cfg.prompt_mode, cfg.model, cfg.custom_prompt,
+                chunking_preset=cfg.chunking_preset,
+                context_max_chars=cfg.context_max_chars,
+                context_max_chunks=cfg.context_max_chunks,
+                temperature=cfg.temperature,
+                api_base=cfg.api_base,  # v4.1.8.2 (E16): 指纹补纳 api_base, 与引擎一致
+            ),
+        )
+        save_checkpoint(fp, task)
+
+    # --- a) 默认: 缓存命中 -> cached_files 上报 + original_text 来自缓存 ---
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8') as f:
+        f.write("cached content")
+        tmp_a = Path(f.name)
+    try:
+        cfg_a = ProjectConfig(api_base="http://x", model="m")
+        _make_cache(tmp_a, cfg_a)
+        engine_a = ProcessingEngine(cfg_a)
+        engine_a.prepare_tasks([tmp_a])
+        key_a = str(tmp_a)
+        check("a) 缓存命中 task.is_done", engine_a.tasks[key_a].is_done)
+        check("a) original_text 来自缓存", engine_a.tasks[key_a].original_text == "cached content")
+        check("a) engine.cached_files 含该路径", key_a in engine_a.cached_files)
+        check("a) 缓存命中计入 completed_files", engine_a.stats.completed_files == 1)
+    finally:
+        tmp_a.unlink(missing_ok=True)
+
+    # --- b) force_rerun=True: 跳过缓存, 重读文件 (内容已变), cached_files 为空 ---
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8') as f:
+        f.write("cached content")
+        tmp_b = Path(f.name)
+    try:
+        cfg_b = ProjectConfig(api_base="http://x", model="m")
+        _make_cache(tmp_b, cfg_b)
+        # 缓存造好后改写磁盘内容, 验证 force_rerun 真的重读了文件 (非复用断点)
+        tmp_b.write_text("brand new content", encoding="utf-8")
+        engine_b = ProcessingEngine(cfg_b)
+        engine_b.prepare_tasks([tmp_b], force_rerun=True)
+        key_b = str(tmp_b)
+        check("b) force_rerun 重读到新内容", engine_b.tasks[key_b].original_text == "brand new content")
+        check("b) force_rerun 任务回 pending (非 is_done)", not engine_b.tasks[key_b].is_done)
+        check("b) force_rerun cached_files 为空", engine_b.cached_files == [])
+    finally:
+        tmp_b.unlink(missing_ok=True)
+
+    # --- c) start_proofread 返回 dict 含 cached_files 字段 (命中 + 强制两态) ---
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8') as f:
+        f.write("cached content")
+        tmp_c = Path(f.name)
+    try:
+        b = Backend(window=None)
+        mock_window_c, _ = make_mock_window(None)
+        b._window = mock_window_c
+        # 断点指纹必须匹配 start_proofread 之后的引擎指纹: 传 mode_key='strict' /
+        # chunking_preset='balanced' 与默认 config 相同, 现算指纹即可对齐
+        _make_cache(tmp_c, b._config)
+        # mock run_async (AsyncMock) 让后台线程毫秒级退出, 只验证返回结构不真跑 LLM;
+        # 不能 patch threading.Thread — 它会连坐 threading.Timer.__init__ (模块全局
+        # 查找 Thread) 导致 _push 的 33ms Timer 抛 "thread.__init__() not called"
+        with patch.object(ProcessingEngine, "run_async", new=AsyncMock(return_value=None)):
+            r_hit = b.start_proofread([str(tmp_c)], 'strict')
+        check("c) 返回 dict 含 cached_files", "cached_files" in r_hit and isinstance(r_hit["cached_files"], list))
+        check("c) 缓存命中时 cached_files 含该路径", str(tmp_c) in r_hit.get("cached_files", []))
+        check("c) ok=True 契约保持", r_hit.get("ok") is True)
+        check("c) task_id/total_files 仍在", "task_id" in r_hit and r_hit.get("total_files") == 1)
+        # force_rerun 按位置传末位参数 (模拟 pywebview 前端调用方式)
+        with patch.object(ProcessingEngine, "run_async", new=AsyncMock(return_value=None)):
+            r_force = b.start_proofread([str(tmp_c)], 'strict', "", "balanced", True)
+        check("c) force_rerun 时 cached_files 为空", r_force.get("cached_files") == [])
+        check("c) force_rerun ok=True", r_force.get("ok") is True)
+    finally:
+        tmp_c.unlink(missing_ok=True)
+
+    # --- d) _stream_chunked 块级进度回调 (fake _stream_single, 参照 test_chunk_lifecycle) ---
+    async def fake_stream_single(self, task_key, text,
+                                 system_prompt_override=None, stream_prefix=""):
+        return text.upper(), 10
+
+    async def _run_chunked():
+        engine_d = ProcessingEngine(ProjectConfig(api_base="http://x", model="m"))
+        calls = []
+        engine_d.on_file_progress = lambda k, c, t: calls.append((k, c, t))
+        with patch.object(ProcessingEngine, '_stream_single', fake_stream_single):
+            await engine_d._stream_chunked("f1", ["甲", "乙", "丙"])
+        return calls
+
+    calls_d = asyncio.run(_run_chunked())
+    check("d) 块完成回调触发 3 次", len(calls_d) == 3, f"实际 {calls_d}")
+    check("d) 第 1 块 (f1,1,3)", len(calls_d) > 0 and calls_d[0] == ("f1", 1, 3))
+    check("d) 第 2 块 (f1,2,3)", len(calls_d) > 1 and calls_d[1] == ("f1", 2, 3))
+    check("d) 第 3 块 (f1,3,3)", len(calls_d) > 2 and calls_d[2] == ("f1", 3, 3))
+
+    # 单块分支 (_call_api_stream + whole_file) 无分块语义, 不触发
+    async def _run_single():
+        engine_d2 = ProcessingEngine(ProjectConfig(
+            api_base="http://x", model="m", chunking_preset="whole_file",
+        ))
+        calls = []
+        engine_d2.on_file_progress = lambda k, c, t: calls.append((k, c, t))
+        with patch.object(ProcessingEngine, '_stream_single', fake_stream_single):
+            await engine_d2._call_api_stream("f2", "single text")
+        return calls
+
+    calls_single = asyncio.run(_run_single())
+    check("d) 单块分支不触发块级进度", calls_single == [], f"实际 {calls_single}")
+
+    # --- e) bridge 注册 on_file_progress 并推 onChunkProgress ---
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8') as f:
+        f.write("test")
+        tmp_e = Path(f.name)
+    try:
+        b2 = Backend(window=None)
+        mock_window_e, captured_e = make_mock_window(None)
+        b2._window = mock_window_e
+        # 同上: mock run_async 让线程快速退出 (不 patch threading.Thread, 避免连坐 Timer)
+        with patch.object(ProcessingEngine, "run_async", new=AsyncMock(return_value=None)):
+            b2.start_proofread([str(tmp_e)], 'strict')
+        check("e) engine.on_file_progress 已绑", b2._engine.on_file_progress is not None)
+        # 模拟引擎块完成事件, 验证 _push("onChunkProgress") 链路
+        b2._engine.on_file_progress(str(tmp_e), 2, 5)
+        time.sleep(0.15)  # 等 33ms 节流 flush
+        all_payload = "".join(captured_e)
+        check("e) 推送 onChunkProgress", "onChunkProgress" in all_payload)
+        check("e) payload 含 chunk/total 字段",
+              '"chunk": 2' in all_payload and '"total": 5' in all_payload)
+    finally:
+        tmp_e.unlink(missing_ok=True)
+
+
 def main():
     print("=" * 60, flush=True)
     print("  v4.0 Web Backend 测试 (Phase 1+2, flush=True)")
@@ -2439,6 +2970,12 @@ def main():
         test_v418_no_italic,
         test_v418_no_bold_700,
         test_v418_acrylic_and_smoke_classes,
+        test_v419_win11_polish,
+        test_v419_ui_theme_roundtrip,
+        test_v420_nav_split,
+        test_v430_deai_longtext,
+        # v4.3.1 新增 (UX #7: 强制重跑 + 缓存命中上报 + 块级进度推送)
+        test_v431_force_rerun_and_progress,
     ]
     for t in tests:
         try:

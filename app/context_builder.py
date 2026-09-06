@@ -34,9 +34,13 @@ class ContextBuilder:
         start = max(0, current_chunk_index - self.max_chunks)
         prev = chunks_processed[start:current_chunk_index]
 
-        parts: list[str] = []
+        # v4.1.8.2 (审计 E14): 从最新块往旧块收集 — 旧实现按旧→新遍历, 巨大的
+        # 旧块先吃满预算, 紧邻当前块的最近内容反而被整体丢弃, 与"保留最近内容"
+        # 的意图相反. 新实现保证最新块完整, 预算耗尽时丢弃更旧的块 (被截断的
+        # 旧块保留尾部 = 距当前块最近的部分).
+        selected: list[str] = []
         used = 0
-        for r in prev:
+        for r in reversed(prev):
             text = r.corrected
             if not text:
                 continue
@@ -45,8 +49,9 @@ class ContextBuilder:
                 if remaining < 50:
                     break
                 text = "…" + text[-(remaining - 1):]
-            parts.append(text)
+            selected.append(text)
             used += len(text)
+        parts = list(reversed(selected))
 
         if not parts:
             return ""

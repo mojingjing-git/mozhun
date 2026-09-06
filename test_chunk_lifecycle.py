@@ -409,7 +409,7 @@ def test_cancel_before_start_finalizes():
         engine.stats.start_time = time.time()
         engine.cancel()  # 处理开始前就取消
         done_calls = []
-        engine.on_file_done = lambda k: done_calls.append(k)
+        engine.on_file_done = lambda k, status: done_calls.append(k)  # v4.1.8.2 (C2): 回调附 status
         with patch('app.processor.save_checkpoint_async', new=AsyncMock()) as mock_save:
             with tempfile.NamedTemporaryFile(
                 mode='w', suffix='.txt', delete=False, encoding='utf-8'

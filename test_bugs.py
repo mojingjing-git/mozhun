@@ -49,6 +49,7 @@ def test_bug1():
         context_max_chars=cfg.context_max_chars,
         context_max_chunks=cfg.context_max_chunks,
         temperature=cfg.temperature,
+        api_base=cfg.api_base,  # v4.1.8.2 (E16): 指纹补纳 api_base, 与引擎一致
     )
     task = FileTask(file_path=tmp, original_text='test')
     task.status = TaskStatus.COMPLETED
@@ -200,12 +201,16 @@ def test_bug13():
     check("Bug#13 v4.0+ main_window.py 已删 (Phase 3 完成)", not src_path.exists())
     from app.web_backend import Backend
     import inspect
-    src = inspect.getsource(Backend.export_result)
-    check("Bug#13 export_result try/except", "try" in src and "except" in src)
+    # v4.3.0: 对话框+写盘逻辑抽到 _export_via_dialog, 异常防护随之迁移 (等价语义)
+    src = inspect.getsource(Backend._export_via_dialog)
+    check("Bug#13 export_result try/except (经 _export_via_dialog)", "try" in src and "except" in src)
 
 def test_fewshot():
     from app.templates import PROMPT_MODES
     for k, v in PROMPT_MODES.items():
+        # v4.3.3: punct_local 是本地脚本模式, system 永不发送 LLM, 豁免结构断言
+        if k == "punct_local":
+            continue
         check(f"Few-shot {k}", "## 示例" in v['system'])
 
 

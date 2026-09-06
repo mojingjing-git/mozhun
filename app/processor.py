@@ -32,6 +32,7 @@ from openai import (
 from app.context_builder import ContextBuilder
 from app.logger import setup_logging
 from app.templates import PROMPT_MODES
+from app.punct_fix import fix_punctuation
 from app.utils import (
     FileTask,
     FileResult,
@@ -43,6 +44,7 @@ from app.utils import (
     load_checkpoint,
     read_file_text,
     compute_prompt_hash,
+    split_text,
     CHUNKING_PRESETS_MAP,
     DEFAULT_CHUNK_PRESET,
 )
@@ -63,12 +65,6 @@ logger = setup_logging()
 # 既不浪费 CPU 也不让 UI 顿挫。
 _STREAM_THROTTLE_TOKENS = 5
 _STREAM_THROTTLE_MS = 50.0
-
-# 大文本分块阈值 (字符数): 保守值,覆盖大多数模型的 context window。
-# 切分按段落/句号边界,保证语义完整。
-# 注意: _MAX_CHUNK_CHARS 仅作为整文件预设之外场景的回退默认值,
-# 实际切分在 _call_api_stream 里通过 _CHUNK_PRESETS 选取 max_chars。
-_MAX_CHUNK_CHARS = 6000
 
 # 借鉴自 https://github.com/tianhm/ollama-batch-processor (MIT License)
 # 借鉴内容: chunking preset 分档设计思路
@@ -103,17 +99,31 @@ class ProcessingEngine:
         self._loop: asyncio.AbstractEventLoop | None = None
         # v4.0+ 修订: pause_event 改 threading.Event, 跨线程 pause/resume/cancel
         # 直接调 set/clear 即可, 不用 call_soon_threadsafe (PLAN-pywebview.md §6.1 修订).
-        self._pause_event: threading.Event | None = None
+        # v4.1.8.2 (审计 E12): 在 __init__ 即创建并置位 — 旧版在 _run_all 里才建,
+        # 线程启动前 pause() 落在 None 上静默丢失, 且 _run_all 重建 event 会把
+        # 暂停状态清掉.
+        self._pause_event = threading.Event()
+        self._pause_event.set()
+        # v4.1.8.2 (审计 B2): 主任务句柄, cancel() 用它跨线程强制中断在途 HTTP await
+        self._main_task: asyncio.Task | None = None
         self._lock = threading.Lock()
         self._stats_lock = threading.Lock()
         self._client: AsyncOpenAI | None = None
 
-        self.on_file_done: Optional[Callable[[str], None]] = None
+        self.on_file_done: Optional[Callable[[str, str], None]] = None
         self.on_file_start: Optional[Callable[[str], None]] = None
-        self.on_file_completed: Optional[Callable[[str], None]] = None  # NEW (v3.0+): 所有 chunk 完成
+        # NEW (v3.0+): 所有 chunk 完成 (v4.1.8.2 C2: 均附 status 参数)
+        self.on_file_completed: Optional[Callable[[str, str], None]] = None
         self.on_stats_update: Optional[Callable[[ProcessStats], None]] = None
         self.on_log: Optional[Callable[[str], None]] = None
         self.on_stream: Optional[Callable[[str, str], None]] = None
+        # v4.3.1 (UX #7): 块级进度回调 (file_key, done_chunks, total_chunks) —
+        # 单文件多 chunk 时前端进度条不再长时间停在 0% (文件数进度只随文件收敛).
+        # 仅多 chunk 路径 (_stream_chunked) 触发; _call_api_stream 单块分支不触发.
+        self.on_file_progress: Optional[Callable[[str, int, int], None]] = None
+        # v4.3.1 (UX #7): 本次 prepare_tasks 命中断点缓存 (直接复用结果) 的文件
+        # 路径列表 — start_proofread 返回给前端, 提示用户"秒完成"是缓存命中.
+        self.cached_files: list[str] = []
 
         # v3.0 Phase 4: 跨段上下文构造器
         self.context_builder = ContextBuilder(
@@ -125,6 +135,21 @@ class ProcessingEngine:
         logger.info(msg)
         if self.on_log:
             self.on_log(msg)
+
+    def _emit(self, cb, *args) -> None:
+        """统一回调保护.
+
+        v4.1.8.2 (审计 E13): 回调直连 bridge 的 evaluate_js, 窗口关闭/导航时
+        可能抛异常 — 裸调用下 on_stream 异常会被通用 except 捕获升级成整文件
+        重试 (窗口已关仍继续打 API), on_file_start 异常则让任务无任何收尾.
+        统一在此 try/except, 只记日志不上抛.
+        """
+        if cb is None:
+            return
+        try:
+            cb(*args)
+        except Exception as e:
+            logger.error(f"回调异常 {getattr(cb, '__name__', 'cb')}: {e}")
 
     async def _await_resume(self) -> None:
         """v4.0+ 等待 pause 释放 (替代旧的 `await self._pause_event.wait()`).
@@ -161,24 +186,34 @@ class ProcessingEngine:
             remaining -= chunk
         return self._cancel_event.is_set()
 
-    def prepare_tasks(self, file_paths: list[Path]) -> None:
+    def prepare_tasks(self, file_paths: list[Path], force_rerun: bool = False) -> None:
         """读取文件并加载断点缓存。
 
         缓存命中校验 (Bug#3 + v4.1.8.1 C2/C5): 指纹由 compute_prompt_hash 纳入
         prompt 模式 + 生成配置 (chunking/context/temperature) 计算, 传给
         load_checkpoint 的 expected_hash 统一比对; 不匹配即判缓存失效。
 
+        v4.3.1 (UX #7): force_rerun=True 跳过 load_checkpoint (每文件重新
+        read_file_text 走完整流程) — 已完成文件删掉重加会被缓存秒标完成、前端
+        "开始"又只认 pending/failed/cancelled, 用户从此没有重跑通道. 命中缓存的
+        文件路径记入 self.cached_files 供 bridge 上报; skip 占位与 stats 逻辑不变.
+
         读取失败 (Bug#16): 原来 silent fail (continue) 会让 UI 永远"等待中"。
         改为创建一个 FAILED 占位 task,UI 能立即看到该文件失败。
         """
+        # v4.3.1 (UX #7): 每次调用重置, cached_files 只反映本次 prepare 的命中
+        self.cached_files = []
         # 缓存 prompt/配置指纹 (后续 _process_file_async 写入 FileResult.prompt_hash 复用)
         # v4.1.8.1 (审计 C2): 纳入 chunking/context/temperature 等影响生成结果的字段
+        # v4.1.8.2 (审计 E16): 补纳 api_base
         self._current_prompt_hash = compute_prompt_hash(
             self.config.prompt_mode, self.config.model, self.config.custom_prompt,
             chunking_preset=self.config.chunking_preset,
             context_max_chars=self.config.context_max_chars,
             context_max_chunks=self.config.context_max_chunks,
             temperature=self.config.temperature,
+            api_base=self.config.api_base,
+            punct_fix=self.config.punct_fix,
         )
 
         for fp in file_paths:
@@ -186,9 +221,14 @@ class ProcessingEngine:
             # v4.1.8.1 (审计 C5): 传 expected_hash, 由 load_checkpoint 统一做指纹比对.
             # 空 hash 的 v1 旧断点在校验下自然失效 (强制重跑); 原 prepare_tasks 手动
             # 二次校验 (Bug#3) 与 load_checkpoint 内部逻辑重复, 已删除.
-            cached = load_checkpoint(fp, expected_hash=self._current_prompt_hash)
+            # v4.3.1 (UX #7): force_rerun 时整体跳过缓存查找.
+            cached = None if force_rerun else load_checkpoint(
+                fp, expected_hash=self._current_prompt_hash
+            )
             if cached and cached.is_done:
                 self.tasks[key] = cached
+                # v4.3.1 (UX #7): 记录缓存命中, bridge 把它上报给前端
+                self.cached_files.append(key)
                 self._log(f"[缓存] {fp.name}: 已有校对结果，跳过")
                 continue
 
@@ -197,8 +237,11 @@ class ProcessingEngine:
             except Exception as e:
                 self._log(f"[错误] 无法读取文件 {fp.name}: {e}")
                 # Bug#16: 占位 FAILED 任务,让 UI 知道此文件失败
+                # v4.1.8.2 (审计 E2): 打 skip 标记 — 旧版占位会被 pending 重新
+                # 纳入, 空文本照常打 API (400 覆盖真实错误, 或产出垃圾"成功").
                 placeholder = FileTask(file_path=fp, original_text="")
                 placeholder.status = TaskStatus.FAILED
+                placeholder.skip = True
                 placeholder.result = FileResult(
                     original="",
                     corrected="",
@@ -208,74 +251,117 @@ class ProcessingEngine:
                 placeholder.end_time = time.time()
                 self.tasks[key] = placeholder
                 continue
+            # v4.3.3: 本地标点修复 (开关见 ProjectConfig.punct_fix) — 半角引号/
+            # 逗号等确定性错误用脚本修, 不消耗 LLM; 修复计入指纹 (改开关自动重跑)
+            # v4.3.3 (评审 E-1): 「仅标点修复」模式不在预处理阶段修 — 原文保持
+            # 原始状态, 修复发生在 _call_api_stream 本地分支, 否则 corrected ==
+            # original, 结果对比页 diff 完全为空 (无法审计改了什么)
+            if self.config.punct_fix and self.config.prompt_mode != "punct_local":
+                text, punct_n = fix_punctuation(text)
+                if punct_n:
+                    self._log(f"[标点] {fp.name}: 本地修复 {punct_n} 处半角标点")
             task = FileTask(file_path=fp, original_text=text)
             self.tasks[key] = task
             self._log(f"[就绪] {fp.name}: {len(text)} 字符")
 
+        # v4.1.8.2 (审计 E2): skip 占位也已终态, 计入 completed 让 X/Y 收敛
         self.stats.total_files = len(self.tasks)
         self.stats.completed_files = sum(
-            1 for t in self.tasks.values() if t.is_done
+            1 for t in self.tasks.values() if t.is_done or t.skip
         )
 
-    def start(self) -> None:
-        """QThread 模式入口 (fallback)。
-
-        qasync 模式由 GUI 线程直接 await ``run_async()``；保留此方法
-        作为 ``USE_QASYNC = False`` 时的兜底路径（Phase 5 删除）。
-        """
-        self._cancel_event.clear()
-        self.stats.start_time = time.time()
-        asyncio.run(self._run_all())
-
     async def run_async(self) -> None:
-        """qasync 模式入口：GUI 线程已有 loop，直接 await。"""
-        self._cancel_event.clear()
+        """v4.0+ 入口：后台线程内 loop.run_until_complete 调用。"""
+        # v4.1.8.2 (审计 E11): 不再无条件 clear 取消位 — engine 每次新建本可省略,
+        # 而"bridge 已把 _engine 指向新引擎、线程尚未跑到这里"的窗口期内用户
+        # 取消会被这里 clear 静默吞掉. 启动即取消由 _run_all 入口统一收尾.
         self.stats.start_time = time.time()
         await self._run_all()
 
     async def _run_all(self) -> None:
         """异步主循环，创建共享客户端并并发处理所有文件。"""
         self._loop = asyncio.get_running_loop()
+        # v4.1.8.2 (审计 B2): 记录主任务句柄, cancel() 跨线程强制中断在途 await
+        self._main_task = asyncio.current_task()
         # v4.0+ 修订: pause_event 改 threading.Event, 跨线程 pause/resume 线程安全
-        self._pause_event = threading.Event()
+        # v4.1.8.2 (审计 E12): __init__ 已创建, 这里只重置为"运行中"
         self._pause_event.set()
 
-        self._client = AsyncOpenAI(
-            base_url=self.config.api_base,
-            api_key=self.config.api_key,
-            timeout=self.config.timeout,
-            max_retries=0,
-        )
+        # v4.1.8.2 (审计 E11): 启动窗口期已取消 → 全量取消收尾, 而非照常跑完
+        if self._cancel_event.is_set():
+            for key, task in self.tasks.items():
+                if not task.skip and task.result is None:
+                    await self._finalize_cancelled(key, task, time.time())
+            self.stats.elapsed = time.time() - self.stats.start_time
+            self._emit(self.on_stats_update, self.stats)
+            self._log("[取消] 任务启动前已取消")
+            return
 
+        # v4.3.3: 仅标点修复模式全程不触网 — 不建 AsyncOpenAI (空 api_key 会抛错)
+        if self.config.prompt_mode == "punct_local":
+            self._client = None
+        else:
+            self._client = AsyncOpenAI(
+                base_url=self.config.api_base,
+                api_key=self.config.api_key,
+                timeout=self.config.timeout,
+                max_retries=0,
+            )
+
+        # v4.1.8.2 (审计 E2): skip 占位 (读取失败) 不进 pending 重打 API
         pending = [
-            (k, t) for k, t in self.tasks.items() if not t.is_done
+            (k, t) for k, t in self.tasks.items()
+            if not t.is_done and not t.skip
         ]
+
+        # v4.1.8.2 (审计 E2): skip 占位虽不处理, 但要补发完成事件让 UI 收敛
+        for key, task in self.tasks.items():
+            if task.skip:
+                self._emit(self.on_file_done, key, TaskStatus.FAILED.value)
+                self._emit(self.on_file_completed, key, TaskStatus.FAILED.value)
+        if any(t.skip for t in self.tasks.values()):
+            self._emit(self.on_stats_update, self.stats)
 
         # v4.1 (I1): try/finally 保证 _client.close() 一定被调, 避免 httpx 连接泄漏
         try:
             if not pending:
                 self._log("[提示] 没有待处理的文件")
                 self.stats.elapsed = 0
-                if self.on_stats_update:
-                    self.on_stats_update(self.stats)
+                self._emit(self.on_stats_update, self.stats)
                 return
 
-            semaphore = asyncio.Semaphore(self.config.concurrency)
+            # v4.1.8.2 (审计 E1): concurrency=0 会让 Semaphore(0) 永久死锁且
+            # cancel 无法打破 (等待者到不了取消检查点) — 输入侧已钳制, 引擎兜底.
+            concurrency = max(1, int(self.config.concurrency or 1))
+            semaphore = asyncio.Semaphore(concurrency)
 
             async def limited(key, task):
-                async with semaphore:
-                    return await self._process_file_async(key, task)
+                # v4.1.8.2 (审计 B2): 强制取消落在 semaphore 等待/早期 await 上时
+                # 也要完整收尾 (这些位置不在 _process_file_async 的内部 try 内)
+                try:
+                    async with semaphore:
+                        return await self._process_file_async(key, task)
+                except asyncio.CancelledError:
+                    await self._finalize_cancelled(key, task, time.time())
+                    return None
 
             coros = [limited(k, t) for k, t in pending]
-            results = await asyncio.gather(*coros, return_exceptions=True)
+            try:
+                results = await asyncio.gather(*coros, return_exceptions=True)
+            except asyncio.CancelledError:
+                # v4.1.8.2 (审计 B2): cancel() 强制 cancel 主任务以打断在途 HTTP
+                # await; 子协程已各自收尾, 这里吞掉取消让线程正常退出 (join 不超时)
+                self._log("[取消] 全部任务已中止")
+                self.stats.elapsed = time.time() - self.stats.start_time
+                self._emit(self.on_stats_update, self.stats)
+                return
 
             for result in results:
                 if isinstance(result, Exception):
-                    logger.error(f"Worker 异常: {result}")
+                    logger.error(f"Worker 异常: {result}", exc_info=result)
 
             self.stats.elapsed = time.time() - self.stats.start_time
-            if self.on_stats_update:
-                self.on_stats_update(self.stats)
+            self._emit(self.on_stats_update, self.stats)
             self._log(f"[全部完成] {self.stats.completed_files}/{self.stats.total_files} 个文件")
         finally:
             # I1: 关闭 httpx 连接池
@@ -298,11 +384,10 @@ class ProcessingEngine:
           - 取消时丢弃所有 chunks_results, status = CANCELLED
           - 下次重跑: load_checkpoint 检测 CANCELLED 返回 None
 
-        chunk 失败处理:
-          - 单 chunk 失败: 该 chunk 的 FileResult.corrected = chunk 原文, error 有值
-          - 整文件 result.chunks_results: 包含所有 chunk results (成功 + 失败的)
-          - 整文件 result.corrected_full: 拼接 "成功 chunk + 失败 chunk 原文"
-          - 整文件 result.failed_chunks: list[int]
+        chunk 失败处理 (v4.1.8.2 审计 E7 修正文档):
+          - 任一 chunk 失败异常向上传播, 触发整文件重试 (与上方失败语义一致)
+          - result.chunks_results 只含成功 chunk 的 FileResult, 因此
+            result.failed_chunks 恒为空列表 (保留字段仅为断点 schema 兼容)
         """
         # v4.1.8.1 (审计 B2): start 提前到取消检查前, 让取消早退也能算 elapsed
         start = time.time()
@@ -317,10 +402,15 @@ class ProcessingEngine:
             await self._finalize_cancelled(key, task, start)
             return
 
-        if self.on_file_start:
-            self.on_file_start(key)
+        self._emit(self.on_file_start, key)
 
         text = task.original_text
+        # v4.1.8.2 (审计 E2): 空文本 (0 字节文件) 不打 API — 轻则 400 覆盖真实
+        # 错误, 重则部分后端对空输入正常回复产出垃圾"成功"结果.
+        if not text.strip():
+            await self._finalize_failed(key, task, start, "EmptyText", "文件内容为空")
+            return
+
         prompt_hash = getattr(self, "_current_prompt_hash", "")
         self._log(f"[处理中] {task.file_path.name} ({len(text)} 字符)")
 
@@ -336,7 +426,11 @@ class ProcessingEngine:
                 f"(preset={preset}, max_chars={max_chars})"
             )
 
-        for attempt in range(self.config.max_retries + 1):
+        # v4.1.8.2 (审计 E6): max_retries<0 会让 range() 为空 → 函数静默返回,
+        # 无状态/无断点/无回调, UI 永远"处理中". 输入侧已钳制, 引擎兜底.
+        max_retries = max(0, int(self.config.max_retries or 0))
+
+        for attempt in range(max_retries + 1):
             # v4.1.8.1 (审计 B2): attempt 顶部的取消点同样走完整收尾, 不再裸置状态
             if self._cancel_event.is_set():
                 await self._finalize_cancelled(key, task, start)
@@ -381,12 +475,9 @@ class ProcessingEngine:
                 await save_checkpoint_async(task.file_path, task)
 
                 # 单 chunk 等价: 旧 _call_api_stream 仍按整文件调用,on_file_done = 文件完成
-                if self.on_file_done:
-                    self.on_file_done(key)
-                if self.on_file_completed:
-                    self.on_file_completed(key)
-                if self.on_stats_update:
-                    self.on_stats_update(self.stats)
+                self._emit(self.on_file_done, key, TaskStatus.COMPLETED.value)
+                self._emit(self.on_file_completed, key, TaskStatus.COMPLETED.value)
+                self._emit(self.on_stats_update, self.stats)
                 return
 
             except asyncio.CancelledError:
@@ -402,14 +493,23 @@ class ProcessingEngine:
                 return
             except RateLimitError as e:
                 # 速率限制 — 按 Retry-After 等待后整文件重试
-                retry_after = getattr(e, "retry_after", None)
+                # v4.1.8.2 (审计 E17): RateLimitError 没有 retry_after 属性,
+                # 服务端建议在 response.headers["Retry-After"] — 旧 getattr 恒
+                # 返回 None, 建议从未生效.
+                retry_after = None
+                resp = getattr(e, "response", None)
+                if resp is not None:
+                    try:
+                        retry_after = float(resp.headers.get("retry-after"))
+                    except (TypeError, ValueError, AttributeError):
+                        retry_after = None
                 if retry_after is None:
                     retry_after = float(2 ** attempt)
                 self._log(
                     f"[速率限制] {task.file_path.name} — {retry_after}s 后重试 "
-                    f"(第 {attempt + 1}/{self.config.max_retries} 次)"
+                    f"(第 {attempt + 1}/{max_retries} 次)"
                 )
-                if attempt < self.config.max_retries:
+                if attempt < max_retries:
                     # v4.1.8.1 (M5): 退避期间收到 cancel 立即走取消收尾, 不再傻等
                     if await self._sleep_interruptible(retry_after):
                         await self._finalize_cancelled(key, task, start)
@@ -420,7 +520,7 @@ class ProcessingEngine:
                 # (进度永远少 1) — 生产最常见失败路径.
                 self._log(
                     f"[速率限制耗尽] {task.file_path.name} — "
-                    f"已达最大重试 {self.config.max_retries} 次, 标记失败"
+                    f"已达最大重试 {max_retries} 次, 标记失败"
                 )
                 err_type = type(e).__name__
                 err_msg = str(e)
@@ -429,9 +529,9 @@ class ProcessingEngine:
             except Exception as e:
                 err_type = type(e).__name__
                 err_msg = str(e)
-                if attempt < self.config.max_retries:
+                if attempt < max_retries:
                     delay = 2 ** attempt
-                    self._log(f"[重试 {attempt + 1}/{self.config.max_retries}] {task.file_path.name} — {err_type}: {err_msg} — {delay}s 后重试")
+                    self._log(f"[重试 {attempt + 1}/{max_retries}] {task.file_path.name} — {err_type}: {err_msg} — {delay}s 后重试")
                     # v4.1.8.1 (M5): 分段退避可被 cancel 中断
                     if await self._sleep_interruptible(delay):
                         await self._finalize_cancelled(key, task, start)
@@ -441,6 +541,10 @@ class ProcessingEngine:
                     self._log(f"[重试耗尽] {task.file_path.name} — {err_type}: {err_msg}")
                     await self._finalize_failed(key, task, start, err_type, err_msg)
                     return
+
+        # v4.1.8.2 (审计 E6): 防御兜底 — 正常情况下循环内必然 return (成功/失败/
+        # 取消), 走到这里说明收尾出现缺口, 补一次 FAILED 收尾避免 UI 卡"处理中".
+        await self._finalize_failed(key, task, start, "InternalError", "重试循环异常退出")
 
     async def _finalize_cancelled(self, key: str, task: FileTask, start: float) -> None:
         """CANCELLED 统一收尾: result/断点/stats/回调 全齐.
@@ -454,7 +558,9 @@ class ProcessingEngine:
         text = task.original_text or ""
         result = FileResult(
             original=text,
-            corrected=text,
+            # v4.1.8.2 (审计 C3): 不再回填原文 — 旧版 corrected=original, 前端
+            # "corrected 非空即可复制/导出"的判据会把未校对原文当结果导出
+            corrected="",
             elapsed=elapsed,
             error="已取消",
             prompt_hash=getattr(self, "_current_prompt_hash", ""),
@@ -469,12 +575,9 @@ class ProcessingEngine:
             self.stats.completed_files += 1
             self.stats.elapsed = time.time() - self.stats.start_time
         await save_checkpoint_async(task.file_path, task)
-        if self.on_file_done:
-            self.on_file_done(key)
-        if self.on_file_completed:
-            self.on_file_completed(key)
-        if self.on_stats_update:
-            self.on_stats_update(self.stats)
+        self._emit(self.on_file_done, key, TaskStatus.CANCELLED.value)
+        self._emit(self.on_file_completed, key, TaskStatus.CANCELLED.value)
+        self._emit(self.on_stats_update, self.stats)
 
     async def _finalize_failed(self, key: str, task: FileTask, start: float,
                                err_type: str, err_msg: str) -> None:
@@ -489,7 +592,8 @@ class ProcessingEngine:
         detail = f"{err_type}: {err_msg}"
         result = FileResult(
             original=text,
-            corrected=text,
+            # v4.1.8.2 (审计 C3): 不再回填原文, 防止前端把原文当校对结果复制/导出
+            corrected="",
             elapsed=elapsed,
             error=detail,
             prompt_hash=getattr(self, "_current_prompt_hash", ""),
@@ -505,49 +609,17 @@ class ProcessingEngine:
             self.stats.failed_files += 1
             self.stats.elapsed = time.time() - self.stats.start_time
         await save_checkpoint_async(task.file_path, task)
-        if self.on_file_done:
-            self.on_file_done(key)
-        if self.on_file_completed:
-            self.on_file_completed(key)
-        if self.on_stats_update:
-            self.on_stats_update(self.stats)
+        self._emit(self.on_file_done, key, TaskStatus.FAILED.value)
+        self._emit(self.on_file_completed, key, TaskStatus.FAILED.value)
+        self._emit(self.on_stats_update, self.stats)
 
     @staticmethod
     def _split_text(text: str, max_chars: int, preset: str = "balanced") -> list[str]:
-        """按段落/句号边界切分文本,每块不超过 max_chars 字符。
+        """按段落/句号边界切分 (v4.3.0: 实现平移到 utils.split_text, 此处委托).
 
-        优先级: \\n\\n (段落) > \\n (行) > 。！？ (句号) > 强制切分。
-        切分点保留在段尾 (即不丢标点),保证拼接时语义完整。
-        overlap=0（Phase 1 决策）：校对场景下重叠区会被改两次,结果冲突。
-
-        preset 参数仅在 ``whole_file`` / ``max_chars == 0`` 时生效,直接
-        返回 ``[text]``（整文件不分块）。其他 preset 仅用于记录当前档位,
-        切分阈值由调用方通过 ``max_chars`` 决定。
+        DeAI 长文本分块复用同一实现; 保留原签名兼容既有测试与外部调用。
         """
-        # 整文件预设
-        if preset == "whole_file" or max_chars == 0:
-            return [text]
-
-        if len(text) <= max_chars:
-            return [text]
-        chunks: list[str] = []
-        remaining = text
-        while len(remaining) > max_chars:
-            # 尝试在 max_chars 范围内找最佳切分点
-            window = remaining[:max_chars]
-            cut = -1
-            for sep in ("\n\n", "\n", "。", "！", "？", ".", "!", "?"):
-                idx = window.rfind(sep)
-                if idx > max_chars // 2:  # 至少切在前半段,避免小块
-                    cut = idx + len(sep)
-                    break
-            if cut <= 0:
-                cut = max_chars  # 实在没合适切分点,硬切
-            chunks.append(remaining[:cut])
-            remaining = remaining[cut:]
-        if remaining:
-            chunks.append(remaining)
-        return chunks
+        return split_text(text, max_chars, preset=preset)
 
     async def _stream_single(
         self,
@@ -574,12 +646,20 @@ class ProcessingEngine:
             system_prompt = self.config.custom_prompt
         else:
             mode_info = PROMPT_MODES.get(self.config.prompt_mode)
+            # v4.1.8.2 (审计 C4): "deai" 是去AI味视图专用的遗留占位模式, 不该作为
+            # 校对 system prompt (settings 下拉已过滤, 这里兜底历史残留配置)
             if not mode_info:
                 self._log(f"[警告] 未知校对模式 '{self.config.prompt_mode}'，回退到纯纠错模式")
                 mode_info = PROMPT_MODES["strict"]
+            elif mode_info.get("system") == "PLACEHOLDER":
+                self._log(f"[警告] 校对模式 '{self.config.prompt_mode}' 为占位模式，回退到纯纠错模式")
+                mode_info = PROMPT_MODES["strict"]
             system_prompt = mode_info["system"]
 
-        stream = await self._client.chat.completions.create(
+        # v4.1.8.2 (审计 E5): stream_options={"include_usage":True} 对旧版
+        # LM Studio / Ollama / vLLM 的 OpenAI 兼容层返回 400, 且 BadRequest 被
+        # 归类"不可重试"直接 FAILED — 检测到该报错后去掉参数降级重试一次.
+        kwargs = dict(
             model=self.config.model,
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -589,6 +669,15 @@ class ProcessingEngine:
             stream=True,
             stream_options={"include_usage": True},
         )
+        try:
+            stream = await self._client.chat.completions.create(**kwargs)
+        except BadRequestError as e:
+            if "stream_options" in str(e):
+                self._log("[兼容] 服务端不支持 stream_options, 去除该参数重试")
+                kwargs.pop("stream_options")
+                stream = await self._client.chat.completions.create(**kwargs)
+            else:
+                raise
 
         # Bug#13: 收集用 list append,只节流时才 join,避免每 token O(N) join
         buffer: list[str] = []
@@ -613,13 +702,13 @@ class ProcessingEngine:
                         buffer.append(delta)
                         emit_counter += 1
                         now = time.time()
-                        if self.on_stream and (
+                        if (
                             emit_counter % _STREAM_THROTTLE_TOKENS == 0
                             or (now - last_emit_time) >= _STREAM_THROTTLE_MS
                         ):
                             # 节流触发时才 "".join 一次 (O(buffer_size))
                             # v4.1.8.1 (M4): 推单调增长全量 (前缀复用同一 str, 不重复 join)
-                            self.on_stream(task_key, stream_prefix + "".join(buffer))
+                            self._emit(self.on_stream, task_key, stream_prefix + "".join(buffer))
                             last_emit_time = now
 
                 if event.usage:
@@ -634,8 +723,7 @@ class ProcessingEngine:
         if not corrected:
             raise ValueError("API 返回空内容 (stream 无 token)")
 
-        if self.on_stream:
-            self.on_stream(task_key, stream_prefix + corrected)
+        self._emit(self.on_stream, task_key, stream_prefix + corrected)
 
         return corrected, token_count
 
@@ -702,6 +790,10 @@ class ProcessingEngine:
             )
             chunk_results.append(chunk_result)
             completed_chunks.append(chunk_result)
+            # v4.3.1 (UX #7): 块级进度推送 (file_key, done/total) — 单文件多 chunk
+            # 时前端进度条不再长时间 0%. 走 _emit 统一异常保护 (勿裸调);
+            # _call_api_stream 单块分支不进这里, 无分块意义不触发.
+            self._emit(self.on_file_progress, task_key, i + 1, total)
             # 块完成全量 emit 已由 _stream_single 末尾 emit (prefix+corrected) 保证,
             # 不再重复推 (旧"块内 buffer / 块完成全量"交替正是闪断来源之一)
         return "".join(all_parts), total_tokens, chunk_results
@@ -725,6 +817,20 @@ class ProcessingEngine:
             preset = DEFAULT_CHUNK_PRESET
         max_chars = _CHUNK_PRESETS[preset]["max_chars"]
         chunks = self._split_text(text, max_chars, preset=preset)
+
+        # v4.3.3: 仅标点修复模式 — 纯本地规则 (app/punct_fix.py), 不调用 LLM.
+        # 复用同一分块/结果管线 (进度/diff/断点全部一致); 即时完成故不做流式 emit
+        # (书级大文本单帧全量 evaluate_js 会触发降级问题, 见 DeAI 评审#1).
+        if self.config.prompt_mode == "punct_local":
+            out_parts: list[str] = []
+            local_results: list[FileResult] = []
+            for c in chunks:
+                fixed, _n = fix_punctuation(c)
+                out_parts.append(fixed)
+                local_results.append(FileResult(original=c, corrected=fixed))
+            self._log(f"[标点] 本地修复完成 ({len(chunks)} 块, 未调用 LLM)")
+            return "".join(out_parts), 0, local_results
+
         if len(chunks) == 1:
             # 整文件/小文件: 1 个 chunk, 但仍按 FileResult 格式返回
             corrected, tokens = await self._stream_single(task_key, chunks[0])
@@ -750,6 +856,15 @@ class ProcessingEngine:
         # 取消时同时 set _pause_event, 让正在 _await_resume() 轮询的协程能跳出
         if self._pause_event:
             self._pause_event.set()
+        # v4.1.8.2 (审计 B2): 事件轮询只在"收到下一个流事件/暂停轮询点"才检查,
+        # 在途 HTTP await (首字节最长达 timeout=120s) 无法被 Event 打断 — 旧实现
+        # 下慢服务器会让 bridge 的 join(5s) 必超时, 用户被反复拒绝无法启动新任务.
+        # 强制 cancel 主任务, 所有 await 立即抛 CancelledError, 各层统一收尾.
+        if self._main_task is not None and self._loop is not None and self._loop.is_running():
+            try:
+                self._loop.call_soon_threadsafe(self._main_task.cancel)
+            except RuntimeError:
+                pass  # loop 已关闭, 任务随线程退出
         self.stats.elapsed = time.time() - self.stats.start_time
         self._log("[取消] 处理已取消")
 

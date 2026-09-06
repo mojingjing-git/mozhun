@@ -8,6 +8,7 @@ Copyright (c) 2014-2024 Roman Yurchak
 """
 import asyncio
 import json
+import re
 import sys
 import threading
 import time
@@ -27,7 +28,11 @@ from app.utils import (
     load_config,
     save_config,
     read_file_text,
+    split_text,
+    _atomic_write_text,
+    CONFIG_DIR,
     CHUNKING_PRESETS,
+    CHUNKING_PRESETS_MAP,
     DEFAULT_CHUNK_PRESET,
 )
 from app.templates import (
@@ -49,6 +54,16 @@ logger = setup_logging()
 # 50K 字 ≈ 100KB UTF-8, JSON 序列化 + evaluate_js 单次 payload ~150KB,
 # 仍可接受 (>50K 后切前端 read_file 路径, 避免大 payload 卡 evaluate_js).
 _ORIGINAL_PUSH_LIMIT = 50000
+
+# v4.3.0: DeAI 长文本支持常量
+# - 推送降级阈值: partial 超过它不再推全量 (对齐 _ORIGINAL_PUSH_LIMIT, 评审#1:
+#   30 万字书改写收尾单帧 ~1MB x 30FPS 会拖死 WebView), 完整结果落盘走文件
+_DEAI_PUSH_LIMIT = 50000
+# - whole_file 预设兜底 (评审#6): 超过它强制回退 large(6000) 分块,
+#   否则整本书 = 单次 LLM 调用必然超模型上下文
+_DEAI_WHOLE_FILE_LIMIT = 20000
+# - Few-shot 范文截断 (评审#6): 范文用途是学风格, 超长部分无增益还爆上下文
+_DEAI_SAMPLE_LIMIT = 20000
 
 
 # 异步模型 (PLAN-pywebview.md §2.2):
@@ -82,13 +97,14 @@ class Backend:
         self._window = window
         self._engine: Optional[ProcessingEngine] = None
         self._current_task_thread: Optional[threading.Thread] = None
+        # v4.1.8.2 (审计 B13): start_proofread 重入守卫加锁 — pywebview 每个
+        # JS 调用独立线程, 旧版 check-then-act 无锁, 理论并发双调可各起一个引擎
+        self._task_guard_lock = threading.Lock()
         self._config = load_config()  # v3.0 的配置加载
         self._push_throttle_lock = threading.Lock()
         self._last_push_time = 0.0
         self._push_buffer: list[tuple[str, object]] = []
         self._push_pending = False
-        # 后台线程用的 event loop (start_proofread 时初始化)
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
         # DeAI 3 步工作流任务跟踪
         self._deai_tasks: dict[str, dict] = {}
         self._deai_lock = threading.Lock()
@@ -111,10 +127,17 @@ class Backend:
         cfg["api_key"] = self._config.api_key  # 明文回显 (内存即明文)
         return cfg
 
-    def set_config(self, key: str, value) -> None:
+    def set_config(self, key: str, value) -> dict:
+        """单字段写内存配置. 返回 {ok, error?} 供前端感知失败.
+
+        v4.1.8.2 (审计 B9): 类型转换失败旧版静默吞掉后把原值 (如 "3.5" 字符串)
+        直接 setattr 并落盘, 运行期才以 TypeError 爆炸 — 现改为返回错误.
+        v4.1.8.2 (审计 E1/E6/F8): 数值范围钳制 — 前端 min/max 挡不住手输
+        (concurrency=0 会让引擎 Semaphore(0) 永久死锁), 双端防御.
+        """
         # JS 端做 500ms 防抖, Python 这边只 set
         if not hasattr(self._config, key):
-            return
+            return {"ok": False, "error": f"未知配置项: {key}"}
         # 类型转换: 数字字段
         try:
             field_type = self._config.__dataclass_fields__[key].type
@@ -123,29 +146,49 @@ class Backend:
             elif field_type is int and not isinstance(value, int):
                 value = int(value)
         except (AttributeError, KeyError, TypeError, ValueError):
-            pass
+            return {"ok": False, "error": f"配置项 {key} 的值 {value!r} 类型转换失败"}
+        # 数值范围钳制 (与设置页 min/max 一致)
+        clamp_map = {
+            "concurrency": (1, 16),
+            "max_retries": (0, 10),
+            "timeout": (10, 300),
+            "temperature": (0.0, 2.0),
+            "context_max_chars": (200, 2000),
+            "context_max_chunks": (1, 5),
+        }
+        if key in clamp_map:
+            lo, hi = clamp_map[key]
+            value = max(lo, min(hi, value))
         if key == "api_key":
             # v4.1.8.1 (审计修复 H2): 拒绝把混淆串当明文写回 (旧版前端残留 /
             # 用户误粘贴 obf: 值). 只接受真正的明文新 key.
             if isinstance(value, str) and value.startswith("obf:"):
                 logger.warning("set_config 忽略 obf: 前缀的 api_key (疑似混淆串回写)")
-                return
-            if value == "":
-                # 空串 = 用户清空 key (允许), 仅在有旧值且前端误传空时需小心;
-                # 此处按语义允许显式清空.
-                pass
+                return {"ok": False, "error": "api_key 不能是混淆串"}
         setattr(self._config, key, value)
+        return {"ok": True}
 
     def save_config(self) -> dict:
-        """保存配置到磁盘, 返回结果 (前端可读)."""
-        try:
-            save_config(self._config)
-            return {"ok": True}
-        except Exception as e:
-            return {"ok": False, "error": str(e)}
+        """保存配置到磁盘, 返回结果 (前端可读).
+
+        v4.1.8.2 (审计 B4): utils.save_config 现返回 bool (旧版吞异常恒 None,
+        本层 except 永不可达), 据此如实上报, 磁盘满/只读不再误报"已保存".
+        """
+        ok = save_config(self._config)
+        return {"ok": bool(ok)}
 
     def get_prompt_modes(self) -> list[dict]:
-        return [{"key": k, "label": v["label"]} for k, v in PROMPT_MODES.items()]
+        """返回校对模式下拉选项.
+
+        v4.1.8.2 (审计 C4): 过滤 "deai" — 它是去AI味视图专用的遗留模式
+        (复用 v3.1 全量改写 prompt), 出现在校对模式下拉会误导用户把校对
+        跑成整篇改写; DeAI 功能走独立视图的 deai_step* API.
+        """
+        return [
+            {"key": k, "label": v["label"]}
+            for k, v in PROMPT_MODES.items()
+            if k != "deai"
+        ]
 
     def get_api_templates(self) -> list[dict]:
         """返回 API 模板列表 (从 app.templates.API_TEMPLATES).
@@ -191,12 +234,17 @@ class Backend:
         # result 是 list[str] 或 None
         return list(result) if result else []
 
-    def read_file(self, path: str) -> str:
-        """同步读文件 (用于前端预览小文件, 大文件通过 stream 走)."""
+    def read_file(self, path: str) -> dict:
+        """同步读文件 (用于前端预览小文件, 大文件通过 stream 走).
+
+        v4.1.8.2 (审计 B10): 返回结构化 {ok, content/error} — 旧版失败时返回
+        "[读取错误] ..." 文本, 前端把它当原文渲染进对比栏并参与 diff.
+        """
         try:
-            return read_file_text(Path(path))
+            return {"ok": True, "content": read_file_text(Path(path))}
         except Exception as e:
-            return f"[读取错误] {e}"
+            logger.error(f"read_file 失败 [{path}]: {e}")
+            return {"ok": False, "error": str(e)}
 
     def drag_drop_files(self, paths: list) -> dict:
         """前端拖拽文件时调用 (兼容性保留, 主路径走 init_drag_drop + onFilesDropped).
@@ -229,8 +277,12 @@ class Backend:
         logger.info("拖拽 drop 监听注册 (init_drag_drop 已注册 loaded 回调)")
 
     def _on_loaded_drag_drop(self) -> None:
-        """window.events.loaded 触发: 等 DOM 就绪, 给 #drop-zone 绑 drop 监听.
+        """window.events.loaded 触发: 等 DOM 就绪, 绑 drop 监听.
 
+        v4.3.0: 除 #drop-zone (文件路径 -> onFilesDropped) 外, 给去AI味的两个
+        textarea (#deai-input/#deai-sample) 也注册 drop — 拖入 .txt/.md 文件时
+        拿 pywebviewFullPath 后走 read_file_text (BOM/gb18030 编码兜底),
+        绕开 File.text() 恒 UTF-8 导致 GBK 文件乱码的问题 (评审#4).
         此回调运行在 pywebview 主线程, _dnd_state 在 webview.dom._dnd_state
         (全局, 跨函数共享), _dnd_state['num_listeners'] 由 element.on('drop') 自增.
         """
@@ -241,8 +293,47 @@ class Backend:
                 return
             drop_zone.on("drop", self._on_drag_drop)
             logger.info("#drop-zone drop 监听已绑定 (pywebview DOM API)")
+            # v4.3.0: DeAI textarea 文件拖入 (内容读取走 Python 编码兜底)
+            for selector, target in (("#deai-input", "deai-input"),
+                                     ("#deai-sample", "deai-sample")):
+                el = self._window.dom.get_element(selector)
+                if el is None:
+                    logger.warning(f"textarea drop 注册跳过: {selector} 未找到")
+                    continue
+                el.on("drop", (lambda tgt: lambda event: self._on_textarea_drop(event, tgt))(target))
+            logger.info("DeAI textarea drop 监听已绑定")
         except Exception as e:
             logger.error(f"init_drag_drop 异常: {type(e).__name__}: {e}")
+
+    @staticmethod
+    def _extract_drop_paths(event) -> list:
+        """从 pywebview DOM drop 事件提取 pywebviewFullPath 列表 (v4.3.0 抽取复用)."""
+        data_transfer = event.get("dataTransfer", {}) if isinstance(event, dict) else {}
+        files = data_transfer.get("files", []) or []
+        paths = []
+        for f in files:
+            if isinstance(f, dict):
+                pp = f.get("pywebviewFullPath")
+                if pp:
+                    paths.append(pp)
+        return paths
+
+    def _on_textarea_drop(self, event, target: str) -> None:
+        """DeAI textarea drop: 提取文件路径, 推 onDeaiTextDrop 给前端读内容.
+
+        路径在此只做传递; 内容读取由前端调 read_file bridge (read_file_text
+        的 BOM/gb18030 兜底在 Python 侧生效). 纯文本拖放不经过此通道
+        (JS 侧 text/plain 直接由浏览器原生插入).
+        """
+        try:
+            paths = self._extract_drop_paths(event)
+            if not paths:
+                logger.debug(f"textarea drop 无 pywebviewFullPath (target={target})")
+                return
+            logger.info(f"textarea 拖入 {len(paths)} 个文件 (target={target})")
+            self._push("onDeaiTextDrop", {"target": target, "paths": paths})
+        except Exception as e:
+            logger.error(f"_on_textarea_drop 异常: {type(e).__name__}: {e}")
 
     def _on_drag_drop(self, event) -> None:
         """pywebview DOM 回调: 接收 drop 事件, 提取 pywebviewFullPath, 推送给前端.
@@ -260,14 +351,8 @@ class Backend:
         }
         """
         try:
-            data_transfer = event.get("dataTransfer", {}) if isinstance(event, dict) else {}
-            files = data_transfer.get("files", []) or []
-            paths = []
-            for f in files:
-                if isinstance(f, dict):
-                    p = f.get("pywebviewFullPath")
-                    if p:
-                        paths.append(p)
+            paths = self._extract_drop_paths(event)
+            files = (event.get("dataTransfer", {}) or {}).get("files", []) if isinstance(event, dict) else []
             if not paths:
                 # 拖了 0 文件, 或 _dnd_state 注入失败 (非 pywebview 环境)
                 logger.warning(f"drop 事件但未拿到 pywebviewFullPath (files={len(files)})")
@@ -311,39 +396,67 @@ class Backend:
             user32 = ctypes.windll.user32
             kernel32 = ctypes.windll.kernel32
 
-            # 1. OpenClipboard (失败时重试一次, 避免和其他 app 抢剪贴板)
+            # v4.1.8.2 (审计 B1, P0): 声明完整 argtypes/restype — 旧版全部走
+            # ctypes 默认 c_int, 64 位进程下 HGLOBAL/HANDLE 被截断成 32 位:
+            # GlobalLock 按无效句柄返回 NULL (复制必失败), 或 memmove 写到截断
+            # 地址破坏堆 (实测 GlobalAlloc 返回 0x22272a20018 被截断). 同时把
+            # EmptyClipboard 挪到数据准备成功之后, 失败路径不再清空用户剪贴板.
+            kernel32.GlobalAlloc.argtypes = (wintypes.UINT, ctypes.c_size_t)
+            kernel32.GlobalAlloc.restype = wintypes.HGLOBAL
+            kernel32.GlobalLock.argtypes = (wintypes.HGLOBAL,)
+            kernel32.GlobalLock.restype = wintypes.LPVOID
+            kernel32.GlobalUnlock.argtypes = (wintypes.HGLOBAL,)
+            kernel32.GlobalUnlock.restype = wintypes.BOOL
+            kernel32.GlobalFree.argtypes = (wintypes.HGLOBAL,)
+            kernel32.GlobalFree.restype = wintypes.HGLOBAL
+            user32.OpenClipboard.argtypes = (wintypes.HWND,)
+            user32.OpenClipboard.restype = wintypes.BOOL
+            user32.CloseClipboard.argtypes = []
+            user32.CloseClipboard.restype = wintypes.BOOL
+            user32.EmptyClipboard.argtypes = []
+            user32.EmptyClipboard.restype = wintypes.BOOL
+            user32.SetClipboardData.argtypes = (wintypes.UINT, wintypes.HANDLE)
+            user32.SetClipboardData.restype = wintypes.HANDLE
+
+            # 1. 先在剪贴板之外准备好数据 (失败时不碰用户剪贴板)
+            text_bytes = (text + "\0").encode("utf-16-le")
+            h = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(text_bytes))
+            if not h:
+                return {"ok": False, "error": "GlobalAlloc 失败"}
+            ptr = kernel32.GlobalLock(h)
+            if not ptr:
+                kernel32.GlobalFree(h)
+                return {"ok": False, "error": "GlobalLock 失败"}
+            try:
+                ctypes.memmove(ptr, text_bytes, len(text_bytes))
+            finally:
+                kernel32.GlobalUnlock(h)
+
+            # 2. OpenClipboard (失败时重试一次, 避免和其他 app 抢剪贴板)
+            opened = False
             for attempt in range(2):
-                if user32.OpenClipboard(0):
+                if user32.OpenClipboard(None):
+                    opened = True
                     break
                 if attempt == 0:
                     time.sleep(0.05)  # 50ms 后重试
-            else:
+            if not opened:
+                kernel32.GlobalFree(h)
                 return {"ok": False, "error": "OpenClipboard 失败 (其他应用占用?)"}
 
             try:
                 user32.EmptyClipboard()
-                # 2. GlobalAlloc + lstrcpy 写入 Unicode
-                text_bytes = (text + "\0").encode("utf-16-le")
-                h = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(text_bytes))
-                if not h:
-                    return {"ok": False, "error": "GlobalAlloc 失败"}
-                try:
-                    ptr = kernel32.GlobalLock(h)
-                    if not ptr:
-                        return {"ok": False, "error": "GlobalLock 失败"}
-                    try:
-                        ctypes.memmove(ptr, text_bytes, len(text_bytes))
-                    finally:
-                        kernel32.GlobalUnlock(h)
-                    if not user32.SetClipboardData(CF_UNICODETEXT, h):
-                        return {"ok": False, "error": "SetClipboardData 失败"}
-                    # 成功: SetClipboardData 后 h 归系统, 不能 GlobalFree
+                if not user32.SetClipboardData(CF_UNICODETEXT, h):
+                    # 失败: h 仍归我们, 释放 (数据已备好, 该分支极少见)
+                    kernel32.GlobalFree(h)
                     h = None
-                finally:
-                    if h:
-                        kernel32.GlobalFree(h)
+                    return {"ok": False, "error": "SetClipboardData 失败"}
+                # 成功: SetClipboardData 后 h 归系统, 不能 GlobalFree
+                h = None
             finally:
                 user32.CloseClipboard()
+                if h:
+                    kernel32.GlobalFree(h)
             return {"ok": True, "length": len(text)}
         except Exception as e:
             logger.error(f"copy_to_clipboard 异常: {type(e).__name__}: {e}")
@@ -353,8 +466,14 @@ class Backend:
 
     def start_proofread(self, file_paths: list[str], mode_key: str,
                         custom_prompt: str = "",
-                        chunking_preset: str = "balanced") -> dict:
+                        chunking_preset: str = "balanced",
+                        force_rerun: bool = False) -> dict:
         """启动校对任务 (后台线程), 立即返回 task_id.
+
+        v4.3.1 (UX #7): 末位加 force_rerun (带默认值, pywebview 按位置传参,
+        前端不传时行为不变) — True 时 prepare_tasks 跳过断点缓存强制重跑,
+        解决"已完成文件删掉重加被缓存秒标完成、前端无重跑通道"的问题;
+        返回 dict 新增 cached_files 字段, 前端据此提示哪些文件命中缓存.
 
         v4.1.8.1 (审计修复 H1): 并发重入保护.
         旧实现每次调用都无条件重建 engine + 起新线程, 不检查上一任务是否在跑:
@@ -365,17 +484,21 @@ class Backend:
         再启动新任务; 若旧线程迟迟不退则拒绝启动并返回错误.
         """
         # --- 并发重入保护: 先清理上一任务 (若有) ---
-        prev_thread = self._current_task_thread
-        if prev_thread is not None and prev_thread.is_alive():
-            logger.warning("start_proofread: 上一任务仍在运行, 先取消并等待退出")
-            if self._engine is not None:
-                self._engine.cancel()
-            prev_thread.join(timeout=5.0)
-            if prev_thread.is_alive():
-                return {
-                    "ok": False,
-                    "error": "上一个任务未能及时退出, 请稍后重试",
-                }
+        # v4.1.8.2 (审计 B13): 守卫序列套锁, 防 js_api 线程池并发双调
+        with self._task_guard_lock:
+            prev_thread = self._current_task_thread
+            if prev_thread is not None and prev_thread.is_alive():
+                logger.warning("start_proofread: 上一任务仍在运行, 先取消并等待退出")
+                if self._engine is not None:
+                    self._engine.cancel()
+                prev_thread.join(timeout=5.0)
+                if prev_thread.is_alive():
+                    # v4.1.8.2 (审计 B3): 失败返回与成功返回统一 dict 契约,
+                    # 前端按 ok 字段处理 (旧版成功无 ok 字段, 前端无法区分)
+                    return {
+                        "ok": False,
+                        "error": "上一个任务未能及时退出, 请稍后重试",
+                    }
 
         # 设置 config
         self._config.prompt_mode = mode_key
@@ -387,11 +510,11 @@ class Backend:
 
         # v4.1 (M3): task_id 用 uuid 避免硬编码 "1" (并发/多任务时唯一)
         task_id = f"proof_{uuid.uuid4().hex[:8]}"
-        self._current_task_id = task_id
 
         # 准备任务
+        # v4.3.1 (UX #7): force_rerun 透传给引擎 (True 跳过断点缓存)
         engine = ProcessingEngine(self._config)
-        engine.prepare_tasks([Path(p) for p in file_paths])
+        engine.prepare_tasks([Path(p) for p in file_paths], force_rerun=force_rerun)
         self._engine = engine  # 供 pause/cancel/resume/_collect_results 引用
 
         # 回调注册: 把事件转 evaluate_js 推送.
@@ -414,8 +537,14 @@ class Backend:
                 "original_truncated": len(original) > _ORIGINAL_PUSH_LIMIT,
             })
         engine.on_file_start = _on_file_start
-        engine.on_file_done = lambda k: self._push("onFileDone", k)
-        engine.on_file_completed = lambda k: self._push("onFileCompleted", k)
+        # v4.1.8.2 (审计 C2): onFileDone/onFileCompleted 附带 status — 旧版
+        # 成功/失败/取消三条路径都推且 payload 无状态, 前端无条件标"完成"
+        engine.on_file_done = lambda k, status: self._push("onFileDone", {
+            "file_key": k, "status": status,
+        })
+        engine.on_file_completed = lambda k, status: self._push("onFileCompleted", {
+            "file_key": k, "status": status,
+        })
         engine.on_stats_update = lambda s: self._push("onStatsUpdate", {
             "total_files": s.total_files,
             "completed_files": s.completed_files,
@@ -424,36 +553,58 @@ class Backend:
             "speed": s.speed,
             "eta": s.eta,
         })
+        # v4.3.1 (UX #7): 块级进度 — 单文件多 chunk 时前端进度条可按块推进,
+        # 不再长时间 0% (多 chunk 路径才触发, 单块文件无分块语义不推)
+        engine.on_file_progress = lambda k, c, t: self._push("onChunkProgress", {
+            "file_key": k, "chunk": c, "total": t,
+        })
+
+        # v4.1.8.2 (审计 C2/F4): 缓存命中文件不进 pending, 收不到任何事件,
+        # 前端会全程显示"处理中" — 这里补发完成事件让 UI 即刻收敛.
+        for k, t in engine.tasks.items():
+            if t.is_done:
+                self._push("onFileDone", {"file_key": k, "status": t.status.value})
+                self._push("onFileCompleted", {"file_key": k, "status": t.status.value})
 
         # 后台线程跑 (避免阻塞 pywebview 主线程)
-        def run(_eng: ProcessingEngine = engine):
+        def run(_eng: ProcessingEngine = engine, _task_id: str = task_id):
             # v4.1 (I6): 顶层 try/except 兜底, 防止 run_async 抛未预期异常
             # 导致前端 isProcessing 永远卡在 true.
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-            self._loop = loop
             try:
                 try:
                     loop.run_until_complete(_eng.run_async())
                 except Exception as e:
                     logger.error(f"run_async 未预期异常: {e}")
-                    self._push("onTaskComplete", {"error": str(e)})
+                    # v4.1.8.2 (审计 B7): 附带 task_id, 前端丢弃旧任务的晚到事件
+                    self._push("onTaskComplete", {"task_id": _task_id, "error": str(e)})
                     return
                 finally:
                     loop.close()
-                    self._loop = None
             except Exception as e:
                 # 兜底: loop 创建/关闭异常
                 logger.error(f"start_proofread run() 异常: {e}")
-                self._push("onTaskComplete", {"error": str(e)})
+                self._push("onTaskComplete", {"task_id": _task_id, "error": str(e)})
                 return
             # 跑完推送给前端 (collect 用 engine 局部引用, 不受 self._engine 后续变化影响)
-            self._push("onTaskComplete", self._collect_results(_eng))
+            # v4.1.8.2 (审计 B7): 附带 task_id
+            payload = self._collect_results(_eng)
+            payload["task_id"] = _task_id
+            self._push("onTaskComplete", payload)
 
         self._current_task_thread = threading.Thread(target=run, daemon=True)
         self._current_task_thread.start()
 
-        return {"task_id": task_id, "total_files": len(file_paths)}
+        # v4.1.8.2 (审计 B3): 统一契约, 成功也带 ok 字段
+        # v4.3.1 (UX #7): 附 cached_files — 本次命中断点缓存直接复用结果的文件
+        # 路径列表 (force_rerun 时恒为空), 前端提示用户"秒完成"实为缓存命中
+        return {
+            "ok": True,
+            "task_id": task_id,
+            "total_files": len(file_paths),
+            "cached_files": list(engine.cached_files),
+        }
 
     def cancel_proofread(self) -> dict:
         if self._engine:
@@ -573,16 +724,24 @@ class Backend:
             stem = "deai_result"
 
         # 扩展名: 优先用 fmt (md 走 md, 否则继承源文件后缀, 兜底 txt)
+        # v4.1.8.2 (审计 B11): 非 \w 扩展名 (如 "c++"/"tf#") 会让 pywebview
+        # parse_file_type 正则抛 ValueError, 保存对话框直接打不开 — 白名单化.
         if fmt == "md":
             ext = "md"
         elif file_path:
             ext = Path(file_path).suffix.lstrip(".") or "txt"
         else:
             ext = "txt"
+        ext = re.sub(r"[^0-9A-Za-z]", "", ext) or "txt"
 
+        # v4.3.0: 对话框 + 写盘逻辑抽为 _export_via_dialog, deai_save_result 复用
+        return self._export_via_dialog(stem, src_dir, content, ext)
+
+    def _export_via_dialog(self, default_stem: str, src_dir: str, content: str, ext: str) -> dict:
+        """弹原生保存对话框并写盘 (v4.3.0: 从 export_result 抽出复用)."""
         # YYMMDD-HHMMSS 时间戳 (12位)
         timestamp = datetime.now().strftime("%y%m%d-%H%M%S")
-        default_name = f"{stem}-{timestamp}.{ext}"
+        default_name = f"{default_stem}-{timestamp}.{ext}"
 
         try:
             result = self._window.create_file_dialog(
@@ -592,7 +751,7 @@ class Backend:
                 file_types=(f"{ext.upper()} files (*.{ext})", "All files (*.*)"),
             )
         except Exception as e:
-            logger.error(f"export_result 弹保存对话框失败: {type(e).__name__}: {e}")
+            logger.error(f"弹保存对话框失败: {type(e).__name__}: {e}")
             return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
         # result 是 str (选定的完整路径) 或 None (取消) 或 tuple (pywebview 旧版)
@@ -607,7 +766,7 @@ class Backend:
             save_path.write_text(content, encoding="utf-8")
             return {"ok": True, "path": str(save_path)}
         except Exception as e:
-            logger.error(f"export_result 写文件失败: {type(e).__name__}: {e}")
+            logger.error(f"写文件失败: {type(e).__name__}: {e}")
             return {"ok": False, "error": f"写入失败: {e}"}
 
     # ==================== 去 AI 味 API (Phase 3 真实实现) ====================
@@ -629,23 +788,33 @@ class Backend:
         """
         return self._deai_start("rewrite", text, sample=sample, style_card_slug=style_card_slug)
 
-    def deai_step3_audit(self, rewritten: str, style_card_slug: str = "") -> str:
+    def deai_step3_audit(self, rewritten: str, style_card_slug: str = "",
+                         source_task_id: str = "") -> str:
         """Step 3: 三维评分 1-10 + (可选) 8 轴自评.
 
         v4.1.7: 加 style_card_slug, 走 V5 audit prompt (3 维 + 8 轴自评).
+        v4.3.0: 加 source_task_id — step2 超长模式下完整改写结果在后端落盘
+        (前端只有头部预览), 这里引用 step2 的 task_id 让后端直读, 全文不过 IPC.
         借鉴自 https://github.com/jianshuo/claude-skills (MIT License) 思路,
         思路借鉴, 无代码复制.
         """
-        return self._deai_start("audit", rewritten, sample="", style_card_slug=style_card_slug)
+        return self._deai_start("audit", rewritten, sample="",
+                                style_card_slug=style_card_slug,
+                                source_task_id=source_task_id)
 
-    def _deai_start(self, step: str, text: str, sample: str = "", style_card_slug: str = "") -> str:
-        """启动一个 deai 后台线程, 立即返回 task_id."""
+    def _deai_start(self, step: str, text: str, sample: str = "",
+                    style_card_slug: str = "", source_task_id: str = "") -> str:
+        """启动一个 deai 后台线程, 立即返回 task_id.
+
+        v4.3.0: 登记项加 cancel_event — 供 deai_cancel / 前端"运行中按钮变取消".
+        """
         task_id = f"deai_{step}_{uuid.uuid4().hex[:8]}"
         with self._deai_lock:
             self._deai_tasks[task_id] = {
                 "step": step,
                 "started": time.time(),
                 "style_card_slug": style_card_slug,
+                "cancel_event": threading.Event(),
             }
 
         def run():
@@ -653,7 +822,8 @@ class Backend:
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 try:
-                    loop.run_until_complete(self._deai_run(task_id, step, text, sample, style_card_slug))
+                    loop.run_until_complete(self._deai_run(
+                        task_id, step, text, sample, style_card_slug, source_task_id))
                 finally:
                     loop.close()
             except Exception as e:
@@ -662,12 +832,69 @@ class Backend:
                 # 前端 handleDeaiComplete 把 status 设为 'done' 完全没看 error -> 用户看到空 output + '已完成'.
                 logger.error(f"deai {step} task={task_id} 顶层异常: {type(e).__name__}: {e}")
                 self._push("onDeaiError", {"task_id": task_id, "error": str(e)})
+            finally:
+                # v4.1.8.2 (审计, 任务表泄漏): 旧版只有成功路径 pop, 异常路径条目
+                # 永久残留 _deai_tasks — 统一在收尾清理.
+                with self._deai_lock:
+                    self._deai_tasks.pop(task_id, None)
 
         threading.Thread(target=run, daemon=True, name=f"deai-{step}").start()
         return task_id
 
-    async def _deai_run(self, task_id: str, step: str, text: str, sample: str, style_card_slug: str = "") -> None:
-        """deai 后台主循环: 调 LLM, 流式推 partial, 完成推 complete."""
+    async def _deai_run(self, task_id: str, step: str, text: str, sample: str,
+                        style_card_slug: str = "", source_task_id: str = "") -> None:
+        """deai 后台主循环 (v4.3.0: 分块 + 降级推送 + 可取消).
+
+        v4.3.0 设计 (实施前评审结论):
+        - 分块: 按 config.chunking_preset 切块逐块调用; rewrite 纯拼接 (块间注入
+          前块结尾做衔接, 导出文本干净无分隔符); detect/audit 报告按「第 i/N 块」分节.
+        - whole_file 兜底 (评审#6): whole_file 预设且文本 > _DEAI_WHOLE_FILE_LIMIT
+          时强制回退 large(6000), 否则整本书 = 单次调用必超模型上下文.
+        - 降级推送 (评审#1): partial > _DEAI_PUSH_LIMIT 时 onDeaiStream 只推尾部
+          预览 (全量 MB 级 evaluate_js x 30FPS 会拖死 WebView); 完成后完整结果
+          落盘 deai_results/<task_id>.txt, onDeaiComplete 带 result_file,
+          复制/导出/step3 引用走后端直读, 全文不过 IPC.
+        - 取消 (评审#3): 逐 delta + 块间检查 cancel_event; 取消走结构化 payload
+          (cancelled: true) 区分"用户取消"与"失败" (F3 语义), 已完成部分以
+          partial/result_file 保留. 取消语义与校对一致: 丢弃中间态, 重跑从块 0.
+        - 取消生效时机: 下一个流 delta 或块边界; 模型停流时等 timeout — 与校对一致.
+        """
+        cancel_event = None
+        with self._deai_lock:
+            info = self._deai_tasks.get(task_id)
+            if info:
+                cancel_event = info.get("cancel_event")
+
+        # step3 超长模式: 引用 step2 落盘结果, 全文不过 IPC
+        if source_task_id:
+            src = self._load_deai_result_text(source_task_id)
+            if src is None:
+                self._push("onDeaiError", {
+                    "task_id": task_id, "error": f"引用的结果不存在或已过期: {source_task_id}",
+                })
+                self._deai_tasks_pop(task_id)
+                return
+            text = src
+
+        if not text.strip():
+            self._push("onDeaiError", {"task_id": task_id, "error": "输入文本为空"})
+            self._deai_tasks_pop(task_id)
+            return
+
+        # 分块决策 (whole_file 兜底见 docstring)
+        preset = self._config.chunking_preset or DEFAULT_CHUNK_PRESET
+        preset_info = CHUNKING_PRESETS_MAP.get(preset) or CHUNKING_PRESETS_MAP[DEFAULT_CHUNK_PRESET]
+        max_chars = preset_info["max_chars"]
+        if max_chars == 0 and len(text) > _DEAI_WHOLE_FILE_LIMIT:
+            logger.info(
+                f"deai {task_id}: whole_file 预设但文本 {len(text)} 字 > "
+                f"{_DEAI_WHOLE_FILE_LIMIT}, 回退 large(6000) 分块"
+            )
+            max_chars = CHUNKING_PRESETS_MAP["large"]["max_chars"]
+        # preset 恒传 balanced: whole_file 分支已在上面兜底处理
+        chunks = split_text(text, max_chars, preset="balanced")
+        total = len(chunks)
+
         # 临时 AsyncOpenAI (不共享 engine 的 client, 因为 deai 独立于校对)
         try:
             client = AsyncOpenAI(
@@ -682,40 +909,73 @@ class Backend:
             self._push("onDeaiError", {"task_id": task_id, "error": f"客户端创建失败: {e}"})
             return
 
-        # 选 system prompt (v4.1.7: 走 V5 路径, 带 9 轴风格卡注入)
         system_prompt = self._build_deai_prompt(step, sample, style_card_slug)
-        user_prompt = self._build_deai_user_prompt(step, text, style_card_slug)
-
-        partial = ""
-        # v4.1 (I1): try/finally 保证 client.close() 一定被调用, 避免 httpx 连接泄漏
+        partial = ""          # 完整累积结果 (内存)
+        last_push = 0.0       # v4.1.8.2 (B6): 50ms 节流
+        cancelled = False
         try:
-            stream = await client.chat.completions.create(
-                model=self._config.model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                temperature=self._config.temperature,
-                stream=True,
-            )
-            async for event in stream:
-                if not event.choices:
-                    continue
-                delta = event.choices[0].delta
-                content = getattr(delta, "content", None) if delta else None
-                if content:
-                    partial += content
-                    # 流式推 partial (前端 throttle 50ms 后再渲染)
-                    self._push("onDeaiStream", {
-                        "task_id": task_id,
-                        "step": step,
-                        "partial": partial,
-                    })
+            for i, chunk in enumerate(chunks):
+                if cancel_event is not None and cancel_event.is_set():
+                    cancelled = True
+                    break
+                user_prompt = self._build_deai_user_prompt(step, chunk, style_card_slug)
+                if step == "rewrite" and i > 0 and partial:
+                    # v4.3.0: 块间衔接 — 前块改写结果尾部做语气参考 (不重复输出)
+                    user_prompt = (
+                        "以下是前文已改写部分的结尾 (仅供语气/衔接参考, 请勿重复输出):\n"
+                        f"{partial[-400:]}\n\n{user_prompt}"
+                    )
+                if step != "rewrite" and total > 1:
+                    partial += f"=== 第 {i + 1}/{total} 块 ===\n\n"
+                try:
+                    stream = await client.chat.completions.create(
+                        model=self._config.model,
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_prompt},
+                        ],
+                        temperature=self._config.temperature,
+                        stream=True,
+                    )
+                except Exception as e:
+                    raise RuntimeError(f"块 {i + 1}/{total} 调用失败: {e}") from e
+                chunk_out = ""
+                async for event in stream:
+                    if cancel_event is not None and cancel_event.is_set():
+                        break
+                    if not event.choices:
+                        continue
+                    delta = event.choices[0].delta
+                    content = getattr(delta, "content", None) if delta else None
+                    if content:
+                        chunk_out += content
+                        now = time.time()
+                        if now - last_push >= 0.05:
+                            self._push_deai_stream(task_id, step, partial + chunk_out, i + 1, total)
+                            last_push = now
+                if cancel_event is not None and cancel_event.is_set():
+                    cancelled = True
+                    break
+                # v4.1.8.2 (B12): 空块报错, 与校对链路 (空流抛 ValueError) 对齐
+                if not chunk_out.strip():
+                    raise ValueError(f"API 返回空内容 (块 {i + 1}/{total})")
+                partial += chunk_out
+                if step != "rewrite" and total > 1:
+                    partial += "\n\n"
+                # 块完成边界推一次进度
+                self._push_deai_stream(task_id, step, partial, i + 1, total)
+                last_push = 0.0
         except Exception as e:
             # v4.1.3 (F3): 只推 onDeaiError, 不推 onDeaiComplete
             # 避免 _flush 合并时 onDeaiComplete 覆盖 onDeaiError, 让前端看不到错误.
-            logger.error(f"deai {task_id} LLM 流式调用异常: {type(e).__name__}: {e}")
-            self._push("onDeaiError", {"task_id": task_id, "error": str(e), "partial": partial})
+            logger.error(f"deai {task_id} LLM 调用异常: {type(e).__name__}: {e}")
+            err_payload = {"task_id": task_id, "error": str(e),
+                           "partial": self._deai_preview(partial)}
+            if len(partial) > _DEAI_PUSH_LIMIT:
+                err_payload["result_file"] = self._save_deai_result(task_id, partial)
+                err_payload["total_len"] = len(partial)
+            self._push("onDeaiError", err_payload)
+            self._deai_tasks_pop(task_id)
             return
         finally:
             # I1: 关闭 httpx 连接池, 否则长跑会泄漏 socket
@@ -724,10 +984,123 @@ class Backend:
             except Exception:
                 pass
 
-        # 完成
-        self._push("onDeaiComplete", {"task_id": task_id, "step": step, "result": partial})
+        if cancelled:
+            # v4.3.0 (评审#3): 结构化取消 — cancelled 标志 + 保留已完成部分
+            payload = {
+                "task_id": task_id, "step": step, "error": "已取消",
+                "cancelled": True, "partial": self._deai_preview(partial),
+                "total_len": len(partial),
+            }
+            if len(partial) > _DEAI_PUSH_LIMIT:
+                payload["result_file"] = self._save_deai_result(task_id, partial)
+            self._push("onDeaiError", payload)
+            self._deai_tasks_pop(task_id)
+            return
+
+        # v4.1.8.2 (B12): 空输出报错
+        if not partial.strip():
+            self._push("onDeaiError", {"task_id": task_id, "error": "API 返回空内容 (stream 无 token)"})
+            self._deai_tasks_pop(task_id)
+            return
+
+        # 收尾帧 (helper 内部处理降级)
+        self._push_deai_stream(task_id, step, partial, total, total)
+        # 完成 (v4.3.0 评审#1: 超阈值完整结果落盘, 前端拿头部预览 + result_file)
+        if len(partial) > _DEAI_PUSH_LIMIT:
+            result_file = self._save_deai_result(task_id, partial)
+            self._push("onDeaiComplete", {
+                "task_id": task_id, "step": step,
+                "result": partial[:2000] + "\n…(内容过长, 完整结果已存盘, 复制/导出将取完整内容)",
+                "truncated": True, "total_len": len(partial), "result_file": result_file,
+            })
+        else:
+            self._push("onDeaiComplete", {
+                "task_id": task_id, "step": step, "result": partial, "truncated": False,
+            })
+        self._deai_tasks_pop(task_id)
+
+    # ---------- v4.3.0: 分块/降级/取消 辅助 ----------
+
+    def _deai_preview(self, text: str) -> str:
+        """超阈值降级为尾部预览 (评审#1): 全量 MB 级 evaluate_js 会拖死 WebView."""
+        if len(text) <= _DEAI_PUSH_LIMIT:
+            return text
+        return f"…(内容过长, 已生成 {len(text)} 字, 以下为尾部预览)\n" + text[-600:]
+
+    def _push_deai_stream(self, task_id: str, step: str, display: str,
+                          chunk_no: int, total: int) -> None:
+        """流式推送: 短文本推全量 (兼容旧前端行为), 超阈值推尾部预览 + 进度."""
+        self._push("onDeaiStream", {
+            "task_id": task_id,
+            "step": step,
+            "partial": self._deai_preview(display),
+            "truncated": len(display) > _DEAI_PUSH_LIMIT,
+            "total_len": len(display),
+            "progress": {"chunk": min(chunk_no, total), "total": total},
+        })
+
+    def _deai_tasks_pop(self, task_id: str) -> None:
+        """任务表清理 (v4.3.0): 所有终态路径统一走这里, 防条目泄漏."""
         with self._deai_lock:
             self._deai_tasks.pop(task_id, None)
+
+    def _save_deai_result(self, task_id: str, text: str) -> str:
+        """完整结果落盘 deai_results/<task_id>.txt, 供复制/导出/step3 引用."""
+        try:
+            d = CONFIG_DIR / "deai_results"
+            d.mkdir(parents=True, exist_ok=True)
+            f = d / f"{task_id}.txt"
+            _atomic_write_text(f, text)
+            return str(f)
+        except Exception as e:
+            logger.error(f"deai 结果落盘失败 [{task_id}]: {e}")
+            return ""
+
+    def _load_deai_result_text(self, task_id: str):
+        """按 task_id 读落盘结果; 不存在/非法 id 返回 None."""
+        import re as _re
+        if not task_id or not _re.fullmatch(r"[A-Za-z0-9_\-]+", task_id):
+            return None
+        f = CONFIG_DIR / "deai_results" / f"{task_id}.txt"
+        try:
+            if not f.exists():
+                return None
+            return read_file_text(f)
+        except Exception as e:
+            logger.error(f"deai 结果读取失败 [{task_id}]: {e}")
+            return None
+
+    def deai_cancel(self, task_id: str) -> dict:
+        """取消一个运行中的 deai/蒸馏任务 (v4.3.0).
+
+        取消语义与校对一致: 丢弃中间态, 重跑从块 0 (AGENTS.md 第 8 条).
+        取消生效时机: 下一个流 delta 或块边界; 模型停流时等 timeout.
+        """
+        with self._deai_lock:
+            info = self._deai_tasks.get(task_id)
+            if not info:
+                return {"ok": False, "error": "任务不存在或已结束"}
+            ev = info.get("cancel_event")
+            if ev is not None:
+                ev.set()
+        return {"ok": True, "action": "cancel_requested"}
+
+    def deai_copy_result(self, task_id: str) -> dict:
+        """复制超长结果全文 (v4.3.0): 后端直读落盘文件写剪贴板, 全文不过前端."""
+        text = self._load_deai_result_text(task_id)
+        if text is None:
+            return {"ok": False, "error": "结果不存在或已过期"}
+        return self.copy_to_clipboard(text)
+
+    def deai_save_result(self, task_id: str, fmt: str = "txt") -> dict:
+        """导出超长结果全文 (v4.3.0): 后端直读落盘文件弹保存框, 全文不过前端."""
+        text = self._load_deai_result_text(task_id)
+        if text is None:
+            return {"ok": False, "error": "结果不存在或已过期"}
+        ext = "md" if fmt == "md" else "txt"
+        return self._export_via_dialog(
+            "deai_result", str(Path.home() / "Documents"), text, ext,
+        )
 
     def _build_deai_prompt(self, step: str, sample: str, style_card_slug: str = "") -> str:
         """构造 system prompt. step: detect/rewrite/audit.
@@ -744,6 +1117,11 @@ class Backend:
             base = SYSTEM_PROMPT_DEAI_REWRITE_V5
             # 范文学习: 旧版 sample 字段 (单篇) + 新版 style_card (9 轴)
             if sample:
+                # v4.3.0 (评审#6): 范文截断 — 超长范文原样注入会爆上下文,
+                # 范文用途是学风格, 2 万字足够
+                if len(sample) > _DEAI_SAMPLE_LIMIT:
+                    logger.info(f"deai sample 截断: {len(sample)} -> {_DEAI_SAMPLE_LIMIT}")
+                    sample = sample[:_DEAI_SAMPLE_LIMIT] + "\n…(范文超 2 万字, 已截断)"
                 base += (
                     f"\n\n# 范文学习 (用户输入)\n学句长、口气、转折、毛边:\n{sample}"
                 )
@@ -898,12 +1276,19 @@ class Backend:
         立即返 task_id, 后台线程跑, 流式 partial 复用 onDeaiStream (slug 当 step 路由).
         完成推 onDeaiComplete + 自动 save_style_card, 失败推 onDeaiError.
         """
+        # v4.1.8.2 (审计 L5): 同 slug 去重 — 旧版可并发双蒸馏同一 profile,
+        # save_style_card last-writer-wins 随机覆盖
+        with self._deai_lock:
+            for info in self._deai_tasks.values():
+                if info.get("step") == "distill" and info.get("slug") == slug:
+                    return {"ok": False, "error": f"profile '{slug}' 正在蒸馏中, 请等待完成"}
         task_id = f"distill_{slug}_{uuid.uuid4().hex[:8]}"
         with self._deai_lock:
             self._deai_tasks[task_id] = {
                 "step": "distill",
                 "slug": slug,
                 "started": time.time(),
+                "cancel_event": threading.Event(),  # v4.3.0: 蒸馏也支持取消
             }
 
         def run():
@@ -921,9 +1306,13 @@ class Backend:
                     "step": "distill",
                     "error": f"{type(e).__name__}: {e}",
                 })
+            finally:
+                # v4.1.8.2 (审计, 任务表泄漏): 异常路径也要清理登记
+                with self._deai_lock:
+                    self._deai_tasks.pop(task_id, None)
 
         threading.Thread(target=run, daemon=True, name=f"deai-distill-{slug}").start()
-        return task_id
+        return {"ok": True, "task_id": task_id}
 
     async def _deai_distill_run(self, task_id: str, slug: str) -> None:
         """distill_style_profile 后台主循环: 跑 LLM 蒸馏, 流式推 partial.
@@ -945,6 +1334,12 @@ class Backend:
                     f"样本不足: {len(samples)} 篇, 至少 {MIN_SAMPLES_FOR_DISTILL} 篇"
                 )
             samples_concat = "\n\n---\n\n".join(samples)
+            # v4.1.8.2 (审计 L2): 样本总量上限 — 旧版只限单篇 200KB, 50 篇拼进
+            # 一个 prompt 必被服务端 400 拒绝或产生巨额 token 消耗
+            if len(samples_concat) > 600_000:
+                raise ValueError(
+                    f"样本总量 {len(samples_concat)} 字符超上限 600000, 请删减样本后重试"
+                )
         except Exception as e:
             logger.error(f"distill {task_id} 读样本失败: {e}")
             self._push("onDeaiError", {
@@ -970,6 +1365,13 @@ class Backend:
         # 3. 流式调 LLM
         user_prompt = f"以下是 {len(samples)} 篇样本, 请提炼 9 轴风格指纹:\n\n{samples_concat}"
         partial = ""
+        last_push = 0.0  # v4.1.8.2 (审计 B6): 50ms 节流, 同 _deai_run
+        cancel_event = None
+        with self._deai_lock:
+            _info = self._deai_tasks.get(task_id)
+            if _info:
+                cancel_event = _info.get("cancel_event")
+        cancelled = False
         try:
             stream = await client.chat.completions.create(
                 model=self._config.model,
@@ -981,17 +1383,23 @@ class Backend:
                 stream=True,
             )
             async for event in stream:
+                if cancel_event is not None and cancel_event.is_set():
+                    cancelled = True
+                    break
                 if not event.choices:
                     continue
                 delta = event.choices[0].delta
                 content = getattr(delta, "content", None) if delta else None
                 if content:
                     partial += content
-                    self._push("onDeaiStream", {
-                        "task_id": task_id,
-                        "step": "distill",
-                        "partial": partial,
-                    })
+                    now = time.time()
+                    if now - last_push >= 0.05:
+                        self._push("onDeaiStream", {
+                            "task_id": task_id,
+                            "step": "distill",
+                            "partial": partial,
+                        })
+                        last_push = now
         except Exception as e:
             logger.error(f"distill {task_id} LLM 异常: {type(e).__name__}: {e}")
             self._push("onDeaiError", {
@@ -1005,9 +1413,19 @@ class Backend:
             except Exception:
                 pass
 
+        # v4.3.0: 蒸馏取消 — 结构化 payload (同 _deai_run)
+        if cancelled:
+            self._push("onDeaiError", {
+                "task_id": task_id, "step": "distill", "error": "已取消",
+                "cancelled": True, "partial": partial,
+            })
+            return
+
         # 4. 落盘 style-card.md
         try:
             r = self._style_loader.save_style_card(slug, partial)
+            # v4.1.8.2 (审计 B6): 补推一次全量, 保证收尾帧完整
+            self._push("onDeaiStream", {"task_id": task_id, "step": "distill", "partial": partial})
             self._push("onDeaiComplete", {
                 "task_id": task_id,
                 "step": "distill",
@@ -1068,18 +1486,15 @@ class Backend:
         """
         with self._push_throttle_lock:
             self._push_buffer.append((event_name, data))
-            now = time.time()
-            elapsed = now - self._last_push_time
             if self._push_pending:
                 return
-            if elapsed >= 0.033 and self._last_push_time > 0:
-                # 距上次 flush 已过 33ms, 立即同步 flush
-                self._flush()
-            else:
-                # 33ms 内合并推送
-                self._push_pending = True
-                self._last_push_time = now
-                threading.Timer(0.033, self._flush).start()
+            # v4.1.8.2 (审计 B5): 删除旧的"距上次 flush 已过 33ms 立即同步 flush"
+            # 分支 — 它在当前控制流下不可达 (依赖 _last_push_time 每次清零的脆弱
+            # 不变量), 且分支体内持非重入锁调 _flush() 会同线程自死锁. 统一走
+            # Timer 延迟 flush, 行为不变, 拆掉死锁地雷.
+            self._push_pending = True
+            self._last_push_time = time.time()
+            threading.Timer(0.033, self._flush).start()
 
     def _flush(self):
         """批量推送到前端.
@@ -1096,10 +1511,13 @@ class Backend:
         # 累积类: 字符串拼接, 多个同类合成单条
         ACCUMULATE_EVENTS = {"onLog"}
         # 允许多个类: 同名事件不合并, 全部保留
+        # v4.1.8.2 (审计 B8/F12): 补 onFetchModelsComplete — 它带 task_id 是
+        # 离散事件, 旧版落入"同名覆盖"类, 并发"测试连接 + 拉取模型"落在同一
+        # 33ms 窗口时先完成者的结果被覆盖, 前端 pending id 永久悬挂
         MULTI_ALLOWED = {
             "onFileStart", "onFileDone", "onFileCompleted",
             "onTaskComplete", "onDeaiComplete", "onDeaiError",
-            "onDeaiStream", "onFilesDropped",
+            "onDeaiStream", "onFilesDropped", "onFetchModelsComplete",
         }
         with self._push_throttle_lock:
             if not self._push_buffer:

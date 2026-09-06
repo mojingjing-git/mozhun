@@ -76,6 +76,8 @@ def compute_prompt_hash(
     context_max_chars: int = 0,
     context_max_chunks: int = 0,
     temperature: float | None = None,
+    api_base: str = "",
+    punct_fix: bool = True,
 ) -> str:
     """计算 prompt/生成配置指纹 — 断点缓存随配置变化而失效。
 
@@ -83,11 +85,15 @@ def compute_prompt_hash(
     chunking_preset / context_max_chars / context_max_chunks / temperature
     会改变生成结果但 hash 不变 -> 静默复用旧断点, 返回与当前档位不符的结果.
     现全部纳入; hash 算法变更使历史断点一次性失效 (配合 C5 语义, 属预期).
+
+    v4.1.8.2 (审计 E16): 补纳 api_base — 同 model 名换端点 (官方 <-> 代理/本地
+    网关) 时产出不同, 旧指纹不变会静默复用旧端点的断点.
     """
     raw = (
         f"{prompt_mode}|{model}|{custom_prompt}"
         f"|chunk={chunking_preset}|ctxc={context_max_chars}"
         f"|ctxn={context_max_chunks}|temp={temperature}"
+        f"|base={api_base}|punct={punct_fix}"
     ).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()[:16]
 
@@ -171,6 +177,10 @@ class FileTask:
     start_time: float = 0.0
     end_time: float = 0.0
     error_message: str = ""
+    # v4.1.8.2 (审计 E2): 读文件失败占位标记 — 这类 task 不再进 pending 重打 API
+    # (旧逻辑空文本会发给 LLM, 轻则 400 覆盖真实错误, 重则产出垃圾"成功"结果).
+    # 仅内存态, 不写入断点 (to_dict 不含该字段).
+    skip: bool = False
 
     @property
     def is_done(self) -> bool:
@@ -182,6 +192,10 @@ class FileTask:
             "status": self.status.value,
             "original_text": self.original_text,
             "result": self.result.to_dict() if self.result else None,
+            # v4.1.8.2 (审计 E9): 补齐 task 级时间/错误字段, 断点加载后不再丢
+            "start_time": self.start_time,
+            "end_time": self.end_time,
+            "error_message": self.error_message,
         }
 
     @classmethod
@@ -190,6 +204,9 @@ class FileTask:
             file_path=Path(d["file_path"]),
             status=TaskStatus(d["status"]),
             original_text=d.get("original_text", ""),
+            start_time=d.get("start_time", 0.0),
+            end_time=d.get("end_time", 0.0),
+            error_message=d.get("error_message", ""),
         )
         if d.get("result"):
             task.result = FileResult.from_dict(d["result"])
@@ -213,6 +230,8 @@ class ProjectConfig:
     schema_version: int = 2  # NEW (v3.0+): 配置 schema 版本号 (Phase 3 断点迁移用)
     context_max_chars: int = 800   # NEW (v3.0+): 跨段上下文最大字符数
     context_max_chunks: int = 2    # NEW (v3.0+): 跨段上下文取最近几个 chunk
+    ui_theme: str = "auto"  # NEW (v4.1.9): 主题三态 (auto/light/dark), Win11 §2.3 个人原则 — 主题持久化
+    punct_fix: bool = True  # NEW (v4.3.3): 发送 LLM 前先本地修复半角标点 (app/punct_fix.py, 零成本)
 
     def to_dict(self) -> dict:
         return {
@@ -231,6 +250,8 @@ class ProjectConfig:
             "schema_version": self.schema_version,
             "context_max_chars": self.context_max_chars,
             "context_max_chunks": self.context_max_chunks,
+            "ui_theme": self.ui_theme,
+            "punct_fix": self.punct_fix,
         }
 
     @classmethod
@@ -251,6 +272,8 @@ class ProjectConfig:
             schema_version=d.get("schema_version", 2),
             context_max_chars=d.get("context_max_chars", 800),
             context_max_chunks=d.get("context_max_chunks", 2),
+            ui_theme=d.get("ui_theme") or "auto",
+            punct_fix=bool(d.get("punct_fix", True)),
         )
 
 
@@ -309,22 +332,41 @@ class ProcessStats:
 
 
 def read_file_text(path: Path) -> str:
-    for encoding in ["utf-8", "gbk", "gb2312", "gb18030"]:
+    """多编码兜底读文本.
+
+    v4.1.8.2 (审计 E4): 旧实现按 utf-8 -> gbk -> gb2312 -> gb18030 依次试解码,
+    但 UTF-16 文件的字节流大概率能被 GBK "成功"解码成乱码 (不抛异常), 乱码会被
+    静默送 LLM 校对 (数据损坏型). 现改为: 先 BOM 嗅探 (utf-8-sig / utf-16),
+    再 utf-8, 再 gb18030 (gbk/gb2312 的超集, 单独覆盖两者), 全失败才 replace 兜底;
+    顺带修复带 BOM 文件的 \\ufeff 混入 prompt 的问题.
+    """
+    raw = path.read_bytes()
+    if raw.startswith(b"\xef\xbb\xbf"):
+        return raw.decode("utf-8-sig")
+    if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return raw.decode("utf-16")
+    for encoding in ("utf-8", "gb18030"):
         try:
-            return path.read_text(encoding=encoding)
+            return raw.decode(encoding)
         except (UnicodeDecodeError, UnicodeError):
             continue
-    return path.read_text(encoding="utf-8", errors="replace")
-
-
-async def read_file_text_async(path: Path) -> str:
-    """read_file_text 的异步包装 — 把阻塞 IO 放到线程池,避免事件循环卡顿。"""
-    return await asyncio.to_thread(read_file_text, path)
+    return raw.decode("utf-8", errors="replace")
 
 
 async def save_checkpoint_async(file_path: Path, task: FileTask) -> None:
     """save_checkpoint 的异步包装。"""
     await asyncio.to_thread(save_checkpoint, file_path, task)
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    """原子写文本: 先写临时文件再 os.replace, 避免写中途崩溃留下半截 JSON.
+
+    v4.1.8.2 (审计 E15): 配置/断点原来直接 write_text 截断+写, 崩溃/断电后
+    last_config.json 损坏 -> load_config 返回默认配置, 用户 API key 静默丢失.
+    """
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
 
 
 # 配置/断点根目录.
@@ -338,10 +380,15 @@ def _default_config_dir() -> Path:
 
 
 CONFIG_DIR = _default_config_dir()
-CONFIG_DIR.mkdir(exist_ok=True)
-CONFIG_FILE = CONFIG_DIR / "last_config.json"
 CHECKPOINT_DIR = CONFIG_DIR / "checkpoints"
-CHECKPOINT_DIR.mkdir(exist_ok=True)
+try:
+    # v4.1.8.2 (审计 E10): 补 parents=True + 异常兜底 — PROOFREADER_HOME 指向
+    # 多级不存在路径时, 旧版在 import 期抛 FileNotFoundError 让应用启动即崩.
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
+except OSError as e:
+    logger.error(f"数据目录创建失败 (配置/断点将不可用): {CONFIG_DIR} — {e}")
+CONFIG_FILE = CONFIG_DIR / "last_config.json"
 
 
 # v4.1 (M2): 把 chunking 预设从 processor.py + web_backend.py 抽到 utils.py 单点。
@@ -363,14 +410,22 @@ CHUNKING_PRESETS_MAP = {p["key"]: p for p in CHUNKING_PRESETS}
 DEFAULT_CHUNK_PRESET = "balanced"
 
 
-def save_config(config: ProjectConfig) -> None:
+def save_config(config: ProjectConfig) -> bool:
+    """落盘配置. 返回是否成功.
+
+    v4.1.8.2 (审计 B4): 旧版内部吞异常恒返回 None, bridge 层的 except 永远
+    不可达 -> 磁盘满/只读时前端仍显示"已保存", 重启后配置静默丢失.
+    现返回 bool, 由 bridge 层透传给前端.
+    """
     try:
-        CONFIG_FILE.write_text(
+        _atomic_write_text(
+            CONFIG_FILE,
             json.dumps(config.to_dict(), ensure_ascii=False, indent=2),
-            encoding="utf-8",
         )
+        return True
     except Exception as e:
         logger.error(f"保存配置失败: {e}")
+        return False
 
 
 def load_config() -> ProjectConfig:
@@ -383,13 +438,76 @@ def load_config() -> ProjectConfig:
     return ProjectConfig()
 
 
+def _checkpoint_file(file_path: Path) -> Path:
+    """文件路径 -> 断点文件路径.
+
+    v4.1.8.2 (审计 E3): 旧映射 (: / \\ -> _) 会把 `a_b.txt` 与 `a\\b.txt` 映射到
+    同一断点文件, 后处理的文件直接复用前者的校对结果 (交叉污染), 且断点校验
+    不核对归属路径. 改用归一化绝对路径的 sha256 命名, 无碰撞; 旧命名断点一次性
+    失效 (属预期, 配合 load_checkpoint 的归属校验双保险).
+    """
+    norm = os.path.normcase(os.path.abspath(str(file_path)))
+    digest = hashlib.sha256(norm.encode("utf-8")).hexdigest()[:24]
+    return CHECKPOINT_DIR / f"cp_{digest}.json"
+
+
+def split_text(text: str, max_chars: int, preset: str = "balanced") -> list[str]:
+    """按段落/句号边界切分文本, 每块不超过 max_chars 字符。
+
+    v4.3.0: 从 processor._split_text 平移到 utils — 校对引擎与 DeAI 分块共用
+    一个实现 (DeAI 长文本分块复用), processor 保留同名静态方法委托到这里,
+    兼容既有测试与外部调用。
+
+    优先级: \\n\\n (段落) > \\n (行) > 。！？ (句号) > 强制切分。
+    切分点保留在段尾 (即不丢标点), 保证拼接时语义完整。
+    overlap=0 (校对场景硬约束): 重叠区会被改两次, 结果冲突。
+
+    preset 参数仅在 ``whole_file`` / ``max_chars == 0`` 时生效, 直接返回
+    ``[text]`` (整文件不分块)。
+    """
+    # 整文件预设
+    if preset == "whole_file" or max_chars == 0:
+        return [text]
+
+    if len(text) <= max_chars:
+        return [text]
+    chunks: list[str] = []
+    remaining = text
+    while len(remaining) > max_chars:
+        # 尝试在 max_chars 范围内找最佳切分点
+        window = remaining[:max_chars]
+        cut = -1
+        for sep in ("\n\n", "\n", "。", "！", "？", ".", "!", "?"):
+            idx = window.rfind(sep)
+            if idx > max_chars // 2:  # 至少切在前半段, 避免小块
+                # v4.1.8.2 (审计 E8): ASCII 句点切分校验 — "3.14"/"U.S."/
+                # "v2.5" 会被旧逻辑拦腰切开, 两块独立送模型后拼接语义损坏.
+                # 句点后紧跟字母/数字, 或两侧均为字母数字时不在此切.
+                if sep == ".":
+                    pos = idx + 1
+                    nxt = remaining[pos] if pos < len(remaining) else ""
+                    prv = remaining[idx - 1] if idx > 0 else ""
+                    if (nxt and (nxt.isdigit() or nxt.isalpha())) or (
+                        prv.isalnum() and nxt.isalnum()
+                    ):
+                        continue
+                cut = idx + len(sep)
+                break
+        if cut <= 0:
+            cut = max_chars  # 实在没合适切分点, 硬切
+        chunks.append(remaining[:cut])
+        remaining = remaining[cut:]
+    if remaining:
+        chunks.append(remaining)
+    return chunks
+
+
 def save_checkpoint(file_path: Path, task: FileTask) -> None:
     try:
-        safe_name = str(file_path).replace(":", "_").replace("/", "_").replace("\\", "_")
-        cp_file = CHECKPOINT_DIR / f"{safe_name}.json"
-        cp_file.write_text(
+        cp_file = _checkpoint_file(file_path)
+        _atomic_write_text(
+            cp_file,
             json.dumps(task.to_dict(), ensure_ascii=False, indent=2),
-            encoding="utf-8",
         )
     except Exception as e:
         logger.error(f"保存断点失败 [{file_path}]: {e}")
@@ -403,13 +521,29 @@ def load_checkpoint(file_path: Path, expected_hash: Optional[str] = None) -> Fil
     v3.0 schema v2:
     - 自动 v1 → v2 迁移(FileResult.to_dict/from_dict 已兼容旧 dict 缺新字段)
     - CANCELLED 状态返回 None (v0.2 修订: 取消状态强制重跑,不读 chunks_results)
+
+    v4.1.8.2 (审计 E3): 增加归属校验 — 断点内 file_path 必须与请求路径一致
+    (Windows 下不区分大小写), 防 checkpoint 文件串用. 同时兼容读旧命名断点
+    (一次迁移期): 旧命名有碰撞风险, 但归属校验会把不属于当前文件的缓存拒掉.
     """
-    try:
-        safe_name = str(file_path).replace(":", "_").replace("/", "_").replace("\\", "_")
-        cp_file = CHECKPOINT_DIR / f"{safe_name}.json"
-        if cp_file.exists():
+    candidates = [_checkpoint_file(file_path)]
+    legacy = CHECKPOINT_DIR / (
+        str(file_path).replace(":", "_").replace("/", "_").replace("\\", "_") + ".json"
+    )
+    if legacy not in candidates:
+        candidates.append(legacy)
+    for cp_file in candidates:
+        try:
+            if not cp_file.exists():
+                continue
             data = json.loads(cp_file.read_text(encoding="utf-8"))
             task = FileTask.from_dict(data)
+            # v4.1.8.2 (审计 E3): 归属校验
+            if os.path.normcase(str(task.file_path)) != os.path.normcase(str(file_path)):
+                logger.info(
+                    f"[断点] 路径不匹配,忽略缓存: {task.file_path} != {file_path}"
+                )
+                continue
             # v0.2 修订: CANCELLED 状态不加载,强制重跑
             if task.status == TaskStatus.CANCELLED:
                 logger.info(
@@ -425,6 +559,7 @@ def load_checkpoint(file_path: Path, expected_hash: Optional[str] = None) -> Fil
                     )
                     return None
             return task
-    except Exception as e:
-        logger.error(f"加载断点失败 [{file_path}]: {e}")
+        except Exception as e:
+            logger.error(f"加载断点失败 [{file_path}]: {e}")
+            return None
     return None

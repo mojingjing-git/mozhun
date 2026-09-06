@@ -1,45 +1,70 @@
 API_TEMPLATES = [
+    # v4.3.2: 按用户指定清单重写预设 (LM Studio/OpenCodeGo/OpenRouter/MiniMax/
+    # 阿里百炼/智谱清言/火山引擎/硅基流动/DeepSeek/自定义), 替换旧 7 项。
+    # 语义约定: model 留空 = 服务端模型名不确定/动态, 提示用户用 ⟳ 拉取列表填写;
+    # api_key 留空 = 必须用户自填 (不预填占位, 避免误跑); 本地服务预填免 Key 值。
     {
-        "name": "LM Studio 本地",
+        "name": "LM Studio",
         "api_base": "http://localhost:1234/v1",
-        "model": "local-model",
+        "model": "",
         "api_key": "lm-studio",
-        "description": "LM Studio 本地部署（需先启动 LM Studio 并加载模型）",
+        "description": "LM Studio 本地部署（先启动服务并加载模型, 模型名可点 ⟳ 拉取）",
     },
     {
-        "name": "Ollama 本地",
-        "api_base": "http://localhost:11434/v1",
-        "model": "qwen2.5:7b",
-        "api_key": "ollama",
-        "description": "Ollama 本地部署（需先安装 Ollama 并拉取模型）",
-    },
-    {
-        "name": "vLLM 本地",
-        "api_base": "http://localhost:8000/v1",
-        "model": "Qwen/Qwen2.5-7B-Instruct",
-        "api_key": "EMPTY",
-        "description": "vLLM 本地推理引擎（需先启动 vLLM 服务）",
-    },
-    {
-        "name": "DeepSeek 官方",
-        "api_base": "https://api.deepseek.com/v1",
-        "model": "deepseek-chat",
-        "api_key": "sk-",
-        "description": "DeepSeek 官方 API（需注册获取 Key）",
-    },
-    {
-        "name": "智谱 AI (GLM)",
-        "api_base": "https://open.bigmodel.cn/api/paas/v4",
-        "model": "glm-4-flash",
+        "name": "OpenCodeGo",
+        "api_base": "https://opencode.ai/zen/go/v1",
+        "model": "",
         "api_key": "",
-        "description": "智谱 AI ChatGLM 系列模型",
+        "description": "OpenCode Zen Go 套餐（填 OPENCODE_API_KEY; 模型名点 ⟳ 拉取）",
     },
     {
-        "name": "通义千问 (DashScope)",
+        "name": "OpenRouter",
+        "api_base": "https://openrouter.ai/api/v1",
+        "model": "openrouter/auto",
+        "api_key": "",
+        "description": "OpenRouter 聚合网关（模型名形如 vendor/model, 也可用 openrouter/auto）",
+    },
+    {
+        "name": "MiniMax",
+        "api_base": "https://api.minimax.cn/v1",
+        "model": "MiniMax-M2",
+        "api_key": "",
+        "description": "MiniMax 国内站（国际站密钥请把地址改为 api.minimax.io/v1）",
+    },
+    {
+        "name": "阿里百炼",
         "api_base": "https://dashscope.aliyuncs.com/compatible-mode/v1",
         "model": "qwen-plus",
         "api_key": "",
-        "description": "阿里云通义千问 API（兼容模式）",
+        "description": "阿里云百炼 DashScope OpenAI 兼容模式（qwen 系列）",
+    },
+    {
+        "name": "智谱清言",
+        "api_base": "https://open.bigmodel.cn/api/paas/v4",
+        "model": "glm-4-flash",
+        "api_key": "",
+        "description": "智谱 BigModel 开放平台（GLM 系列, glm-4-flash 免费）",
+    },
+    {
+        "name": "火山引擎",
+        "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+        "model": "",
+        "api_key": "",
+        "description": "火山方舟（豆包大模型; 模型名或推理接入点 ID ep-xxx, 可点 ⟳ 拉取）",
+    },
+    {
+        "name": "硅基流动",
+        "api_base": "https://api.siliconflow.cn/v1",
+        "model": "deepseek-ai/DeepSeek-V3",
+        "api_key": "",
+        "description": "SiliconFlow 聚合平台（模型名形如 vendor/model, 可点 ⟳ 拉取）",
+    },
+    {
+        "name": "DeepSeek",
+        "api_base": "https://api.deepseek.com/v1",
+        "model": "deepseek-chat",
+        "api_key": "",
+        "description": "DeepSeek 官方 API（deepseek-chat / deepseek-reasoner）",
     },
     {
         "name": "自定义",
@@ -309,6 +334,9 @@ PROMPT_MODES = {
     "tech_doc": {"label": "技术文档校对", "system": SYSTEM_PROMPT_TECH_DOC},
     "long_sentence": {"label": "长句检测", "system": SYSTEM_PROMPT_LONG_SENTENCE},
     "deai": {"label": "去AI味 (v3.1)", "system": "PLACEHOLDER"},
+    # v4.3.3: 仅标点修复 — 纯本地规则 (app/punct_fix.py), engine 走专用分支,
+    # system prompt 永不使用 (PLACEHOLDER 由 _stream_single 兜底守卫)
+    "punct_local": {"label": "仅标点修复（本地脚本，不调用 LLM）", "system": "PLACEHOLDER"},
     "custom": {"label": "自定义模式", "system": SYSTEM_PROMPT_STRICT},
 }
 

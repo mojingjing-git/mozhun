@@ -79,17 +79,30 @@ MAX_SAMPLE_BYTES = 200_000  # 单样本 200K 字节上限 (防单篇喂爆 promp
 # 借鉴自 jianshuo/claude-skills 的 slug 校验 (思路借鉴)
 # 拒绝: 空 / 路径分隔符 / .. / 隐藏文件 (.) / 特殊字符
 _SAFE_SLUG = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_\-]{0,63}$")
+# v4.1.8.2 (审计 L3): Windows 保留设备名 — 旧正则放行 CON/NUL/AUX 等,
+# mkdir 时抛 WinError 被上层兜成生硬系统报错
+_WINDOWS_RESERVED = {
+    "CON", "PRN", "AUX", "NUL",
+    *(f"COM{i}" for i in range(1, 10)),
+    *(f"LPT{i}" for i in range(1, 10)),
+}
 
 
 def _validate_slug(slug: str) -> None:
-    """slug 必须是 [a-zA-Z0-9][a-zA-Z0-9_-]{0,63}, 拒绝 ../ 或空."""
+    """slug 必须是 [a-zA-Z0-9][a-zA-Z0-9_-]{0,63}, 拒绝 ../ 或空.
+
+    v4.1.8.2 (审计 L3): re.match + $ 会放行尾随换行 ("abc\\n"), 改 fullmatch;
+    拒绝 Windows 保留设备名.
+    """
     if not isinstance(slug, str) or not slug:
         raise ValueError("slug 不能为空")
-    if not _SAFE_SLUG.match(slug):
+    if not _SAFE_SLUG.fullmatch(slug):
         raise ValueError(
             f"slug 非法: {slug!r}. "
             f"必须匹配 {chr(94)}[a-zA-Z0-9][a-zA-Z0-9_-]{{0,63}}$ (字母/数字/下划线/连字符, 首位字母数字, 1-64 字符)"
         )
+    if slug.upper() in _WINDOWS_RESERVED:
+        raise ValueError(f"slug 不能使用 Windows 保留设备名: {slug!r}")
 
 
 def _profile_dir(slug: str) -> Path:
@@ -114,6 +127,25 @@ def _now_iso() -> str:
     return datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
 
 
+def _atomic_write_text(path: Path, text: str) -> None:
+    """原子写文本 (写临时文件 + os.replace).
+
+    v4.1.8.2 (审计 L4): meta.json 旧版 write_text 截断+写, 蒸馏线程落盘瞬间
+    前端刷新列表会读到半截 JSON, profile 从下拉框闪失. Windows 下 os.replace
+    目标被占用会 PermissionError, 加短重试.
+    """
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    for i in range(3):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if i == 2:
+                raise
+            time.sleep(0.05)
+
+
 class StyleProfileLoader:
     """风格 Profile 加载器: builtin CRUD + custom CRUD + 蒸馏入口.
 
@@ -128,9 +160,14 @@ class StyleProfileLoader:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        # 蒸馏任务: task_id -> {slug, started, status}
+        # 蒸馏任务表 (start_distill 组件级入口用; Bridge 走 _deai_tasks)
         self._distill_tasks: dict[str, dict] = {}
-        STYLES_DIR.mkdir(parents=True, exist_ok=True)
+        try:
+            # v4.1.8.2 (审计 M1): 目录创建失败不再裸崩 — 旧版异常直接逃出
+            # Backend() 构造链, 窗口模式下游走不到任何兜底提示
+            STYLES_DIR.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            logger.error(f"风格库目录创建失败 (风格 profile 功能不可用): {STYLES_DIR} — {e}")
 
     # ==================== Builtin profiles ====================
 
@@ -221,9 +258,9 @@ class StyleProfileLoader:
                 "created_at": _now_iso(),
                 "distilled_at": "",
             }
-            _meta_path(slug).write_text(
+            _atomic_write_text(
+                _meta_path(slug),
                 json.dumps(meta, ensure_ascii=False, indent=2),
-                encoding="utf-8",
             )
             return meta
 
@@ -266,12 +303,18 @@ class StyleProfileLoader:
             if not safe_name:
                 safe_name = f"sample-{meta['samples_count'] + 1:03d}.md"
             target = sdir / safe_name
+            # v4.1.8.2 (审计 L1): 拒绝同名覆盖 — 旧版静默覆盖旧样本但计数照常
+            # 自增, 范文永久丢失且样本数虚增, 蒸馏时报"样本不足"无从排查
+            if target.exists():
+                raise ValueError(
+                    f"样本文件名已存在: {safe_name}, 请换一个文件名或先删除旧样本"
+                )
             target.write_text(content, encoding="utf-8")
             meta["samples_count"] = meta.get("samples_count", 0) + 1
             meta["last_sample_at"] = _now_iso()
-            _meta_path(slug).write_text(
+            _atomic_write_text(
+                _meta_path(slug),
                 json.dumps(meta, ensure_ascii=False, indent=2),
-                encoding="utf-8",
             )
             return {
                 "ok": True,
@@ -292,9 +335,9 @@ class StyleProfileLoader:
             meta = self._read_meta(slug)
             _style_card_path(slug).write_text(markdown_content, encoding="utf-8")
             meta["distilled_at"] = _now_iso()
-            _meta_path(slug).write_text(
+            _atomic_write_text(
+                _meta_path(slug),
                 json.dumps(meta, ensure_ascii=False, indent=2),
-                encoding="utf-8",
             )
             return {
                 "ok": True,
@@ -366,10 +409,12 @@ class StyleProfileLoader:
     # ==================== 蒸馏入口 ====================
 
     def start_distill(self, slug: str, llm_callback) -> str:
-        """启动后台蒸馏: 读 samples/, 调 llm_callback(samples_concat) 拿 markdown,
+        """启动蒸馏 (组件级同步入口, 供测试/库调用; Bridge 走 _deai_distill_run):
+        读 samples/, 调 llm_callback(samples_concat, slug) 拿 markdown,
         落盘 style-card.md. 立即返 task_id.
 
-        llm_callback(prompt: str) -> str: 由调用方实现 (web_backend 调 AsyncOpenAI 流式).
+        llm_callback(samples_concat: str, slug: str) -> str:
+        由调用方实现 (同步返回 markdown, 线程由调用方控制).
         """
         _validate_slug(slug)
         task_id = f"distill_{uuid.uuid4().hex[:8]}"

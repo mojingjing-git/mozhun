@@ -60,7 +60,7 @@ def test_utils():
     d = c.to_dict()
     c2 = ProjectConfig.from_dict(d)
     check("ProjectConfig 往返完整", c == c2)
-    check("ProjectConfig 包含所有字段", len(d) == 15)  # v3.0+ 加了 chunking_preset + schema_version + context_max_chars + context_max_chunks
+    check("ProjectConfig 包含所有字段", len(d) == 17)  # v3.0+: chunking/schema/context x2; v4.1.9: + ui_theme; v4.3.3: + punct_fix
 
     # ProjectConfig 边界值
     c_empty = ProjectConfig()
@@ -152,13 +152,15 @@ def test_templates():
         check(f"模板 {t['name']} 有必需字段", all(k in t for k in ["name", "api_base", "model", "api_key"]))
 
     check("PROMPT_MODES 非空", len(PROMPT_MODES) > 0)
-    for key, info in PROMPT_MODES.items():
+    # v4.3.3: punct_local 是本地脚本模式, system 永不发送 LLM, 豁免 prompt 结构断言
+    llm_modes = {k: v for k, v in PROMPT_MODES.items() if k != "punct_local"}
+    for key, info in llm_modes.items():
         check(f"模式 {key} 有 label", "label" in info)
         check(f"模式 {key} 有 system", "system" in info)
         check(f"模式 {key} 有 few-shot", "## 示例" in info["system"])
 
     # 检查 prompt 不为空且有实质内容
-    for key, info in PROMPT_MODES.items():
+    for key, info in llm_modes.items():
         check(f"模式 {key} prompt > 200 字符", len(info["system"]) > 200)
 
 
@@ -225,6 +227,7 @@ def test_processor():
             context_max_chars=cfg.context_max_chars,
             context_max_chunks=cfg.context_max_chunks,
             temperature=cfg.temperature,
+            api_base=cfg.api_base,  # v4.1.8.2 (E16): 指纹补纳 api_base, 与引擎一致
         ),
     )
     save_checkpoint(tmp, task)
@@ -366,6 +369,8 @@ def test_smoke_prompt_content():
     from app.templates import PROMPT_MODES
 
     for key, info in PROMPT_MODES.items():
+        if key == "punct_local":
+            continue  # v4.3.3: 本地脚本模式, 不走 LLM prompt
         prompt = info["system"]
         check(f"{key} prompt 有核心原则", "核心原则" in prompt or "识别并解决" in prompt)
         check(f"{key} prompt 有输出要求", "输出要求" in prompt)
@@ -383,14 +388,23 @@ def main():
     print("  组件测试 + 冒烟测试 (v4.0+ 已脱离 PySide6 UI 依赖)")
     print("=" * 60)
 
-    test_smoke_config_roundtrip()
-    test_smoke_engine_lifecycle()
-    test_smoke_prompt_content()
-
-    test_utils()
-    test_templates()
-    test_logger()
-    test_processor()
+    # v4.1.8.2 (审计 K12): per-test try/except — 旧版裸调, 一个用例抛异常
+    # 即中断后续全部用例, 覆盖静默缩水 (与 test_web_backend/test_bugs 同款模式)
+    all_tests = [
+        test_smoke_config_roundtrip,
+        test_smoke_engine_lifecycle,
+        test_smoke_prompt_content,
+        test_utils,
+        test_templates,
+        test_logger,
+        test_processor,
+    ]
+    for t in all_tests:
+        try:
+            t()
+        except Exception as e:
+            import traceback
+            check(t.__name__, False, f"{type(e).__name__}: {e}" + chr(10) + traceback.format_exc())
 
     print()
     print("=" * 60)

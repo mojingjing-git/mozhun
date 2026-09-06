@@ -55,20 +55,39 @@ def test_single_predecessor():
 
 
 def test_truncation():
-    """max_chars 限制生效, 超长时截断尾部。"""
+    """max_chars 限制生效, 超长时截断旧块尾部 (v4.1.8.2 E14: 保留最近内容)."""
     print("\n--- 截断 ---")
     cb = ContextBuilder(max_chars=120, max_chunks=2)
-    # 两个 chunk 一个 60 字符一个 80 字符
+    # 旧 chunk 100 字符, 新 chunk 60 字符
     prev = [
-        FileResult(original="A" * 60, corrected="A" * 60),
-        FileResult(original="B" * 80, corrected="B" * 80),
+        FileResult(original="A" * 100, corrected="A" * 100),
+        FileResult(original="B" * 60, corrected="B" * 60),
     ]
     result = cb.build(prev, 2)
-    # max_chars=120, 已用 60 (第一个), 第二个 80 字符: remaining=60, 60>=50 不 break,
+    # 新块 B*60 完整保留 (used=60); 旧块 A*100: remaining=60>=50 不 break,
     # text = "…" + text[-(60-1):] = "…" + 59 字符 (含省略号)
     check("包含省略号 '…'", "…" in result)
+    check("最新块 B 完整保留", "B" * 60 in result)
     # 总字符数应该 <= 120 + 标签长度
     check("总长 < 250 (受 max_chars 限制)", len(result) < 250)
+
+
+def test_newest_kept_whole():
+    """v4.1.8.2 (E14): 巨大旧块不再挤掉紧邻的最新块。
+
+    旧实现按旧→新遍历, 5000 字旧块先吃满 800 预算, 紧邻的 790 字新块被
+    整体丢弃 — 与"保留最近内容"意图相反。
+    """
+    print("\n--- 巨大旧块不挤掉最新块 ---")
+    cb = ContextBuilder(max_chars=800, max_chunks=2)
+    prev = [
+        FileResult(original="A" * 5000, corrected="A" * 5000),
+        FileResult(original="B" * 790, corrected="B" * 790),
+    ]
+    result = cb.build(prev, 2)
+    check("最新块 B*790 完整保留", "B" * 790 in result)
+    # 旧块 5000 字只剩 10 字预算 (<50) → 直接丢弃, 不截一半进来
+    check("巨大旧块被丢弃", "A" * 500 not in result)
 
 
 def test_max_chunks_limit():
@@ -132,6 +151,7 @@ def main():
         test_no_chunks_processed,
         test_single_predecessor,
         test_truncation,
+        test_newest_kept_whole,
         test_max_chunks_limit,
         test_empty_corrected_skipped,
         test_returns_empty_when_all_skipped,
