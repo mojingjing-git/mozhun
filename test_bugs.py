@@ -208,8 +208,9 @@ def test_bug13():
 def test_fewshot():
     from app.templates import PROMPT_MODES
     for k, v in PROMPT_MODES.items():
-        # v4.3.3: punct_local 是本地脚本模式, system 永不发送 LLM, 豁免结构断言
-        if k == "punct_local":
+        # v4.3.3: punct_local / v4.4.2: md_local 是本地脚本模式, system 永不发送
+        # LLM, 豁免结构断言
+        if k in ("punct_local", "md_local"):
             continue
         check(f"Few-shot {k}", "## 示例" in v['system'])
 

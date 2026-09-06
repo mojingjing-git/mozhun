@@ -82,6 +82,7 @@ def compute_prompt_hash(
     punct_fullwidth_alnum: bool = True,
     punct_repeat_compress: bool = False,
     punct_dash_tilde: bool = True,
+    md_strip: bool = False,
 ) -> str:
     """计算 prompt/生成配置指纹 — 断点缓存随配置变化而失效。
 
@@ -100,6 +101,9 @@ def compute_prompt_hash(
         f"|base={api_base}|punct={punct_fix}"
         f"|pq={punct_quote_style}|pa={punct_fullwidth_alnum}"
         f"|pr={punct_repeat_compress}|pd={punct_dash_tilde}"
+        # v4.4.2: md_strip 开关无条件纳入 — 全部旧断点一次性失效 (C2/E16 同语义,
+        # 评审 P2-9: 与其零失效而漏纳, 不如一次失效保证缓存正确)
+        f"|ms={md_strip}"
     ).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()[:16]
 
@@ -238,6 +242,7 @@ class ProjectConfig:
     context_max_chunks: int = 2    # NEW (v3.0+): 跨段上下文取最近几个 chunk
     ui_theme: str = "auto"  # NEW (v4.1.9): 主题三态 (auto/light/dark), Win11 §2.3 个人原则 — 主题持久化
     ui_skin: str = "ink"  # NEW (v4.4.0): 界面皮肤 (fluent=Win11 Fluent 2 / ink=水墨宣纸); v4.4.1 起默认 ink
+    md_strip_before_llm: bool = False  # NEW (v4.4.2): 送 LLM 前先剥离 Markdown 标记 (app/md_strip.py, 零成本)
     punct_fix: bool = True  # NEW (v4.3.3): 发送 LLM 前先本地修复半角标点 (app/punct_fix.py, 零成本)
     # v4.3.4: 标点修复 v2 规则选项 (默认值与 app/punct_fix.py::_DEFAULT_OPTIONS 严格一致)
     punct_quote_style: str = "curly"    # 引号风格: curly=弯“” (推荐) / rect=直角「」 (指北争议项)
@@ -264,6 +269,7 @@ class ProjectConfig:
             "context_max_chunks": self.context_max_chunks,
             "ui_theme": self.ui_theme,
             "ui_skin": self.ui_skin,
+            "md_strip_before_llm": self.md_strip_before_llm,
             "punct_fix": self.punct_fix,
             "punct_quote_style": self.punct_quote_style,
             "punct_fullwidth_alnum": self.punct_fullwidth_alnum,
@@ -291,6 +297,7 @@ class ProjectConfig:
             context_max_chunks=d.get("context_max_chunks", 2),
             ui_theme=d.get("ui_theme") or "auto",
             ui_skin=d.get("ui_skin") or "ink",
+            md_strip_before_llm=bool(d.get("md_strip_before_llm", False)),
             punct_fix=bool(d.get("punct_fix", True)),
             punct_quote_style=d.get("punct_quote_style") or "curly",
             punct_fullwidth_alnum=bool(d.get("punct_fullwidth_alnum", True)),

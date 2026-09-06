@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!--
-  墨准 v4.4.1 前端 (Win11 Fluent 2 完整重构, PLAN-win11-redesign.md)
+  墨准 v4.4.2 前端 (Win11 Fluent 2 完整重构, PLAN-win11-redesign.md)
 
   借鉴自 https://learn.microsoft.com/zh-cn/windows/apps/design/ (Microsoft Terms of Use, 文档非版权材料) - 5 设计原则 + 7 签名体验
   借鉴自 https://fluent2.microsoft.design/ (MIT) 的设计令牌命名
@@ -22,7 +22,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>墨准 v4.4.1</title>
+  <title>墨准 v4.4.2</title>
   <link rel="stylesheet" href="style.css">
   <link rel="icon" type="image/svg+xml" href="icons/app.svg">
 </head>
@@ -61,7 +61,7 @@
         <span class="nav-icon" data-icon="info"></span>
         <span>外观与关于</span>
       </button>
-      <div class="sidebar-footer">v4.4.1</div>
+      <div class="sidebar-footer">v4.4.2</div>
     </nav>
 
     <!-- ========== 校对 (v4.2.0: 一屏一件事 - 只管文件与任务) ========== -->
@@ -211,14 +211,21 @@
           <h2>生成参数</h2>
           <div class="form-row">
             <label>Prompt 模式</label>
-            <select id="cfg-prompt-mode" title="校对 prompt 模式: 严格校对 / 轻度润色 / 仅标点修复 (本地) / 自定义 (在下方填写 prompt)"></select>
+            <select id="cfg-prompt-mode" title="校对 prompt 模式: 严格校对 / 轻度润色 / 仅标点修复 (本地) / 仅 Markdown 清洗 (本地) / 自定义 (在下方填写 prompt)"></select>
+          </div>
+          <div class="form-row checkbox-row">
+            <label class="checkbox-label">
+              <input type="checkbox" id="cfg-md-strip">
+              <span>发送 LLM 前先剥离 Markdown 标记</span>
+            </label>
+            <span class="form-hint">AI 产出的 .md 先转成干净文本再校对/去 AI 味 (#、**、``` 等标记剥除, 代码内容保留; 纯规则脚本, 不消耗 LLM)。选「仅 Markdown 清洗」模式时全程本地、无需配置 API</span>
           </div>
           <div class="form-row checkbox-row">
             <label class="checkbox-label">
               <input type="checkbox" id="cfg-punct-fix">
               <span>发送 LLM 前先本地修复标点</span>
             </label>
-            <span class="form-hint">半角引号→中文成对引号、半角逗号/冒号/问号等→全角 (纯规则脚本, 不消耗 LLM; 数字与纯英文不受影响)。选「仅标点修复」模式时全程本地、无需配置 API</span>
+            <span class="form-hint">半角引号→中文成对引号、半角逗号/冒号/问号等→全角 (纯规则脚本, 不消耗 LLM; 数字与纯英文不受影响)。选「仅标点修复」或「仅 Markdown 清洗」模式时全程本地、无需配置 API</span>
           </div>
           <div class="form-row inline">
             <label>引号风格</label>
@@ -305,7 +312,7 @@
         </section>
         <section class="card">
           <h2>关于</h2>
-          <div class="about-row"><span class="about-label">版本</span><span>v4.4.1 (pywebview)</span></div>
+          <div class="about-row"><span class="about-label">版本</span><span>v4.4.2 (pywebview)</span></div>
           <div class="about-row"><span class="about-label">定位</span><span>本地标点修复 + LLM 批量校对 + 去 AI 味, 支持任意 OpenAI 兼容 API</span></div>
           <div class="about-row"><span class="about-label">运行日志</span><span class="font-mono">~/.proofreader/app.log</span></div>
           <div class="about-row"><span class="about-label">快捷键</span><span>Ctrl+O 添加文件 · Ctrl+Enter 开始校对 · Ctrl+, API 接口 · Ctrl+. 去 AI 味</span></div>

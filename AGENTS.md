@@ -32,7 +32,7 @@ main.py (webview.start)
 - **入口/启动**: `main.py`；统一启动器 `start.py`（智能/exe/dev/check 四模式）+ `启动.bat` 薄包装
 - **GUI/前端**: `web/index.html` / `web/app.js` / `web/style.css` / `web/icons/` / `web/lib/`
 - **Bridge 层**: `app/web_backend.py`（**唯一** 暴露给 JS 的 Python 类）
-- **引擎层**: `app/processor.py`（纯 async，无 GUI 依赖），`app/context_builder.py`（v3.0+），`app/punct_fix.py`（v4.3.3+ 标点规则引擎，纯函数无 IO 无 GUI）
+- **引擎层**: `app/processor.py`（纯 async，无 GUI 依赖），`app/context_builder.py`（v3.0+），`app/punct_fix.py`（v4.3.3+ 标点规则引擎，纯函数无 IO 无 GUI），`app/md_strip.py`（v4.4.2+ Markdown 清洗引擎，同类纯函数）
 - **数据层**: `app/utils.py`（数据模型 + 持久化），`app/templates.py`（Prompt 定义）
 
 ## 关键设计决策
@@ -88,12 +88,15 @@ main.py (webview.start)
 ### v4.4.0 新增（水墨宣纸皮肤: 贴合「墨准」品牌）
 31. **双皮肤 token 轴** (v4.4.0+; v4.4.1 起 **ink 为默认**): `data-skin` (ink 水墨 默认 / fluent 可选) 与 `data-theme` (auto/light/dark) 正交, `ProjectConfig.ui_skin` 持久化, 前端 `applySkin`/`_persistSkin`/`bindSkinSwitcher` 与主题三件套同构; index.html 首帧静态 `data-skin="ink"` 与默认一致 (默认用户零 FOUC, 已存 fluent 的用户首帧闪一次属预期)。ink 用 3 个 `html[data-skin="ink"]` 覆盖块 (浅色分组含 `[data-theme=light]` 档) 镜像 fluent 全部 33 个 token — **漏项会按 per-token 层叠串回 fluent 冷色**, 回归项 `test_v440_ink_skin_css` 按 token 定义计数 ≥7 兜底。层叠两条硬规则: ① ink 深 manual (0,2,1) 必须压过 fluent 手动深块 (0,2,0), ② ink 浅块与 ink 深 media 同特异性靠源序 (浅块在前)。装饰件 (印章/墨晕/楷体) 全部带 skin 守卫且取色走 token; `letter-spacing:0.25em` 为排版相对值豁免。acrylic 原 4 行硬编码 rgba 已令牌化 `--colorAcrylicBg`。新增皮肤时以此为模板: 全 token 镜像 + html 前缀统一 + 计数回归
 
+### v4.4.2 新增（Markdown 清洗: md_local 本地引擎）
+32. **本地清洗通道双引擎** (v4.4.2+): `app/md_strip.py` 与 `punct_fix.py` 同类 — 零 LLM 纯规则变换, 复用 punct_local 全部通路 (模式下拉 / 不建 AsyncOpenAI / 前端跳过 API 校验 / diff / 缓存)。新增模式 `md_local`「仅 Markdown 清洗」**强制整文件不切块** (围栏代码块是跨行状态, 分块会切开围栏) + 可选开关 `md_strip_before_llm` (剥离先于标点修复 — 剥标记后标点的 CJK 邻接上下文才准; 纳入 compute_prompt_hash `|ms=`)。md_strip 四红线: 内容不丢 (例外仅 URL 丢弃+纯标记行删除) / 代码内容保留 (围栏剥壳留内容; 行内代码脏内容整体保留) / 幂等 (非代码区) / 保守 (`__` 下划线强调整类不剥, `__init__` 必误伤; 星号带 ASCII 词边界)。**新增本地引擎时以此为模板**: 模式 PLACEHOLDER 同 punct_local (三个 PROMPT_MODES 遍历测试循环需同步豁免), 空结果兜底回退原文 (防击穿 diff/is_done), 引擎分支端到端测试镜像 `test_punct_fix.py::test_engine_punct_local_mode`
+
 ## 文件命名
 
 ### 主代码
 - 入口: `main.py`；启动器: `start.py`（统一启动器）+ `启动.bat`（双击薄包装）
 - Bridge: `app/web_backend.py`
-- 引擎: `app/processor.py` / `app/punct_fix.py`（v4.3.3+） / `app/context_builder.py` / `app/utils.py` / `app/templates.py` / `app/logger.py`
+- 引擎: `app/processor.py` / `app/punct_fix.py`（v4.3.3+） / `app/md_strip.py`（v4.4.2+） / `app/context_builder.py` / `app/utils.py` / `app/templates.py` / `app/logger.py`
 - 前端: `web/index.html` / `web/app.js` / `web/style.css` / `web/icons/*.svg` / `web/lib/*.js`
 - 打包: `build.spec` / `check_exe.py`（exe 资源校验）/ `dist/墨准.exe`
 - 测试:
@@ -102,6 +105,7 @@ main.py (webview.start)
   - v3.0+ 测试: `test_chunker_presets.py` / `test_chunk_lifecycle.py` / `test_context_builder.py`
   - v4.0+ 测试: `test_web_backend.py`（Bridge API 单元 + 集成测试，**替代** v3.x 的 `test_qasync_smoke.py`）
   - v4.3.3+ 测试: `test_punct_fix.py`（标点规则引擎全规则回归，含跨行降级/不平衡报告/幂等）
+  - v4.4.2+ 测试: `test_md_strip.py`（Markdown 清洗全规则回归，含幂等双跑/围栏保护/引擎 md_local 分支端到端/空结果兜底）
 - 一键跑: `run_all_tests.py`
 - 无 pytest 依赖，纯脚本运行
 
@@ -125,6 +129,9 @@ main.py (webview.start)
 - 规则两档设计 / PATH_RE 掩蔽 / 分号原则: https://github.com/huacnlee/autocorrect (MIT)
 - 引号不平衡检测 / 全角字母数字 q2b: https://github.com/yongzhuo/macro-correct (Apache-2.0)
 - 直角引号争议 / 标点形态规范: https://github.com/sparanoid/chinese-copywriting-guidelines (MIT) + GB/T 15834-2011
+
+Markdown 清洗层（1 项，v4.4.2 新增）：
+- 结构语义 (围栏/强调边界/ATX/表格形态): https://github.com/commonmark/commonmark-spec (CC-BY-SA 4.0, 仅 spec 文本; 规范语义引用, 无文本复制)
 
 ### 文档
 - `README.md` — 用户向文档（特性、快速开始、快捷键、配置、架构）

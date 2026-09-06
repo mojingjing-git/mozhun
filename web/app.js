@@ -100,7 +100,7 @@ const App = {
     this.bindEvents();
     this.startEventLoop();
     this.setView('home');
-    this.appendLog('[就绪] v4.4.1 pywebview 前端已加载');
+    this.appendLog('[就绪] v4.4.2 pywebview 前端已加载');
     // v4.1.7: 加载风格 profile 列表 (异步, 不阻塞 init)
     this.loadStyleProfiles();
     // v4.1.9 (S2.3 个人原则): 恢复持久化主题 (auto/light/dark)
@@ -492,6 +492,11 @@ const App = {
     {
       const cb = document.getElementById('cfg-punct-fix');
       if (cb) cb.checked = this.config.punct_fix !== false;
+    }
+    // v4.4.2: Markdown 剥离开关 (默认 False 字段, 缺失即 False)
+    {
+      const mcb = document.getElementById('cfg-md-strip');
+      if (mcb) mcb.checked = this.config.md_strip_before_llm === true;
     }
     // v4.3.4: 标点修复 v2 规则选项
     {
@@ -1054,7 +1059,8 @@ const App = {
   // 不通过时跳「API 接口」页 + 对话框给行动指引 (可从预设模板一键填入), 返回 false
   _checkStartPrerequisites() {
     // v4.3.3: 「仅标点修复」模式全程本地、不触网 — 跳过 API 配置检查
-    if (this.getVal('cfg-prompt-mode') === 'punct_local') return true;
+    // v4.4.2: 「仅 Markdown 清洗」同款 (md_local 亦为纯本地)
+    if (['punct_local', 'md_local'].includes(this.getVal('cfg-prompt-mode'))) return true;
     const missing = [];
     const apiBase = this.getVal('cfg-api-base');
     // v4.1.8.2 (审计 F20): 空/非法 URL 直接拒绝启动 — 旧版空 api_base 能启动,
@@ -1939,6 +1945,11 @@ const App = {
       punct_fix:          (() => {
         const cb = document.getElementById('cfg-punct-fix');
         return cb ? cb.checked : (this.config.punct_fix !== false);
+      })(),
+      // v4.4.2: Markdown 剥离开关 (默认 False 字段, 元素缺失时回退当前配置)
+      md_strip_before_llm: (() => {
+        const cb = document.getElementById('cfg-md-strip');
+        return cb ? cb.checked : (this.config.md_strip_before_llm === true);
       })(),
       // v4.3.4: 标点修复 v2 规则选项 (checkbox 缺失时回退当前配置)
       punct_quote_style:  this.getVal('cfg-punct-quote-style') || this.config.punct_quote_style || 'curly',

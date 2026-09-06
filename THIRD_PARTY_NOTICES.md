@@ -669,6 +669,19 @@ SOFTWARE.
 - **借鉴方式**: 规范引用 (规则依据), 无代码复制
 - **落点**: app/punct_fix.py 规则表 + 校对参数页文案
 
+## 16. commonmark/commonmark-spec (v4.4.2 新增)
+
+- **URL**: https://github.com/commonmark/commonmark-spec
+- **License**: 仓库 LICENSE 规定 spec.txt 与 CommonMark.dtd 为 **CC-BY-SA 4.0**;
+  参考实现 (cmark / commonmark.js) 为 BSD-2-Clause。本项目仅引用规范语义
+  (围栏/强调边界/ATX 标题/表格形态), 无规范文本复制, 不构成演绎作品,
+  不触发 share-alike 义务; 署名致谢属良好实践
+- **借鉴内容**: Markdown 结构语义的保守子集 — ATX 标题 `#` 后空格边界、
+  围栏代码块剥壳留内容、星号强调 ASCII 词边界 (2*3*4 不作强调)、
+  表格分隔行/数据行形态
+- **借鉴方式**: 规范语义引用 (规则依据), 无代码复制
+- **落点**: app/md_strip.py 规则表
+
 ## 借鉴来源文件头注释约定
 
 为满足 MIT / BSD 协议"在修改文件标注"要求，所有借鉴思路的源文件首部加注释：

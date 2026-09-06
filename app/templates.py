@@ -337,6 +337,9 @@ PROMPT_MODES = {
     # v4.3.3: 仅标点修复 — 纯本地规则 (app/punct_fix.py), engine 走专用分支,
     # system prompt 永不使用 (PLACEHOLDER 由 _stream_single 兜底守卫)
     "punct_local": {"label": "仅标点修复（本地脚本，不调用 LLM）", "system": "PLACEHOLDER"},
+    # v4.4.2: 仅 Markdown 清洗 — 纯本地规则 (app/md_strip.py), 同 punct_local 通路;
+    # AI 产出的 .md / md 格式 txt 转无标记、适宜人类阅读的文章
+    "md_local": {"label": "仅 Markdown 清洗（本地脚本，不调用 LLM）", "system": "PLACEHOLDER"},
     "custom": {"label": "自定义模式", "system": SYSTEM_PROMPT_STRICT},
 }
 

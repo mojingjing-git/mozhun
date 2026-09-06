@@ -60,7 +60,7 @@ def test_utils():
     d = c.to_dict()
     c2 = ProjectConfig.from_dict(d)
     check("ProjectConfig 往返完整", c == c2)
-    check("ProjectConfig 包含所有字段", len(d) == 22)  # ...v4.3.4: + punct 4 规则选项; v4.4.0: + ui_skin
+    check("ProjectConfig 包含所有字段", len(d) == 23)  # ...v4.4.0: + ui_skin; v4.4.2: + md_strip_before_llm
 
     # ProjectConfig 边界值
     c_empty = ProjectConfig()
@@ -152,8 +152,10 @@ def test_templates():
         check(f"模板 {t['name']} 有必需字段", all(k in t for k in ["name", "api_base", "model", "api_key"]))
 
     check("PROMPT_MODES 非空", len(PROMPT_MODES) > 0)
-    # v4.3.3: punct_local 是本地脚本模式, system 永不发送 LLM, 豁免 prompt 结构断言
-    llm_modes = {k: v for k, v in PROMPT_MODES.items() if k != "punct_local"}
+    # v4.3.3: punct_local / v4.4.2: md_local 是本地脚本模式, system 永不发送
+    # LLM, 豁免 prompt 结构断言
+    llm_modes = {k: v for k, v in PROMPT_MODES.items()
+                 if k not in ("punct_local", "md_local")}
     for key, info in llm_modes.items():
         check(f"模式 {key} 有 label", "label" in info)
         check(f"模式 {key} 有 system", "system" in info)
@@ -369,8 +371,8 @@ def test_smoke_prompt_content():
     from app.templates import PROMPT_MODES
 
     for key, info in PROMPT_MODES.items():
-        if key == "punct_local":
-            continue  # v4.3.3: 本地脚本模式, 不走 LLM prompt
+        if key in ("punct_local", "md_local"):
+            continue  # v4.3.3/v4.4.2: 本地脚本模式, 不走 LLM prompt
         prompt = info["system"]
         check(f"{key} prompt 有核心原则", "核心原则" in prompt or "识别并解决" in prompt)
         check(f"{key} prompt 有输出要求", "输出要求" in prompt)

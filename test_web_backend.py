@@ -2547,6 +2547,36 @@ def test_v440_ink_skin_css():
     check("_persistSkin 写 ui_skin", "set_config('ui_skin', value)" in js)
 
 
+def test_v442_md_local_ui():
+    """v4.4.2: Markdown 清洗 — 模式注册 + 前端跳过 API 校验 + 剥离开关 UI + 引擎接线."""
+    print()
+    print("--- v4.4.2: md_local 模式与 UI ---", flush=True)
+    from app.templates import PROMPT_MODES
+    html = (_WEB_DIR / "index.html").read_text(encoding="utf-8")
+    js = _read_app_js()
+    proc = (_WEB_DIR.parent / "app" / "processor.py").read_text(encoding="utf-8")
+
+    # 模式注册 (PLACEHOLDER 同 punct_local — system 永不发送 LLM)
+    info = PROMPT_MODES.get("md_local", {})
+    check("PROMPT_MODES 含 md_local",
+          info.get("label") == "仅 Markdown 清洗（本地脚本，不调用 LLM）")
+    check("md_local system=PLACEHOLDER (永不发送)", info.get("system") == "PLACEHOLDER")
+    # 前端: 本地双模式跳过 API 校验 + 剥离开关读写
+    check("前端本地双模式跳过 API 校验",
+          "['punct_local', 'md_local'].includes(this.getVal('cfg-prompt-mode'))" in js)
+    check("id 唯一: cfg-md-strip", html.count('id="cfg-md-strip"') == 1)
+    check("renderSettings 恢复 md_strip_before_llm", "md_strip_before_llm === true" in js)
+    check("_collectAllConfig 写 md_strip_before_llm", "md_strip_before_llm: (() => {" in js)
+    # 引擎接线: import / md_local 分支 / 双本地模式不建客户端 / 剥离先于标点
+    check("processor 引入 strip_markdown", "from app.md_strip import strip_markdown" in proc)
+    check("processor md_local 分支", 'prompt_mode == "md_local"' in proc)
+    check("双本地模式不建 AsyncOpenAI",
+          'prompt_mode in ("punct_local", "md_local")' in proc)
+    check("剥离先于标点修复 (md_strip_before_llm 块在前)",
+          proc.index("md_strip_before_llm") < proc.index("fix_punctuation_ex(text"))
+    # 引擎分支端到端/幂等/规则全集在 test_md_strip.py (89 项)
+
+
 
 def test_v420_nav_split():
     """v4.2.0: 3 视图 -> 7 视图拆分 (Win11 设置应用式分组导航).
@@ -3100,6 +3130,7 @@ def main():
         test_v431_force_rerun_and_progress,
         test_v440_ui_skin_roundtrip,
         test_v440_ink_skin_css,
+        test_v442_md_local_ui,
     ]
     for t in tests:
         try:

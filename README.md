@@ -1,4 +1,4 @@
-# 墨准 (MoZhun) v4.4.1 (pywebview + 水墨宣纸 / Win11 Fluent)
+# 墨准 (MoZhun) v4.4.2 (pywebview + 水墨宣纸 / Win11 Fluent)
 
 基于 LLM 的批量文本校对工具。**pywebview 6.2.1** 前端 + 原生 Web 设计令牌 + **Win11 Fluent 2 视觉**，支持流式输出、任意 OpenAI 兼容 API，以及**零 LLM 成本的本地标点修复**（v4.3.3+）。
 
@@ -10,6 +10,7 @@
 - **双皮肤 (v4.4.0+)** — 水墨宣纸（默认，贴合墨准：宣纸底 / 玄墨字 / 朱砂印 / 楷体品牌）与 Win11 Fluent，与深浅主题 2×2 自由组合
 - **1px 单线图标 + 暗色模式 (v4.1.8)** — 13 SVG Segoe Fluent Icons 风格；主题 auto / light / dark 三态切换
 - **本地标点修复 (v4.3.3 / v4.3.4)** — 纯规则脚本，**不调用 LLM、零成本、零 API 延迟**：中文引号自动配对（弯/直角两种风格）、省略号/破折号/波浪号归一、全角字母数字折叠、引号不平衡行号报告
+- **Markdown 清洗 (v4.4.2)** — AI 产出的 .md / md 格式 txt 直接丢进来，产出一篇无标记、适宜人类阅读的文章（本地规则引擎 `md_strip`，零成本零延迟）；可选「送 LLM 前剥离 Markdown」让校对/去AI味不再读标记
 - **流式输出** — 边生成边显示，实时预览校对结果
 - **后台线程 + asyncio (v4.0+)** — 主线程跑 pywebview 事件循环，桥接 `window.pywebview.api.xxx`
 - **5 档分块预设 (v3.0+)** — 2000/3000/4000/6000 字 + 整文件模式；**跨段上下文**自动注入前 N 段校对结果
@@ -90,6 +91,7 @@ python main.py       # 或直接开发模式运行
 | 纠错+去流水账 | 针对 AI 生成文本，砍废话、重组结构 |
 | 技术文档校对 | 术语统一、中英文间距、Markdown 格式 |
 | 仅标点修复 (v4.3.3+) | **本地规则脚本，不调用 LLM**：引号配对 + 标点归一，秒级完成 |
+| 仅 Markdown 清洗 (v4.4.2+) | **本地规则脚本，不调用 LLM**：AI 产出的 .md 直接丢进来，产出一篇无标记、适宜人类阅读的文章（代码内容保留，标题/表格/链接剥除） |
 | 自定义 | 完全自定义 Prompt |
 
 ## 本地标点修复 (v4.3.3+)
@@ -195,7 +197,7 @@ python main.py       # 或直接开发模式运行
 ## 开发测试
 
 ```bash
-# 一键跑全部 7 套件（推荐）
+# 一键跑全部 8 套件（推荐）
 python run_all_tests.py
 
 # 或单独跑
@@ -205,10 +207,11 @@ python test_chunker_presets.py
 python test_chunk_lifecycle.py
 python test_context_builder.py
 python test_punct_fix.py
+python test_md_strip.py
 python test_web_backend.py
 ```
 
-当前状态：**7 个套件 1070 / 1070 通过**（v4.4.0）
+当前状态：**8 个套件 1171 / 1171 通过**（v4.4.2）
 
 ## 打包
 

@@ -33,6 +33,7 @@ from app.context_builder import ContextBuilder
 from app.logger import setup_logging
 from app.templates import PROMPT_MODES
 from app.punct_fix import fix_punctuation_ex
+from app.md_strip import strip_markdown
 from app.utils import (
     FileTask,
     FileResult,
@@ -159,6 +160,16 @@ class ProcessingEngine:
                 f"{file_name} 第 {line_no} 行 {detail}: {rep.get('line_text', '')}"
             )
 
+    def _strip_md_guarded(self, text: str, file_name: str) -> str:
+        """v4.4.2: strip_markdown 带空结果兜底 (评审 P2-16) — 纯标记文件
+        (只含 ---/***/分隔行) 产出空文本会击穿 diff 与断点 is_done 语义,
+        空结果回退保留原文并打日志."""
+        stripped = strip_markdown(text)
+        if not stripped.strip() and text.strip():
+            self._log(f"[清洗] {file_name}: Markdown 剥离结果为空, 保留原文")
+            return text
+        return stripped
+
     def _emit(self, cb, *args) -> None:
         """统一回调保护.
 
@@ -241,6 +252,7 @@ class ProcessingEngine:
             punct_fullwidth_alnum=self.config.punct_fullwidth_alnum,
             punct_repeat_compress=self.config.punct_repeat_compress,
             punct_dash_tilde=self.config.punct_dash_tilde,
+            md_strip=self.config.md_strip_before_llm,
         )
 
         for fp in file_paths:
@@ -283,11 +295,17 @@ class ProcessingEngine:
             # v4.3.3 (评审 E-1): 「仅标点修复」模式不在预处理阶段修 — 原文保持
             # 原始状态, 修复发生在 _call_api_stream 本地分支, 否则 corrected ==
             # original, 结果对比页 diff 完全为空 (无法审计改了什么)
-            if self.config.punct_fix and self.config.prompt_mode != "punct_local":
-                text, punct_stats = fix_punctuation_ex(text, self._punct_options())
-                if punct_stats["total"]:
-                    self._log(f"[标点] {fp.name}: 本地修复 {punct_stats['total']} 处半角标点")
-                self._collect_punct_reports(fp.name, punct_stats)
+            # v4.4.2: Markdown 剥离 (可选开关) 先于标点修复 — 剥掉 **/# 等标记后
+            # 标点规则的 CJK 邻接上下文才准确; 本地双模式 (punct_local/md_local)
+            # 跳过全部预处理 (E-1 同款: 原文作 diff 基线, 修复在本地分支发生)
+            if self.config.prompt_mode not in ("punct_local", "md_local"):
+                if self.config.md_strip_before_llm:
+                    text = self._strip_md_guarded(text, fp.name)
+                if self.config.punct_fix:
+                    text, punct_stats = fix_punctuation_ex(text, self._punct_options())
+                    if punct_stats["total"]:
+                        self._log(f"[标点] {fp.name}: 本地修复 {punct_stats['total']} 处半角标点")
+                    self._collect_punct_reports(fp.name, punct_stats)
             task = FileTask(file_path=fp, original_text=text)
             self.tasks[key] = task
             self._log(f"[就绪] {fp.name}: {len(text)} 字符")
@@ -326,7 +344,8 @@ class ProcessingEngine:
             return
 
         # v4.3.3: 仅标点修复模式全程不触网 — 不建 AsyncOpenAI (空 api_key 会抛错)
-        if self.config.prompt_mode == "punct_local":
+        # v4.4.2: 仅 Markdown 清洗模式同款 (md_local 亦为纯本地)
+        if self.config.prompt_mode in ("punct_local", "md_local"):
             self._client = None
         else:
             self._client = AsyncOpenAI(
@@ -839,6 +858,25 @@ class ProcessingEngine:
 
         返回 (full_corrected, total_tokens, chunks_results)
         """
+        # v4.4.2: 仅 Markdown 清洗模式 — 纯本地规则 (app/md_strip.py), 不调用 LLM.
+        # 整文件处理 (不切块): 围栏代码块是跨行状态, 分块可能把围栏切开 (评审 P1-6);
+        # strip 为纯 regex 无调用限制, 整文件对任意体量都安全. 标点修复开关在此
+        # 链式生效 (皆本地零成本, 选项不静默失效; md 先剥标记, 标点上下文更准).
+        if self.config.prompt_mode == "md_local":
+            cleaned = strip_markdown(text)
+            if self.config.punct_fix:
+                cleaned, punct_stats = fix_punctuation_ex(cleaned, self._punct_options())
+                if punct_stats["total"]:
+                    self._log(f"[标点] 本地修复 {punct_stats['total']} 处半角标点")
+                    name = self.tasks[task_key].file_path.name if task_key in self.tasks else task_key
+                    self._collect_punct_reports(name, punct_stats)
+            # 空结果兜底 (评审 P2-16): 纯标记文件产出空文本会击穿 diff/is_done
+            if not cleaned.strip() and text.strip():
+                cleaned = text
+                self._log("[清洗] Markdown 剥离结果为空, 保留原文")
+            self._log("[清洗] Markdown 清洗完成 (整文件, 未调用 LLM)")
+            return cleaned, 0, [FileResult(original=text, corrected=cleaned)]
+
         # Phase 1: 按 chunking 预设决定 max_chars
         preset = self.config.chunking_preset or DEFAULT_CHUNK_PRESET
         if preset not in _CHUNK_PRESETS:
