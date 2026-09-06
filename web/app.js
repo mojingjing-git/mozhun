@@ -100,13 +100,13 @@ const App = {
     this.bindEvents();
     this.startEventLoop();
     this.setView('home');
-    this.appendLog('[就绪] v4.4.0 pywebview 前端已加载');
+    this.appendLog('[就绪] v4.4.1 pywebview 前端已加载');
     // v4.1.7: 加载风格 profile 列表 (异步, 不阻塞 init)
     this.loadStyleProfiles();
     // v4.1.9 (S2.3 个人原则): 恢复持久化主题 (auto/light/dark)
     this.applyTheme(this.config.ui_theme || 'auto');
-    // v4.4.0: 恢复持久化界面皮肤 (fluent / ink 水墨) — 与主题轴正交
-    this.applySkin(this.config.ui_skin || 'fluent');
+    // v4.4.0: 恢复持久化界面皮肤 (fluent / ink 水墨) — 与主题轴正交; v4.4.1 起默认 ink
+    this.applySkin(this.config.ui_skin || 'ink');
   },
 
   // ====== 视图切换 ======

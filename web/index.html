@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!--
-  墨准 v4.4.0 前端 (Win11 Fluent 2 完整重构, PLAN-win11-redesign.md)
+  墨准 v4.4.1 前端 (Win11 Fluent 2 完整重构, PLAN-win11-redesign.md)
 
   借鉴自 https://learn.microsoft.com/zh-cn/windows/apps/design/ (Microsoft Terms of Use, 文档非版权材料) - 5 设计原则 + 7 签名体验
   借鉴自 https://fluent2.microsoft.design/ (MIT) 的设计令牌命名
@@ -18,11 +18,11 @@
   6. 可访问性: diff 加 border-left 形状标记(色盲补救), 11px -> 12px 字号修正, F5/F6/F7 修补
   7. type ramp 应用: type-caption/body/body-strong/body-large/subtitle/title 等
 -->
-<html lang="zh-CN" data-theme="auto">
+<html lang="zh-CN" data-theme="auto" data-skin="ink">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>墨准 v4.4.0</title>
+  <title>墨准 v4.4.1</title>
   <link rel="stylesheet" href="style.css">
   <link rel="icon" type="image/svg+xml" href="icons/app.svg">
 </head>
@@ -61,7 +61,7 @@
         <span class="nav-icon" data-icon="info"></span>
         <span>外观与关于</span>
       </button>
-      <div class="sidebar-footer">v4.4.0</div>
+      <div class="sidebar-footer">v4.4.1</div>
     </nav>
 
     <!-- ========== 校对 (v4.2.0: 一屏一件事 - 只管文件与任务) ========== -->
@@ -297,15 +297,15 @@
           <div class="form-row">
             <label>界面风格 (与深浅主题自由组合)</label>
             <div class="theme-switcher" id="skin-switcher" role="tablist" aria-label="界面风格切换">
-              <button type="button" data-skin-value="fluent" class="active" role="tab" aria-selected="true" title="标准 Win11 Fluent 2 风格">Win11 Fluent</button>
-              <button type="button" data-skin-value="ink" role="tab" aria-selected="false" title="水墨宣纸风: 宣纸底 / 玄墨字 / 朱砂印, 贴合「墨准」主题">水墨宣纸</button>
+              <button type="button" data-skin-value="fluent" role="tab" aria-selected="false" title="标准 Win11 Fluent 2 风格">Win11 Fluent</button>
+              <button type="button" data-skin-value="ink" class="active" role="tab" aria-selected="true" title="水墨宣纸风: 宣纸底 / 玄墨字 / 朱砂印, 贴合「墨准」主题 (默认)">水墨宣纸</button>
             </div>
             <span class="form-hint">风格会自动保存, 重启后保持</span>
           </div>
         </section>
         <section class="card">
           <h2>关于</h2>
-          <div class="about-row"><span class="about-label">版本</span><span>v4.4.0 (pywebview)</span></div>
+          <div class="about-row"><span class="about-label">版本</span><span>v4.4.1 (pywebview)</span></div>
           <div class="about-row"><span class="about-label">定位</span><span>本地标点修复 + LLM 批量校对 + 去 AI 味, 支持任意 OpenAI 兼容 API</span></div>
           <div class="about-row"><span class="about-label">运行日志</span><span class="font-mono">~/.proofreader/app.log</span></div>
           <div class="about-row"><span class="about-label">快捷键</span><span>Ctrl+O 添加文件 · Ctrl+Enter 开始校对 · Ctrl+, API 接口 · Ctrl+. 去 AI 味</span></div>

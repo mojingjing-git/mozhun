@@ -2426,25 +2426,25 @@ def test_v419_ui_theme_roundtrip():
 
 
 def test_v440_ui_skin_roundtrip():
-    """v4.4.0: ui_skin 界面皮肤字段 — 默认 fluent + 往返一致 + 旧配置兼容 + set_config 可写."""
+    """v4.4.0: ui_skin 界面皮肤字段 — v4.4.1 起默认 ink + 往返一致 + 旧配置兼容 + set_config 可写."""
     print()
     print("--- v4.4.0: ui_skin 往返 ---", flush=True)
     from app.utils import ProjectConfig
     cfg = ProjectConfig()
-    check("ui_skin 默认 fluent", cfg.ui_skin == "fluent")
-    cfg.ui_skin = "ink"
+    check("ui_skin 默认 ink (v4.4.1)", cfg.ui_skin == "ink")
+    cfg.ui_skin = "fluent"
     d = cfg.to_dict()
-    check("to_dict 含 ui_skin", d.get("ui_skin") == "ink")
+    check("to_dict 含 ui_skin", d.get("ui_skin") == "fluent")
     cfg2 = ProjectConfig.from_dict(d)
-    check("from_dict 还原 ink", cfg2.ui_skin == "ink")
-    # 旧配置 (v4.3.5 以前) 无 ui_skin 字段 -> 默认 fluent
+    check("from_dict 还原 fluent", cfg2.ui_skin == "fluent")
+    # 旧配置 (v4.3.5 以前) 无 ui_skin 字段 -> 跟随新默认 ink
     cfg3 = ProjectConfig.from_dict({k: v for k, v in d.items() if k != "ui_skin"})
-    check("旧配置兼容 (缺字段 -> fluent)", cfg3.ui_skin == "fluent")
-    # bridge set_config 可写
+    check("旧配置兼容 (缺字段 -> ink)", cfg3.ui_skin == "ink")
+    # bridge set_config 可写 (写非默认值)
     from app.web_backend import Backend
     b = Backend(window=None)
-    r = b.set_config("ui_skin", "ink")
-    check("set_config 可写 ui_skin", r.get("ok") is True and b._config.ui_skin == "ink")
+    r = b.set_config("ui_skin", "fluent")
+    check("set_config 可写 ui_skin", r.get("ok") is True and b._config.ui_skin == "fluent")
 
 
 def test_v440_ink_skin_css():
@@ -2537,9 +2537,12 @@ def test_v440_ink_skin_css():
     check("id 唯一: skin-switcher", html.count('id="skin-switcher"') == 1)
     check("皮肤按钮 data-skin-value 齐全",
           'data-skin-value="fluent"' in html and 'data-skin-value="ink"' in html)
+    # v4.4.1: 默认皮肤 ink — 首帧静态属性 (默认用户无 FOUC) + 切换器默认选中 ink
+    check("index.html 首帧静态 data-skin=ink", 'data-skin="ink"' in html)
+    check("切换器默认 active=ink", '<button type="button" data-skin-value="ink" class="active"' in html)
+    check("init 回退值为 ink", "this.applySkin(this.config.ui_skin || 'ink')" in js)
     for fn in ("applySkin(value) {", "_persistSkin(value) {", "bindSkinSwitcher() {"):
         check(f"JS 方法存在: {fn[:-2]}", fn in js)
-    check("init 恢复 ui_skin", "this.applySkin(this.config.ui_skin || 'fluent')" in js)
     check("bindEvents 挂载 bindSkinSwitcher", "this.bindSkinSwitcher();" in js)
     check("_persistSkin 写 ui_skin", "set_config('ui_skin', value)" in js)
 

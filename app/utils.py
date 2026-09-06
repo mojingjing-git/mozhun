@@ -237,7 +237,7 @@ class ProjectConfig:
     context_max_chars: int = 800   # NEW (v3.0+): 跨段上下文最大字符数
     context_max_chunks: int = 2    # NEW (v3.0+): 跨段上下文取最近几个 chunk
     ui_theme: str = "auto"  # NEW (v4.1.9): 主题三态 (auto/light/dark), Win11 §2.3 个人原则 — 主题持久化
-    ui_skin: str = "fluent"  # NEW (v4.4.0): 界面皮肤 (fluent=Win11 Fluent 2 / ink=水墨宣纸), 与主题轴正交
+    ui_skin: str = "ink"  # NEW (v4.4.0): 界面皮肤 (fluent=Win11 Fluent 2 / ink=水墨宣纸); v4.4.1 起默认 ink
     punct_fix: bool = True  # NEW (v4.3.3): 发送 LLM 前先本地修复半角标点 (app/punct_fix.py, 零成本)
     # v4.3.4: 标点修复 v2 规则选项 (默认值与 app/punct_fix.py::_DEFAULT_OPTIONS 严格一致)
     punct_quote_style: str = "curly"    # 引号风格: curly=弯“” (推荐) / rect=直角「」 (指北争议项)
@@ -290,7 +290,7 @@ class ProjectConfig:
             context_max_chars=d.get("context_max_chars", 800),
             context_max_chunks=d.get("context_max_chunks", 2),
             ui_theme=d.get("ui_theme") or "auto",
-            ui_skin=d.get("ui_skin") or "fluent",
+            ui_skin=d.get("ui_skin") or "ink",
             punct_fix=bool(d.get("punct_fix", True)),
             punct_quote_style=d.get("punct_quote_style") or "curly",
             punct_fullwidth_alnum=bool(d.get("punct_fullwidth_alnum", True)),

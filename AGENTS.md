@@ -86,7 +86,7 @@ main.py (webview.start)
 30. **标点修复 v2 调研吸收** (v4.3.4+): 省略号权重法 (…=3, ≥3 归一 `……`, GB/T 吞尾 `。`)、撇号三分类 (缩略/属格 → `’` 字形不参配对)、全角字母数字折叠 (macro-correct q2b)、逗号低危档 (autocorrect 两档)、破折号/波浪补齐、直角引号风格开关 (「」/『』嵌套)、引号不平衡检测 (只报不改)。选项 4 字段入 ProjectConfig 且全部纳入 `compute_prompt_hash` 缓存指纹; `fix_punctuation_ex` 返回 `{total, imbalance}`, `fix_punctuation` 旧签名兼容
 
 ### v4.4.0 新增（水墨宣纸皮肤: 贴合「墨准」品牌）
-31. **双皮肤 token 轴** (v4.4.0+): `data-skin` (fluent 默认 / ink 水墨) 与 `data-theme` (auto/light/dark) 正交, `ProjectConfig.ui_skin` 持久化, 前端 `applySkin`/`_persistSkin`/`bindSkinSwitcher` 与主题三件套同构。ink 用 3 个 `html[data-skin="ink"]` 覆盖块 (浅色分组含 `[data-theme=light]` 档) 镜像 fluent 全部 33 个 token — **漏项会按 per-token 层叠串回 fluent 冷色**, 回归项 `test_v440_ink_skin_css` 按 token 定义计数 ≥7 兜底。层叠两条硬规则: ① ink 深 manual (0,2,1) 必须压过 fluent 手动深块 (0,2,0), ② ink 浅块与 ink 深 media 同特异性靠源序 (浅块在前)。装饰件 (印章/墨晕/楷体) 全部带 skin 守卫且取色走 token; `letter-spacing:0.25em` 为排版相对值豁免。acrylic 原 4 行硬编码 rgba 已令牌化 `--colorAcrylicBg`。新增皮肤时以此为模板: 全 token 镜像 + html 前缀统一 + 计数回归
+31. **双皮肤 token 轴** (v4.4.0+; v4.4.1 起 **ink 为默认**): `data-skin` (ink 水墨 默认 / fluent 可选) 与 `data-theme` (auto/light/dark) 正交, `ProjectConfig.ui_skin` 持久化, 前端 `applySkin`/`_persistSkin`/`bindSkinSwitcher` 与主题三件套同构; index.html 首帧静态 `data-skin="ink"` 与默认一致 (默认用户零 FOUC, 已存 fluent 的用户首帧闪一次属预期)。ink 用 3 个 `html[data-skin="ink"]` 覆盖块 (浅色分组含 `[data-theme=light]` 档) 镜像 fluent 全部 33 个 token — **漏项会按 per-token 层叠串回 fluent 冷色**, 回归项 `test_v440_ink_skin_css` 按 token 定义计数 ≥7 兜底。层叠两条硬规则: ① ink 深 manual (0,2,1) 必须压过 fluent 手动深块 (0,2,0), ② ink 浅块与 ink 深 media 同特异性靠源序 (浅块在前)。装饰件 (印章/墨晕/楷体) 全部带 skin 守卫且取色走 token; `letter-spacing:0.25em` 为排版相对值豁免。acrylic 原 4 行硬编码 rgba 已令牌化 `--colorAcrylicBg`。新增皮肤时以此为模板: 全 token 镜像 + html 前缀统一 + 计数回归
 
 ## 文件命名
 
