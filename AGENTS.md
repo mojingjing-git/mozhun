@@ -14,9 +14,9 @@
 main.py (webview.start)
 ├── webview.create_window(js_api=Backend)
 │   └── 加载 web/index.html (7 视图 SPA: 校对/结果对比/去AI味/风格库/API接口/校对参数/外观关于)
-│       ├── 主页视图    (文件列表 / 进度 / diff / 流式)
-│       ├── 设置视图    (API / Prompt / chunking 5 档)
-│       └── 去AI味视图  (3 步工作流)
+│       ├── 校对/结果对比  (文件列表 / 进度 / diff / 流式)
+│       ├── 去AI味/风格库  (3 步工作流 + Step 0 Profile 管理)
+│       └── API接口/校对参数/外观关于  (.content-narrow 窄栏设置组)
 └── Backend (app/web_backend.py)
     ├── window.pywebview.api.xxx ← JS 调用入口
     ├── 校对任务: threading.Thread + asyncio.new_event_loop
@@ -25,13 +25,14 @@ main.py (webview.start)
     │   ├── ContextBuilder (跨段 prefix 注入)
     │   └── _stream_single() × N chunks (串行)
     ├── DeAI 3 步工作流 (Phase 3): 独立 AsyncOpenAI + 流式推送
+    ├── 标点修复 (v4.3.3+): prepare_tasks 前置 fix_punctuation_ex / punct_local 模式零 LLM
     └── _push() 50ms 节流: window.evaluate_js 推送到前端
 ```
 
-- **入口/启动**: `main.py`
+- **入口/启动**: `main.py`；统一启动器 `start.py`（智能/exe/dev/check 四模式）+ `启动.bat` 薄包装
 - **GUI/前端**: `web/index.html` / `web/app.js` / `web/style.css` / `web/icons/` / `web/lib/`
 - **Bridge 层**: `app/web_backend.py`（**唯一** 暴露给 JS 的 Python 类）
-- **引擎层**: `app/processor.py`（纯 async，无 GUI 依赖），`app/context_builder.py`（v3.0+）
+- **引擎层**: `app/processor.py`（纯 async，无 GUI 依赖），`app/context_builder.py`（v3.0+），`app/punct_fix.py`（v4.3.3+ 标点规则引擎，纯函数无 IO 无 GUI）
 - **数据层**: `app/utils.py`（数据模型 + 持久化），`app/templates.py`（Prompt 定义）
 
 ## 关键设计决策
@@ -76,20 +77,28 @@ main.py (webview.start)
 ### v4.3.0 新增（DeAI 长文本: 分块/取消/降级推送 + 拖入）
 26. **DeAI 分块与降级推送** (v4.3.0+): `split_text` 单点在 utils (校对/DeAI 共用); `_deai_run` 按分块预设切块, rewrite 纯拼接 + 块间衔接, whole_file 超 2 万字兜底回退 large; partial 超 5 万字只推尾部预览, 完整结果落盘 `deai_results/`, 复制/导出/step3 引用走后端直读 (`deai_copy_result`/`deai_save_result`/`source_task_id`), 全文不过 IPC; 取消用 `cancelled:true` 结构化 payload 与失败区分, 语义同校对 (丢弃重跑)
 
+### v4.3.1 / v4.3.2 新增（UX 直觉批次 + API 预设重写）
+27. **UX 直觉性修复批次** (v4.3.1+): 全局 toast 替代静默失败、错误信息人性化 (`_humanizeError`)、结果缓存 + **强制重跑** (`start_proofread(force_rerun)`, 缓存命中返回 `cached_files`)、活动感知 watchdog、风格库列表/删除/查看补全、连接测试内联反馈
+28. **API 预设 10 项 + Model 单框** (v4.3.2+): 预设清单按用户指定 10 项重写 (接入地址逐一查证); 语义约定 **model 留空 = 服务端模型名动态** (提示 ⟳ 拉取), **api_key 留空 = 必须用户自填** (不预填占位); Model 输入框 + 原生 datalist 合一 (移除拉取后出现的第二个下拉)
+
+### v4.3.3 / v4.3.4 新增（本地标点修复规则引擎）
+29. **标点修复 v1 红线** (v4.3.3+): 纯规则脚本零 LLM 成本。四条红线 — 只动中文上下文 (纯英文行不动) / 引号只做成对修复 (落单保守跳过 + 行号报告, 不臆造) / 只做低危转换 (分号永不转换, URL/邮箱掩蔽免疫) / 幂等。`punct_local` 校对模式完全不调 API, 原文作 diff 基线
+30. **标点修复 v2 调研吸收** (v4.3.4+): 省略号权重法 (…=3, ≥3 归一 `……`, GB/T 吞尾 `。`)、撇号三分类 (缩略/属格 → `’` 字形不参配对)、全角字母数字折叠 (macro-correct q2b)、逗号低危档 (autocorrect 两档)、破折号/波浪补齐、直角引号风格开关 (「」/『』嵌套)、引号不平衡检测 (只报不改)。选项 4 字段入 ProjectConfig 且全部纳入 `compute_prompt_hash` 缓存指纹; `fix_punctuation_ex` 返回 `{total, imbalance}`, `fix_punctuation` 旧签名兼容
+
 ## 文件命名
 
 ### 主代码
-- 入口: `main.py`
+- 入口: `main.py`；启动器: `start.py`（统一启动器）+ `启动.bat`（双击薄包装）
 - Bridge: `app/web_backend.py`
-- 引擎: `app/processor.py` / `app/context_builder.py` / `app/utils.py` / `app/templates.py` / `app/logger.py`
+- 引擎: `app/processor.py` / `app/punct_fix.py`（v4.3.3+） / `app/context_builder.py` / `app/utils.py` / `app/templates.py` / `app/logger.py`
 - 前端: `web/index.html` / `web/app.js` / `web/style.css` / `web/icons/*.svg` / `web/lib/*.js`
-- 打包: `build.spec` / `dist/新时代校对大师.exe`
+- 打包: `build.spec` / `check_exe.py`（exe 资源校验）/ `dist/新时代校对大师.exe`
 - 测试:
   - `test_bugs.py`（回归测试）
   - `test_components.py`（组件 + 冒烟测试）
   - v3.0+ 测试: `test_chunker_presets.py` / `test_chunk_lifecycle.py` / `test_context_builder.py`
   - v4.0+ 测试: `test_web_backend.py`（Bridge API 单元 + 集成测试，**替代** v3.x 的 `test_qasync_smoke.py`）
-  - v4.1.7+ 测试: 12 个新 check 已加到 `test_web_backend.py` (无新文件)
+  - v4.3.3+ 测试: `test_punct_fix.py`（标点规则引擎全规则回归，含跨行降级/不平衡报告/幂等）
 - 一键跑: `run_all_tests.py`
 - 无 pytest 依赖，纯脚本运行
 
@@ -108,14 +117,21 @@ main.py (webview.start)
 - 设计令牌: https://fluent2.microsoft.design/ (MIT)
 - SVG 图标: https://github.com/microsoft/fluentui-system-icons (MIT)
 
+标点修复层（4 项，v4.3.4 新增）：
+- 省略号归一: https://github.com/woct0rdho/typeset (MIT)
+- 规则两档设计 / PATH_RE 掩蔽 / 分号原则: https://github.com/huacnlee/autocorrect (MIT)
+- 引号不平衡检测 / 全角字母数字 q2b: https://github.com/yongzhuo/macro-correct (Apache-2.0)
+- 直角引号争议 / 标点形态规范: https://github.com/sparanoid/chinese-copywriting-guidelines (MIT) + GB/T 15834-2011
+
 ### 文档
 - `README.md` — 用户向文档（特性、快速开始、快捷键、配置、架构）
 - `AGENTS.md` — 本文件（开发约定）
 - `PLAN-chunking.md` — v3.0 升级 plan（已完成）
 - `PLAN-pywebview.md` — v4.0 升级 plan（已完成）
 - `CHANGELOG.md` — 版本日志
-- `THIRD_PARTY_NOTICES.md` — 借鉴来源 + LICENSE 全文 (v4.1.7 §9 加 jianshuo/claude-skills)
+- `THIRD_PARTY_NOTICES.md` — 借鉴来源 + LICENSE 全文 (§12-15: typeset/autocorrect/macro-correct/排版指北)
 - `PLAN-distill-style.md` — v4.1.7 蒸馏文风升级 plan
+- `PLAN-win11-redesign.md` / `PLAN-v4.1.5-ui-redesign.md` — 前端重构 plan（完成态存档）
 
 ## import 顺序约定
 
@@ -138,7 +154,7 @@ from openai import AsyncOpenAI  # LLM
 - 不要引入 PyQt6 / PyQt5 / PySide2（已统一到 pywebview）
 - 不要引入 qfluentwidgets / qasync（不支持 Python 3.13 / 已被 threading 替代）
 - 不要引入 React / Vue / Tailwind（v4.0 零构建工具原则，违反会破坏 `python main.py` 直开）
-- 不要在 `processor.py` / `context_builder.py` / `utils.py` / `templates.py` 中引入任何 GUI 依赖（v3.0 原则，v4.0 延续）
+- 不要在 `processor.py` / `context_builder.py` / `punct_fix.py` / `utils.py` / `templates.py` 中引入任何 GUI 依赖（v3.0 原则，v4.0 延续）
 - 不要在 `web_backend.py` 中 `await`（v4.0 改成 sync bridge，async 通过 `asyncio.run_coroutine_threadsafe` 跨线程跑）
 - 不要引入 chunk overlap（>0），校对场景下重叠区会被改两次
 - 不要在 `load_checkpoint` 中返回 CANCELLED 状态的断点（强制重跑）
@@ -147,6 +163,7 @@ from openai import AsyncOpenAI  # LLM
 - 不要在 `app/style_profiles/` 硬编码具体真人作家名或 jianshuo 仓库真迹链接（抽象化预置 + 致谢在 THIRD_PARTY_NOTICES）
 - 不要从借鉴项目复制代码（仅借鉴思路，所有代码自写并加注释；完整 LICENSE 在 `THIRD_PARTY_NOTICES.md`）
 - 不要在 `.btn-*` / `.card` / `.deai-step` / `.nav-item` 等组件上硬编码颜色/间距/圆角/字号（v4.1.8 token 体系, 全部走 `--colorNeutral*` / `--colorBrand*` / `--space-*` / `--controlCornerRadius` / `--fontSize*` token, 改 token 即可全站调整）
+- 不要放宽 `punct_fix.py` 的四条红线（纯英文上下文不动 / 落单引号只报不改 / 分号不转换 / 幂等）——调研结论是我们比同类项目更保守才安全的，放宽会引入不可逆误伤
 
 ## 借鉴合规要求（MIT / BSD / Apache-2.0 协议）
 
