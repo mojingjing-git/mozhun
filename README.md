@@ -1,4 +1,4 @@
-# 墨准 (MoZhun) v4.3.5 (pywebview + Win11 Fluent 2)
+# 墨准 (MoZhun) v4.4.0 (pywebview + Win11 Fluent 2)
 
 基于 LLM 的批量文本校对工具。**pywebview 6.2.1** 前端 + 原生 Web 设计令牌 + **Win11 Fluent 2 视觉**，支持流式输出、任意 OpenAI 兼容 API，以及**零 LLM 成本的本地标点修复**（v4.3.3+）。
 
@@ -207,7 +207,7 @@ python test_punct_fix.py
 python test_web_backend.py
 ```
 
-当前状态：**7 个套件 1012 / 1012 通过**（v4.3.5）
+当前状态：**7 个套件 1070 / 1070 通过**（v4.4.0）
 
 ## 打包
 

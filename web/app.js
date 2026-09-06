@@ -100,11 +100,13 @@ const App = {
     this.bindEvents();
     this.startEventLoop();
     this.setView('home');
-    this.appendLog('[就绪] v4.3.5 pywebview 前端已加载');
+    this.appendLog('[就绪] v4.4.0 pywebview 前端已加载');
     // v4.1.7: 加载风格 profile 列表 (异步, 不阻塞 init)
     this.loadStyleProfiles();
     // v4.1.9 (S2.3 个人原则): 恢复持久化主题 (auto/light/dark)
     this.applyTheme(this.config.ui_theme || 'auto');
+    // v4.4.0: 恢复持久化界面皮肤 (fluent / ink 水墨) — 与主题轴正交
+    this.applySkin(this.config.ui_skin || 'fluent');
   },
 
   // ====== 视图切换 ======
@@ -145,6 +147,38 @@ const App = {
       window.pywebview.api.set_config('ui_theme', value)
         .then(() => window.pywebview.api.save_config())
         .catch(e => console.error('主题持久化失败:', e));
+    } catch (e) { /* pywebview 未就绪, 静默 */ }
+  },
+
+  // ====== 界面皮肤 (v4.4.0: fluent=Win11 Fluent 2 / ink=水墨宣纸) ======
+  // 与主题轴 (auto/light/dark) 正交: data-skin 与 data-theme 独立写 documentElement,
+  // CSS 层叠见 style.css「水墨皮肤」段的特异性验算注释
+  applySkin(value) {
+    if (value === 'ink') {
+      document.documentElement.dataset.skin = 'ink';
+    } else {
+      value = 'fluent';
+      delete document.documentElement.dataset.skin;
+    }
+    // 同步设置页按钮 active / aria-selected (与 theme-switcher 同构)
+    const switcher = document.getElementById('skin-switcher');
+    if (switcher) {
+      const buttons = switcher.querySelectorAll('button[data-skin-value]');
+      buttons.forEach(b => {
+        const isActive = b.dataset.skinValue === value;
+        b.classList.toggle('active', isActive);
+        b.setAttribute('aria-selected', isActive ? 'true' : 'false');
+      });
+    }
+  },
+
+  // 持久化皮肤 (切换时调用): 写 config + 落盘, 重启后恢复
+  _persistSkin(value) {
+    if (!(window.pywebview && window.pywebview.api)) return;
+    try {
+      window.pywebview.api.set_config('ui_skin', value)
+        .then(() => window.pywebview.api.save_config())
+        .catch(e => console.error('皮肤持久化失败:', e));
     } catch (e) { /* pywebview 未就绪, 静默 */ }
   },
 
@@ -599,6 +633,7 @@ const App = {
 
     // v4.1.8: 主题切换 (Win11 §3.1.1 暗色模式 + §2.3 个人原则)
     this.bindThemeSwitcher();
+    this.bindSkinSwitcher();
 
     // URL 校验 + 防抖
     const urlInput = document.getElementById('cfg-api-base');
@@ -765,6 +800,23 @@ const App = {
         this.appendLog(`[主题] 已切换到: ${value} (已保存)`);
         // v4.3.1 (UX #2): 外观页无日志区, toast 确认已切换并落盘
         this.showToast('主题已切换并保存', 'info');
+      });
+    });
+  },
+
+  // v4.4.0: 界面皮肤切换 (fluent / ink 水墨) — 模式镜像 bindThemeSwitcher
+  bindSkinSwitcher() {
+    const switcher = document.getElementById('skin-switcher');
+    if (!switcher) return;
+    const buttons = switcher.querySelectorAll('button[data-skin-value]');
+    buttons.forEach(btn => {
+      btn.addEventListener('click', () => {
+        const value = btn.dataset.skinValue;  // fluent / ink
+        this.applySkin(value);
+        this._persistSkin(value);
+        this.appendLog(`[风格] 已切换到: ${value === 'ink' ? '水墨宣纸' : 'Win11 Fluent'} (已保存)`);
+        // 外观页无日志区, toast 确认已切换并落盘 (同 v4.3.1 UX #2)
+        this.showToast('风格已切换并保存', 'info');
       });
     });
   },

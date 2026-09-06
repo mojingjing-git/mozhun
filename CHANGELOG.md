@@ -1,5 +1,29 @@
 # Changelog
 
+## v4.4.0 (2026-09-06) — 新增「水墨宣纸」皮肤 (贴合墨准品牌)
+
+**修订版**: 实施前 1 轮 agent 评审 (3×P1 全吸收: token 全集清单/acrylic 令牌化/验证矩阵补系统深色路径). 加皮肤不换框架, Win11 Fluent 2 保留为默认.
+
+### ✨ 皮肤轴 (fluent / ink)
+- **水墨宣纸 (ink)**: 浅=宣纸底 #F7F3E9 + 焦墨 accent + 朱砂印; 深=玄墨底 #191612 + 宣纸白正文 + 阳文反转 accent (纸底墨字, 如钤白文印); 全部 33 token 重新定义, 对比度验算 ≥4.5:1 并入回归
+- **2×2 自由组合**: 皮肤 (fluent/ink) × 深浅 (auto/light/dark) 两轴正交, 层叠特异性逐格验算 (ink 深 manual (0,2,1) 压过 fluent 手动深块; ink 浅/深 media 同特异性靠源序)
+- **主题内装饰**: 侧栏品牌「墨准」楷体 + 0.25em 疏排 + 朱砂方印「印」(取色全走 token); 页标题楷体; body 两团墨晕 (新 --skin-halo-1/2); 圆角放宽 6/10/3px; 暖墨低扩散阴影
+- **brand 字体**: 新 --fontFamilyBrand (KaiTi → STKaiti → Noto Serif SC → serif, 系统字体零打包)
+
+### 🔧 工程化
+- ProjectConfig 新字段 `ui_skin` (默认 fluent, 旧配置兼容), 随 set_config/save_config 落盘; 外观与关于页新增「界面风格」切换器 (复用 .theme-switcher 样式)
+- **acrylic 4 处硬编码 rgba 令牌化** `--colorAcrylicBg` (fluent 4 块 + ink 3 块), 皮肤/主题双轴可调
+- CSS 层叠回归项 `test_v440_ink_skin_css`: 3 块选择器/统一 html 前缀/源序/27+3 token 定义计数 ≥7/装饰守卫/对比度验算
+
+### 测试
+- 7 套件 **1070/0** 全绿 (v4.3.5 基线 1012 → +58: `test_v440_ui_skin_roundtrip` 5 项 + `test_v440_ink_skin_css` 53 项含 token 全集计数与 media/manual 深色等价断言)
+
+### 已知限制
+- 首帧皮肤闪变: index.html 静态 HTML 无 data-skin, 存了 ink 的用户启动首帧先渲 fluent (与既有主题 FOUC 同构, pywebview 启动极快可感知度低)
+- 楷体缺字环境 (罕见) 回退 serif, 仅品牌字/页标题受影响
+
+---
+
 ## v4.3.5 (2026-09-06) — 更名「墨准」
 
 **修订版**: 项目更名 「新时代校对大师」 → **「墨准」(MoZhun)**. 查重结论: 写作/校对赛道无同名产品 (全网唯一同名 "墨准天气" 为天气类应用, 品类无关).

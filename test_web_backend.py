@@ -2425,6 +2425,125 @@ def test_v419_ui_theme_roundtrip():
     check("set_config 可写 ui_theme", r.get("ok") is True and b._config.ui_theme == "light")
 
 
+def test_v440_ui_skin_roundtrip():
+    """v4.4.0: ui_skin 界面皮肤字段 — 默认 fluent + 往返一致 + 旧配置兼容 + set_config 可写."""
+    print()
+    print("--- v4.4.0: ui_skin 往返 ---", flush=True)
+    from app.utils import ProjectConfig
+    cfg = ProjectConfig()
+    check("ui_skin 默认 fluent", cfg.ui_skin == "fluent")
+    cfg.ui_skin = "ink"
+    d = cfg.to_dict()
+    check("to_dict 含 ui_skin", d.get("ui_skin") == "ink")
+    cfg2 = ProjectConfig.from_dict(d)
+    check("from_dict 还原 ink", cfg2.ui_skin == "ink")
+    # 旧配置 (v4.3.5 以前) 无 ui_skin 字段 -> 默认 fluent
+    cfg3 = ProjectConfig.from_dict({k: v for k, v in d.items() if k != "ui_skin"})
+    check("旧配置兼容 (缺字段 -> fluent)", cfg3.ui_skin == "fluent")
+    # bridge set_config 可写
+    from app.web_backend import Backend
+    b = Backend(window=None)
+    r = b.set_config("ui_skin", "ink")
+    check("set_config 可写 ui_skin", r.get("ok") is True and b._config.ui_skin == "ink")
+
+
+def test_v440_ink_skin_css():
+    """v4.4.0: 水墨皮肤 CSS — 3 个 token 块/选择器统一 html 前缀/源序/token 全集/对比度/前端绑定."""
+    print()
+    print("--- v4.4.0: 水墨皮肤 CSS 完整性 ---", flush=True)
+    css = _read_style_css()
+    html = (_WEB_DIR / "index.html").read_text(encoding="utf-8")
+    js = _read_app_js()
+
+    # --- 3 个 ink token 块 (浅色分组含 light 档) + html 前缀统一 (防 :root 混用移轴) ---
+    sel_light = 'html[data-skin="ink"],\nhtml[data-skin="ink"][data-theme="light"] {'
+    sel_media = '@media (prefers-color-scheme: dark) {\n  html[data-skin="ink"] {'
+    sel_manual = 'html[data-skin="ink"][data-theme="dark"] {'
+    check("ink 浅色块 (分组两选择器)", sel_light in css)
+    check("ink 深 media 块", sel_media in css)
+    check("ink 深 manual 块", sel_manual in css)
+    check("ink 选择器统一 html 前缀 (无 :root 混用)", ":root[data-skin" not in css)
+    # 源序硬前提: ink 浅块 (0,1,1) 与 ink 深 media (0,1,1) 同特异性, 必须浅块在前
+    check("源序: ink 浅块 < ink 深 media 块",
+          css.index(sel_light) < css.index(sel_media))
+
+    # ink 深 media 块与 manual 块声明逐字一致 — 浅色系统无法实拍 media 深色路径,
+    # 用静态等价兜底: 内容等价 + manual 已验证 => media 等价 (评审 P1-3)
+    def _inner_body(css_text, marker, skip_outer):
+        i = css_text.index(marker)
+        j = css_text.index("{", i)
+        if skip_outer:
+            j = css_text.index("{", j + 1)
+        depth = 0
+        for k in range(j, len(css_text)):
+            if css_text[k] == "{":
+                depth += 1
+            elif css_text[k] == "}":
+                depth -= 1
+                if depth == 0:
+                    return css_text[j + 1:k]
+        return ""
+    import re as _re
+
+    def _norm_block(block_text):
+        # 剥离行尾注释与缩进, 只比较声明本体 (media 块带教学注释, manual 块不带)
+        out = []
+        for line in block_text.strip().splitlines():
+            line = _re.sub(r"/\*.*?\*/", "", line).strip()
+            if line:
+                out.append(line)
+        return out
+    check("ink 深 media 块与 manual 块声明一致 (剥注释后)",
+          _norm_block(_inner_body(css, sel_media, True))
+          == _norm_block(_inner_body(css, sel_manual, False)))
+
+    # --- token 全集: 27 色板 token 必须在 4 个 fluent 块 + 3 个 ink 块各定义一次 (漏项会串回 fluent 冷色) ---
+    core_tokens = [
+        "colorNeutralBackground1", "colorNeutralBackground2", "colorNeutralBackground3",
+        "colorNeutralBackground4", "colorNeutralForeground1", "colorNeutralForeground2",
+        "colorNeutralForeground3", "colorNeutralStroke1", "colorNeutralStroke2",
+        "colorNeutralStrokeHover", "colorBrandBackground1", "colorBrandBackground2",
+        "colorBrandBackground3", "colorBrandForeground", "colorBrandSubtle",
+        "colorAccentForegroundOnAccent", "colorStatusSuccess", "colorStatusWarning",
+        "colorStatusError", "colorStatusSuccessSubtle", "colorStatusWarningSubtle",
+        "colorStatusErrorSubtle", "colorDiffAdd", "colorDiffAddBg", "colorDiffDel",
+        "colorDiffDelBg", "colorDiffSame",
+    ]
+    for t in core_tokens:
+        check(f"token 全集: --{t} 定义 >= 7 块", css.count(f"--{t}:") >= 7)
+    check("token: --colorSmoke 定义 >= 4 块", css.count("--colorSmoke:") >= 4)
+    check("token: --colorAcrylicBg 定义 >= 7 块 (v4.4.0 令牌化)", css.count("--colorAcrylicBg:") >= 7)
+    check("token: --skin-halo-1/-2 定义 >= 3 块",
+          css.count("--skin-halo-1:") >= 3 and css.count("--skin-halo-2:") >= 3)
+    check("token: --fontFamilyBrand 已定义", "--fontFamilyBrand:" in css)
+    check("acrylic 规则已走 var (无硬编码 rgba 残留)", ".acrylic {\n  background: var(--colorAcrylicBg);" in css)
+
+    # --- 装饰层守卫: ink 装饰规则必须带 [data-skin="ink"], fluent 下零影响 ---
+    for deco in ("html[data-skin=\"ink\"] body {", "html[data-skin=\"ink\"] .sidebar-title",
+                 "html[data-skin=\"ink\"] .page-header h1"):
+        check(f"装饰规则带 skin 守卫: {deco[:34]}...", deco in css)
+
+    # --- 对比度验算 (ink 两档, Text 4.5 门槛) ---
+    r1 = _contrast_ratio("#6E6757", "#F7F3E9")
+    check(f"ink 浅 淡墨 on 宣纸 = {r1:.2f}:1 (>= 4.5 AA)", r1 >= 4.5, detail=f"实际 {r1:.2f}:1")
+    r2 = _contrast_ratio("#3A3226", "#F7F3E9")
+    check(f"ink 浅 墨链 on 宣纸 = {r2:.2f}:1 (>= 4.5 AA)", r2 >= 4.5, detail=f"实际 {r2:.2f}:1")
+    r3 = _contrast_ratio("#998F7B", "#191612")
+    check(f"ink 深 淡墨 on 玄墨 = {r3:.2f}:1 (>= 4.5 AA)", r3 >= 4.5, detail=f"实际 {r3:.2f}:1")
+    r4 = _contrast_ratio("#1C1813", "#EDE6D6")
+    check(f"ink 深 墨字 on 纸底(阳文) = {r4:.2f}:1 (>= 4.5 AA)", r4 >= 4.5, detail=f"实际 {r4:.2f}:1")
+
+    # --- 前端绑定: 选择器 + JS 方法 + 挂载 + 恢复 ---
+    check("id 唯一: skin-switcher", html.count('id="skin-switcher"') == 1)
+    check("皮肤按钮 data-skin-value 齐全",
+          'data-skin-value="fluent"' in html and 'data-skin-value="ink"' in html)
+    for fn in ("applySkin(value) {", "_persistSkin(value) {", "bindSkinSwitcher() {"):
+        check(f"JS 方法存在: {fn[:-2]}", fn in js)
+    check("init 恢复 ui_skin", "this.applySkin(this.config.ui_skin || 'fluent')" in js)
+    check("bindEvents 挂载 bindSkinSwitcher", "this.bindSkinSwitcher();" in js)
+    check("_persistSkin 写 ui_skin", "set_config('ui_skin', value)" in js)
+
+
 
 def test_v420_nav_split():
     """v4.2.0: 3 视图 -> 7 视图拆分 (Win11 设置应用式分组导航).
@@ -2976,6 +3095,8 @@ def main():
         test_v430_deai_longtext,
         # v4.3.1 新增 (UX #7: 强制重跑 + 缓存命中上报 + 块级进度推送)
         test_v431_force_rerun_and_progress,
+        test_v440_ui_skin_roundtrip,
+        test_v440_ink_skin_css,
     ]
     for t in tests:
         try:

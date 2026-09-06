@@ -1,4 +1,4 @@
-/* 墨准 v4.3.5 — Win11 Fluent 2 风格 (完整 token 体系 + 暗色 + 5 类动画 + Acrylic/Smoke)
+/* 墨准 v4.4.0 — Win11 Fluent 2 风格 (完整 token 体系 + 暗色 + 5 类动画 + Acrylic/Smoke)
    借鉴自 https://learn.microsoft.com/zh-cn/windows/apps/design/ (Microsoft Terms of Use, 文档非版权材料)
    借鉴内容: 5 设计原则 + 7 签名体验的数值与命名
    借鉴方式: 思路借鉴,代码自写,token 命名遵循 Microsoft 官方约定
@@ -87,9 +87,14 @@
   /* 字体族 */
   --fontFamilyBase: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
   --fontFamilyMono: "Cascadia Code", "Consolas", "Courier New", monospace;
+  /* v4.4.0: 品牌展示字体 (水墨皮肤的侧栏品牌/页标题); 主题不变量, 与 fontFamilyBase 同为先例只在 :root 定义 */
+  --fontFamilyBrand: "KaiTi", "STKaiti", "Kaiti SC", "Noto Serif SC", "SimSun", serif;
 
   /* Smoke 遮罩 (Win11 §3.4.4 半透明黑, 不感知模式) */
   --colorSmoke: rgba(0, 0, 0, 0.32);
+
+  /* v4.4.0: Acrylic 底色令牌化 (原 4 处硬编码 rgba, 皮肤/主题双轴都需要调) */
+  --colorAcrylicBg: rgba(255, 255, 255, 0.70);
 
   /* 派生快捷 token */
   --colorCard: var(--colorNeutralBackground3);
@@ -131,6 +136,7 @@
     --colorDiffDel: #FF99A4;
     --colorDiffDelBg: rgba(255, 153, 164, 0.18);
     --colorDiffSame: #FFFFFF;
+    --colorAcrylicBg: rgba(31, 31, 31, 0.70);
     /* 暗色阴影 (更深, 但 Win11 §3.2.4 阴影强度模式感知 — 暗色反而更柔) */
     --shadow-1: 0 0 1px rgba(0,0,0,0.30);
     --shadow-2: 0 1px 2px rgba(0,0,0,.40), 0 0 2px rgba(0,0,0,.30);
@@ -170,6 +176,7 @@
   --colorDiffDel: #A12E22;
   --colorDiffDelBg: #FDE7E9;
   --colorDiffSame: #1A1A1A;
+  --colorAcrylicBg: rgba(255, 255, 255, 0.70);
 }
 
 :root[data-theme="dark"] {
@@ -200,12 +207,184 @@
   --colorDiffDel: #FF99A4;
   --colorDiffDelBg: rgba(255, 153, 164, 0.18);
   --colorDiffSame: #FFFFFF;
+  --colorAcrylicBg: rgba(31, 31, 31, 0.70);
   --shadow-1: 0 0 1px rgba(0,0,0,0.30);
   --shadow-2: 0 1px 2px rgba(0,0,0,.40), 0 0 2px rgba(0,0,0,.30);
   --shadow-8: 0 4px 8px rgba(0,0,0,.40), 0 0 2px rgba(0,0,0,.30);
   --shadow-16: 0 8px 16px rgba(0,0,0,.44), 0 0 2px rgba(0,0,0,.30);
   --shadow-32: 0 16px 32px rgba(0,0,0,.50), 0 0 4px rgba(0,0,0,.30);
   --shadow-128: 0 64px 128px rgba(0,0,0,.60), 0 0 16px rgba(0,0,0,.30);
+}
+
+/* ===== 水墨皮肤「ink」 (v4.4.0) — 贴合「墨准」品牌: 浅=宣纸/焦墨/朱砂印, 深=玄墨/阳文反转 =====
+   层叠设计 (特异性已验算; 全部 html[...] 前缀, 禁止与 :root 混用移轴):
+   html[data-skin="ink"]                             (0,1,1) > fluent :root 与 @media dark :root (均 0,1,0)
+   html[data-skin="ink"][data-theme="light"]         (0,2,1) > ink 深 media (0,1,1): 强制浅色不随系统
+   html[data-skin="ink"][data-theme="dark"]          (0,2,1) > fluent :root[data-theme=dark] (0,2,0) —
+                                                       skin=ink 时 fluent 深块同样命中, 必须压过
+   @media dark html[data-skin="ink"]                 (0,1,1) 源序在浅块之后 → auto+系统深色时胜浅块
+   硬约束: token 清单以 fluent 各块为 checklist 逐项镜像 (27 色板 + smoke/acrylic/圆角/6 档阴影),
+   漏项会按 per-token 层叠落回 fluent 冷色 — 回归项 test_v440_ink_skin_css 兜底 */
+html[data-skin="ink"],
+html[data-skin="ink"][data-theme="light"] {
+  --colorNeutralBackground1: #F7F3E9;   /* 宣纸 */
+  --colorNeutralBackground2: #EFE9DB;   /* 侧栏 */
+  --colorNeutralBackground3: #FCF9F0;   /* 卡片 */
+  --colorNeutralBackground4: #FFFDF4;   /* 弹层 */
+  --colorNeutralForeground1: #262119;   /* 浓墨 */
+  --colorNeutralForeground2: #5C5546;
+  --colorNeutralForeground3: #6E6757;   /* 淡墨 (on bg1 5.0:1) */
+  --colorNeutralStroke1: #E2DAC6;
+  --colorNeutralStroke2: #D4CBB2;
+  --colorNeutralStrokeHover: #B5AA8D;
+  --colorBrandBackground1: #2E2820;     /* 焦墨 */
+  --colorBrandBackground2: #463E32;     /* hover 淡墨 */
+  --colorBrandBackground3: #1C1712;     /* pressed 浓墨 */
+  --colorBrandForeground: #3A3226;      /* 链接/选中 (on bg1 11.3:1) */
+  --colorBrandSubtle: rgba(46, 40, 32, 0.07);
+  --colorAccentForegroundOnAccent: #F7F3E9;  /* 墨底纸字 12.9:1 */
+  --colorStatusSuccess: #476B37;        /* 竹绿 */
+  --colorStatusWarning: #8A5A1E;        /* 赭 */
+  --colorStatusError: #A93826;          /* 朱砂 */
+  --colorStatusSuccessSubtle: rgba(71, 107, 55, 0.10);
+  --colorStatusWarningSubtle: rgba(138, 90, 30, 0.10);
+  --colorStatusErrorSubtle: rgba(169, 56, 38, 0.10);
+  --colorDiffAdd: #3F6631;
+  --colorDiffAddBg: #E5EDD8;
+  --colorDiffDel: #9C3423;
+  --colorDiffDelBg: #F5E1D9;
+  --colorDiffSame: #262119;
+  --colorSmoke: rgba(28, 23, 18, 0.38);      /* 墨烟 */
+  --colorAcrylicBg: rgba(252, 249, 240, 0.72);
+  --skin-halo-1: rgba(120, 104, 74, 0.07);   /* 墨晕 (皮肤域 token, fluent 不定义) */
+  --skin-halo-2: rgba(120, 104, 74, 0.05);
+  --controlCornerRadius: 6px;           /* 宣纸柔和感 (fluent 保持 4/8/2) */
+  --overlayCornerRadius: 10px;
+  --radiusSmall: 3px;
+  --shadow-1: 0 0 1px rgba(60, 50, 35, 0.06);
+  --shadow-2: 0 1px 2px rgba(60, 50, 35, 0.10), 0 0 2px rgba(60, 50, 35, 0.08);
+  --shadow-8: 0 3px 8px rgba(60, 50, 35, 0.10), 0 0 2px rgba(60, 50, 35, 0.08);
+  --shadow-16: 0 6px 16px rgba(60, 50, 35, 0.12), 0 0 2px rgba(60, 50, 35, 0.08);
+  --shadow-32: 0 12px 32px rgba(60, 50, 35, 0.16), 0 0 4px rgba(60, 50, 35, 0.08);
+  --shadow-128: 0 32px 96px rgba(40, 32, 22, 0.28), 0 0 16px rgba(60, 50, 35, 0.08);
+}
+
+@media (prefers-color-scheme: dark) {
+  html[data-skin="ink"] {
+    --colorNeutralBackground1: #191612;   /* 玄墨 */
+    --colorNeutralBackground2: #201C16;
+    --colorNeutralBackground3: #262119;
+    --colorNeutralBackground4: #332C22;
+    --colorNeutralForeground1: #EDE6D6;   /* 宣纸白 */
+    --colorNeutralForeground2: #C2B8A4;
+    --colorNeutralForeground3: #998F7B;   /* on bg1 5.5:1 */
+    --colorNeutralStroke1: #332C22;
+    --colorNeutralStroke2: #423A2C;
+    --colorNeutralStrokeHover: #5A5040;
+    --colorBrandBackground1: #EDE6D6;     /* 阳文反转: 宣纸白底墨字, 如钤白文印 */
+    --colorBrandBackground2: #F8F2E2;
+    --colorBrandBackground3: #D6CDB8;
+    --colorBrandForeground: #EDE6D6;
+    --colorBrandSubtle: rgba(237, 230, 214, 0.09);
+    --colorAccentForegroundOnAccent: #1C1813;  /* 纸底墨字 11.4:1 */
+    --colorStatusSuccess: #9DBE7B;
+    --colorStatusWarning: #D9B36A;
+    --colorStatusError: #E0856C;          /* 朱砂提亮 */
+    --colorStatusSuccessSubtle: rgba(157, 190, 123, 0.14);
+    --colorStatusWarningSubtle: rgba(217, 179, 106, 0.14);
+    --colorStatusErrorSubtle: rgba(224, 133, 108, 0.14);
+    --colorDiffAdd: #9DBE7B;
+    --colorDiffAddBg: rgba(157, 190, 123, 0.15);
+    --colorDiffDel: #E0856C;
+    --colorDiffDelBg: rgba(224, 133, 108, 0.15);
+    --colorDiffSame: #EDE6D6;
+    --colorSmoke: rgba(0, 0, 0, 0.45);
+    --colorAcrylicBg: rgba(38, 33, 25, 0.72);
+    --skin-halo-1: rgba(0, 0, 0, 0.28);
+    --skin-halo-2: rgba(0, 0, 0, 0.20);
+    --shadow-1: 0 0 1px rgba(0, 0, 0, 0.25);
+    --shadow-2: 0 1px 2px rgba(0, 0, 0, 0.35), 0 0 2px rgba(0, 0, 0, 0.25);
+    --shadow-8: 0 3px 8px rgba(0, 0, 0, 0.35), 0 0 2px rgba(0, 0, 0, 0.25);
+    --shadow-16: 0 6px 16px rgba(0, 0, 0, 0.40), 0 0 2px rgba(0, 0, 0, 0.25);
+    --shadow-32: 0 12px 32px rgba(0, 0, 0, 0.48), 0 0 4px rgba(0, 0, 0, 0.25);
+    --shadow-128: 0 32px 96px rgba(0, 0, 0, 0.55), 0 0 16px rgba(0, 0, 0, 0.25);
+  }
+}
+
+html[data-skin="ink"][data-theme="dark"] {
+  --colorNeutralBackground1: #191612;
+  --colorNeutralBackground2: #201C16;
+  --colorNeutralBackground3: #262119;
+  --colorNeutralBackground4: #332C22;
+  --colorNeutralForeground1: #EDE6D6;
+  --colorNeutralForeground2: #C2B8A4;
+  --colorNeutralForeground3: #998F7B;
+  --colorNeutralStroke1: #332C22;
+  --colorNeutralStroke2: #423A2C;
+  --colorNeutralStrokeHover: #5A5040;
+  --colorBrandBackground1: #EDE6D6;
+  --colorBrandBackground2: #F8F2E2;
+  --colorBrandBackground3: #D6CDB8;
+  --colorBrandForeground: #EDE6D6;
+  --colorBrandSubtle: rgba(237, 230, 214, 0.09);
+  --colorAccentForegroundOnAccent: #1C1813;
+  --colorStatusSuccess: #9DBE7B;
+  --colorStatusWarning: #D9B36A;
+  --colorStatusError: #E0856C;
+  --colorStatusSuccessSubtle: rgba(157, 190, 123, 0.14);
+  --colorStatusWarningSubtle: rgba(217, 179, 106, 0.14);
+  --colorStatusErrorSubtle: rgba(224, 133, 108, 0.14);
+  --colorDiffAdd: #9DBE7B;
+  --colorDiffAddBg: rgba(157, 190, 123, 0.15);
+  --colorDiffDel: #E0856C;
+  --colorDiffDelBg: rgba(224, 133, 108, 0.15);
+  --colorDiffSame: #EDE6D6;
+  --colorSmoke: rgba(0, 0, 0, 0.45);
+  --colorAcrylicBg: rgba(38, 33, 25, 0.72);
+  --skin-halo-1: rgba(0, 0, 0, 0.28);
+  --skin-halo-2: rgba(0, 0, 0, 0.20);
+  --shadow-1: 0 0 1px rgba(0, 0, 0, 0.25);
+  --shadow-2: 0 1px 2px rgba(0, 0, 0, 0.35), 0 0 2px rgba(0, 0, 0, 0.25);
+  --shadow-8: 0 3px 8px rgba(0, 0, 0, 0.35), 0 0 2px rgba(0, 0, 0, 0.25);
+  --shadow-16: 0 6px 16px rgba(0, 0, 0, 0.40), 0 0 2px rgba(0, 0, 0, 0.25);
+  --shadow-32: 0 12px 32px rgba(0, 0, 0, 0.48), 0 0 4px rgba(0, 0, 0, 0.25);
+  --shadow-128: 0 32px 96px rgba(0, 0, 0, 0.55), 0 0 16px rgba(0, 0, 0, 0.25);
+}
+
+/* ===== 水墨皮肤 — 主题内装饰 (v4.4.0; 全部带 [data-skin="ink"] 守卫, fluent 下零影响) ===== */
+/* 宣纸/玄墨底纹: 两团极淡墨晕 (替代 fluent body 的 Mica 近似渐变); 复写 attachment 防简写隐式重置 */
+html[data-skin="ink"] body {
+  background:
+    radial-gradient(1100px 700px at 88% -12%, var(--skin-halo-1), transparent 58%),
+    radial-gradient(900px 640px at -8% 112%, var(--skin-halo-2), transparent 55%),
+    var(--colorNeutralBackground1);
+  background-attachment: fixed;
+}
+/* 品牌字: 楷体展示 (仅品牌/页标题, 正文仍 Segoe/雅黑); letter-spacing 用 em 相对值属排版豁免 (AGENTS item 31) */
+html[data-skin="ink"] .sidebar-title {
+  font-family: var(--fontFamilyBrand);
+  font-weight: var(--fontWeightRegular);
+  letter-spacing: 0.25em;
+}
+/* 朱砂名印: 品牌字后一枚方印; 取色全走 token (--colorStatusError 印底 / --colorNeutralBackground4 印字), 印面走 --space-5 */
+html[data-skin="ink"] .sidebar-title::after {
+  content: "印";
+  display: inline-block;
+  width: var(--space-5);
+  height: var(--space-5);
+  margin-left: var(--space-3);
+  border-radius: var(--radiusSmall);
+  background: var(--colorStatusError);
+  color: var(--colorNeutralBackground4);
+  font-family: var(--fontFamilyBrand);
+  font-size: var(--fontSizeCaption);
+  line-height: var(--space-5);
+  text-align: center;
+  vertical-align: middle;
+}
+html[data-skin="ink"] .page-header h1 {
+  font-family: var(--fontFamilyBrand);
+  font-weight: var(--fontWeightRegular);
 }
 
 /* ===== Reset ===== */
@@ -929,7 +1108,7 @@ del {
 
 /* ===== Acrylic 模拟 (Win11 §3.4.2 — flyout/menu 半透明毛玻璃) ===== */
 .acrylic {
-  background: rgba(255, 255, 255, 0.7);
+  background: var(--colorAcrylicBg);
   backdrop-filter: blur(20px) saturate(180%);
   -webkit-backdrop-filter: blur(20px) saturate(180%);
   border: 1px solid var(--colorNeutralStroke1);
@@ -937,10 +1116,10 @@ del {
   box-shadow: var(--shadow-32);
 }
 @media (prefers-color-scheme: dark) {
-  .acrylic { background: rgba(31, 31, 31, 0.7); }
+  .acrylic { background: var(--colorAcrylicBg); }
 }
-:root[data-theme="dark"] .acrylic { background: rgba(31, 31, 31, 0.7); }
-:root[data-theme="light"] .acrylic { background: rgba(255, 255, 255, 0.7); }
+:root[data-theme="dark"] .acrylic { background: var(--colorAcrylicBg); }
+:root[data-theme="light"] .acrylic { background: var(--colorAcrylicBg); }
 
 /* ===== Smoke 模态遮罩 (Win11 §3.4.4 — 始终半透明黑, 不感知模式) ===== */
 .smoke-overlay {
