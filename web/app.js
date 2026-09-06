@@ -328,7 +328,7 @@ const App = {
 
   // ====== 事件循环 ======
   startEventLoop() {
-    // v4.1.5 (🟠 修复 7): 50ms -> 16ms (60 FPS 拉取), 让 D 算法高频渲染
+    // v4.1.5 (修复 7): 50ms -> 16ms (60 FPS 拉取), 让 D 算法高频渲染
     // (30 FPS 流式打字机) 不被前端 setInterval 截流. 跟后端 _push 33ms 节流
     // 仍兼容 (前端只关心不丢事件, 16ms 间隔低于 33ms flush 频率, 每次拉都拿到最新)
     // v4.1.8.2 (审计 F21): 排空循环套 try/catch — 任一 handler 抛异常旧版会把
@@ -371,7 +371,7 @@ const App = {
       case 'onStream':         this.updateStream(data.file_key, data.partial); break;
       // v4.3.1 (UX #18): 多块文件每块完成时后端推 {file_key, chunk, total}
       case 'onChunkProgress':  this.handleChunkProgress(data); break;
-      // v4.1.5 (🔴 修复 1): onFileStart 改为 dict {file_key, original, original_truncated}
+      // v4.1.5 (修复 1): onFileStart 改为 dict {file_key, original, original_truncated}
       // 先 handleFileStart 同步设 t.original (左栏原文字数据源),
       // 再 markFileRunning 设 status='running'
       case 'onFileStart':      this.handleFileStart(data); this.markFileRunning(data.file_key); break;
@@ -589,7 +589,7 @@ const App = {
     this.bindFileContextMenu();
 
     // v4.2.0: 参数页的保存按钮 (与 API 页 btn-save-config 同一逻辑)
-    // v4.3.1 (UX #9): 把触发按钮传给 saveConfigNow, "✓ 已保存" 反馈落在本按钮
+    // v4.3.1 (UX #9): 把触发按钮传给 saveConfigNow, "已保存" 反馈落在本按钮
     document.querySelectorAll('.js-save-config').forEach(btn => {
       btn.addEventListener('click', () => this.saveConfigNow(btn));
     });
@@ -872,7 +872,7 @@ const App = {
     this.tasks = [];
     this.selectedFileKey = null;
     this.streamingContent = {};
-    // v4.1.5 (🔴 修复 5): 清空所有 renderState, 避免内存泄漏
+    // v4.1.5 (修复 5): 清空所有 renderState, 避免内存泄漏
     this.renderState = {};
     this.renderFileList();
     this.renderCompare(null);
@@ -887,7 +887,7 @@ const App = {
     } catch (e) { /* ignore */ }
     this.tasks = this.tasks.filter(t => t.path !== path);
     delete this.streamingContent[path];
-    // v4.1.5 (🔴 修复 5): 删 renderState 防止内存泄漏
+    // v4.1.5 (修复 5): 删 renderState 防止内存泄漏
     delete this.renderState[path];
     if (this.selectedFileKey === path) this.selectedFileKey = null;
     this.renderFileList();
@@ -990,7 +990,7 @@ const App = {
     // v4.2.0: 同步结果对比页下拉
     const sel = document.getElementById('result-file-select');
     if (sel && sel.value !== path) sel.value = path;
-    // v4.1.5 (🟠 修复 8): 复制/导出按钮仅在"校对完成 + 非处理中"时 enabled.
+    // v4.1.5 (修复 8): 复制/导出按钮仅在"校对完成 + 非处理中"时 enabled.
     // 流式时 disabled, 避免用户复制到一半的 partial.
     // v4.1.8.2 (审计 F7/C3): 增加 status 判据 — 失败/取消文件后端把 corrected
     // 兜底为原文, 只判 corrected 非空会把未校对原文当结果复制/导出
@@ -1497,7 +1497,7 @@ const App = {
     // (RAF 回调可能在用户切换文件后才执行)
     if (fileKey !== this.selectedFileKey) return;
 
-    // 2. (🟠 修复 9): 错误态 fallback — 右栏显示 error-mark
+    // 2. (修复 9): 错误态 fallback — 右栏显示 error-mark
     if (t.error) {
       originalEl.textContent = t.original || '';
       // v4.3.1 (UX #5): 人话一行在前 + 原始错误小字 (error-raw) 在后;
@@ -1558,7 +1558,7 @@ const App = {
       return;
     }
 
-    // (🔴 修复 2): partial 倒退保护 (retry / cancel / resume 场景)
+    // (修复 2): partial 倒退保护 (retry / cancel / resume 场景)
     if (partial.length < state.lastPartialLen) {
       state.lastPartialLen = 0;
       state.renderedHTML = '';
@@ -1654,7 +1654,7 @@ const App = {
     this.renderCompare(key);
   },
 
-  // v4.1.5 (🔴 修复 1): 后端 onFileStart 推送 {file_key, original, original_truncated}
+  // v4.1.5 (修复 1): 后端 onFileStart 推送 {file_key, original, original_truncated}
   // 同步设 t.original, 让左栏原文字在流式开始就有数据
   handleFileStart(data) {
     if (!data || !data.file_key) return;
@@ -1880,7 +1880,7 @@ const App = {
     }
   },
 
-  // v4.3.1 (UX #9): triggerBtn = 触发点击的那个按钮 — 反馈 (✓ 已保存 2 秒)
+  // v4.3.1 (UX #9): triggerBtn = 触发点击的那个按钮 — 反馈 (已保存 2 秒)
   // 作用于它, 不再硬取 btn-save-config (校对参数页 js-save-config 点击时
   // 反馈跑到 API 页, 本页毫无回音); 不传则兜底 btn-save-config
   async saveConfigNow(triggerBtn) {
@@ -1895,12 +1895,12 @@ const App = {
     const ok = await this.saveConfig({silent: false});
     // v4.1.8.2 (审计 F17): 失败回滚 dirty, 允许后续重试/beforeunload 兜底
     if (!ok) this.configDirty = true;
-    // v4.1.6 (P4): 显式保存按钮文案变 "✓ 已保存" 2 秒, 给用户一个明确视觉反馈.
+    // v4.1.6 (P4): 显式保存按钮文案变 "已保存" 2 秒, 给用户一个明确视觉反馈.
     const btn = triggerBtn || document.getElementById('btn-save-config');
     if (btn && !btn.disabled) {
       const orig = btn.dataset.origLabel || btn.textContent;
       if (!btn.dataset.origLabel) btn.dataset.origLabel = orig;
-      btn.textContent = '✓ 已保存';
+      btn.textContent = '已保存';
       btn.disabled = true;
       if (btn._savedTimer) clearTimeout(btn._savedTimer);
       btn._savedTimer = setTimeout(() => {

@@ -49,7 +49,7 @@ from app.style_profiles.loader import StyleProfileLoader, MIN_SAMPLES_FOR_DISTIL
 logger = setup_logging()
 
 
-# v4.1.5 (🔴 修复 1): onFileStart 推送 original 字段的字符数阈值.
+# v4.1.5 (修复 1): onFileStart 推送 original 字段的字符数阈值.
 # 超过这个大小不推 original, 前端 fallback 调 read_file(path) 读.
 # 50K 字 ≈ 100KB UTF-8, JSON 序列化 + evaluate_js 单次 payload ~150KB,
 # 仍可接受 (>50K 后切前端 read_file 路径, 避免大 payload 卡 evaluate_js).
@@ -529,7 +529,7 @@ class Backend:
         engine.on_stream = lambda k, t: self._push("onStream", {
             "file_key": k, "partial": t,
         })
-        # v4.1.5 (🔴 修复 1): onFileStart 带 original 字段, 让前端左栏原文字
+        # v4.1.5 (修复 1): onFileStart 带 original 字段, 让前端左栏原文字
         # 在流式开始就有数据 (不再等 onTaskComplete).
         # 大文件 (> _ORIGINAL_PUSH_LIMIT 字) 不推 original, 前端 fallback
         # 调 read_file(path) 读 — 避免 JSON 序列化开销 + evaluate_js payload 过大.
