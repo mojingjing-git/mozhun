@@ -13,7 +13,7 @@
 ```
 main.py (webview.start)
 ├── webview.create_window(js_api=Backend)
-│   └── 加载 web/index.html (3 视图 SPA)
+│   └── 加载 web/index.html (7 视图 SPA: 校对/结果对比/去AI味/风格库/API接口/校对参数/外观关于)
 │       ├── 主页视图    (文件列表 / 进度 / diff / 流式)
 │       ├── 设置视图    (API / Prompt / chunking 5 档)
 │       └── 去AI味视图  (3 步工作流)
@@ -64,6 +64,17 @@ main.py (webview.start)
 
 ### v4.1.8 新增（前端按 Win11 Fluent 2 完整重构）
 21. **Win11 设计原则落地** (v4.1.8+): 按 [Microsoft Learn 设计原则文档](https://learn.microsoft.com/zh-cn/windows/apps/design/) (Microsoft Terms of Use, 致谢非协议) 的 5 原则 + 7 签名体验**完全重构**前端 — 17 Win11 色板 token + 5 accent 档 + 6 阴影档 (elevation 1/2/8/16/32/128) + 3 圆角 token (`--controlCornerRadius=4px` / `--overlayCornerRadius=8px` / `--radiusSmall=2px`) + 9 type ramp + 5 动画曲线 + 4 时长 + 完整暗色模式 (`@media (prefers-color-scheme: dark)` 独立块) + Acrylic (`.acrylic` `backdrop-filter: blur(20px) saturate(180%)`) + Smoke (`.smoke-overlay` `rgba(0,0,0,0.32)`)。12 SVG 全部重画为 1px 单线 `stroke="currentColor"` Segoe Fluent Icons 风格 (path 全部项目语言手写)。Settings 页加三态主题切换 (auto/light/dark)。可访问性: diff 加 `border-left` 形状标记 (色盲补救 §3.1.4), 11px → 12px 字号修正, F5/F6/F7 修补 (italic/Bold/border-left)。业务逻辑 0 改动。
+
+### v4.1.9 新增（Win11 视觉完全体：材料/动效/个性化落地）
+22. **三种材料真实使用** (v4.1.9+): Mica 以中性色 radial-gradient 近似（body 基层，侧边栏=基层/卡片=内容层，Card 阴影升 shadow-8）；Acrylic 用于文件右键菜单（`.menu-flyout.acrylic`）；Smoke + ContentDialog 替代原生 confirm（底部等宽双按钮 + shadow-128）
+23. **页面转换 + 动效无障碍** (v4.1.9+): `.view.active` 上滑入场（167ms point-to-point）；全部动画包 `prefers-reduced-motion` 守卫；`:focus-visible` 键盘焦点环
+24. **主题持久化** (v4.1.9+): `ProjectConfig.ui_theme` (auto/light/dark) 随配置落盘，启动恢复；主题逻辑统一在 `applyTheme()`
+
+### v4.2.0 新增（信息架构重构: 3 视图 -> 7 视图）
+25. **Win11 设置应用式分组导航** (v4.2.0+): 侧边栏分「工作区/设置」两组 7 页 — 校对 (文件+任务) / 结果对比 (diff 独立页, 点文件跳转) / 去 AI 味 (纯工作流) / 风格库 (Step 0 Profile 管理独立页) / API 接口 / 校对参数 / 外观与关于; 关键元素 id 拆分前后保持不变, JS 绑定零迁移; 设置组三页用 `.content-narrow` 窄栏居中
+
+### v4.3.0 新增（DeAI 长文本: 分块/取消/降级推送 + 拖入）
+26. **DeAI 分块与降级推送** (v4.3.0+): `split_text` 单点在 utils (校对/DeAI 共用); `_deai_run` 按分块预设切块, rewrite 纯拼接 + 块间衔接, whole_file 超 2 万字兜底回退 large; partial 超 5 万字只推尾部预览, 完整结果落盘 `deai_results/`, 复制/导出/step3 引用走后端直读 (`deai_copy_result`/`deai_save_result`/`source_task_id`), 全文不过 IPC; 取消用 `cancelled:true` 结构化 payload 与失败区分, 语义同校对 (丢弃重跑)
 
 ## 文件命名
 

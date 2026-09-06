@@ -79,7 +79,7 @@ python main.py
 | `Ctrl+O` | 添加文件 |
 | `Ctrl+Enter` | 开始处理 |
 | `Esc` | 取消当前任务 |
-| `Ctrl+,` | 切到设置 |
+| `Ctrl+,` | 切到 API 接口 |
 | `Ctrl+.` | 切到去 AI 味 |
 
 > 快捷键由前端 JS 监听（`web/app.js`），不依赖 Qt。
@@ -145,7 +145,7 @@ python main.py
 新时代校对大师/
 ├── main.py                 # 入口（pywebview.start）
 ├── web/                    # 前端 (v4.0+ 新增)
-│   ├── index.html          # 3 视图骨架（主页/设置/去AI味）
+│   ├── index.html          # 7 视图骨架（校对/结果对比/去AI味/风格库/API接口/校对参数/外观关于）
 │   ├── app.js              # 路由/状态/API 调用
 │   ├── style.css           # 设计令牌 + Fluent 2 风格
 │   ├── icons/              # Fluent UI System Icons (MIT) — 13 个 SVG

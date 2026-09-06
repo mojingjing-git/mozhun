@@ -1,5 +1,226 @@
 # Changelog
 
+## v4.3.3 (2026-09-06) — 本地标点修复 (纯规则脚本, 零 LLM 成本)
+
+**修订版**: 用户场景 — AI 写小说时常混入英文半角字符尤其是引号 (中文引号必须成对), 这类确定性错误用脚本修复比 LLM 更快更稳且零成本. **不打包, dev 验证**.
+
+### ✨ 新增
+
+#### 1. 规则脚本 `app/punct_fix.py` (纯函数, 无 GUI/LLM 依赖)
+- 三条设计红线: ① 只在中文上下文动手 (3.14/1,000/12:30/U.S./纯英文句一律不碰); ② 引号**按段落交替配对**, 落单不猜 (宁漏改不误改), 不跨行; ③ 只做半角→全角, 不做改写
+- 规则: `"→“”` 交替配对; `'→‘’` 同理且字母间撇号 (don't) 保护; `...+→……`; `, : ; ? ! .` → 全角 (带上下文守卫, `John,他说` 也转); `( )→（ ）` (对内含 CJK 或前邻中文)
+- 性能: 66 万字 < 0.5s (书级无感)
+
+#### 2. 两个入口
+- **「仅标点修复（本地脚本，不调用 LLM）」校对模式**: 下拉直接选 — 全程本地不触网 (跳过 AsyncOpenAI 创建, 前置校验跳过 API 检查), 复用分块/进度/diff/断点全管线
+- **「发送 LLM 前先本地修复标点」开关** (校对参数页, 默认开): 读入文件时先脚本修引号, LLM 再管语病 — 省得 LLM 在标点上浪费 token
+
+#### 3. 接线
+- `ProjectConfig.punct_fix` (默认 True); `compute_prompt_hash` 纳入该开关 (改开关自动重跑, 不串缓存)
+- `prepare_tasks` 读入即修复并记日志 `[标点] xxx: 本地修复 N 处`; `_call_api_stream` 增 punct_local 本地分支 (复用 _split_text 分块, 即时完成不做流式 emit)
+- 测试断言: LLM prompt 结构断言豁免 punct_local (system 永不发 LLM)
+
+### 测试
+- 新套件 `test_punct_fix.py` (34 check): 引号配对/落单/跨行/撇号保护/上下文守卫/书级性能/指纹纳入/引擎本地分支/prepare_tasks 开关
+- 7 套件 974/0 全绿 (基线 940 → +34)
+
+### 评审修复 (实施后经独立 agent 实测评审, 3 项"上线前必须修"全部落地)
+- **E-1**: 「仅标点修复」模式不再在 prepare_tasks 预处理阶段修复 — 修复前原文保留为 diff 基准, 结果对比页能看到全部变化 (修复前默认配置下 diff 完全为空, 无法审计)
+- **FP-1**: 跨行引号保守降级 — 上一行有未闭合引号时本行双引号整体跳过转换 (修复前 `[closer, opener, ...]` 序列会被整体反向配对, 把对的改错)
+- **FN-1**: 数字+半角逗号+中文 (`1937,战争` / `1000,成交`) 现已转换 (后邻 CJK 时不构成千分位形态); `1,000` / `3,14万` 实测仍安全
+- E-2/E-3: 测试断言从 `_call_api_stream` 升级为 `_run_all` 端到端 (真验证不建客户端); 前端 checkbox 读取加默认值兜底 (防 DOM 缺失时默认 True 字段被静默写 False)
+
+### 已知限制
+- 落单引号不修 (不猜测开闭) — 交给 LLM 模式或人工; 属格撇号 (`James'`) 两个同行时可能配错向 (评审 FP-2, 随下一批)
+- DeAI 页未接入标点修复 (用户场景是校对; 需要时可在 deai 输入侧复用 fix_punctuation)
+- 省略号只处理 `...`+ 不处理 `。。。`(已是全角) 与 `~` 波浪号
+- hash 纳入 punct_fix/api_base 使 v4.3.2 及更早的旧断点一次性全部失效重跑 (属预期)
+
+---
+
+## v4.3.2 (2026-09-06) — API 预设按用户指定清单重写
+
+**修订版**: 用户指定 10 项预设清单替换旧 7 项 (移除 Ollama/vLLM/旧通义条目). 接入地址逐一查证 (OpenCodeGo = OpenCode Zen Go 套餐 `opencode.ai/zen/go/v1`; MiniMax 国内站已迁至 `api.minimax.cn/v1`, 国际站密钥用 `api.minimax.io/v1`).
+
+### 改动
+- `API_TEMPLATES` 重写: LM Studio / OpenCodeGo / OpenRouter / MiniMax / 阿里百炼 / 智谱清言 / 火山引擎 / 硅基流动 / DeepSeek / 自定义 (顺序即下拉顺序)
+- 语义约定: **model 留空** = 服务端模型名动态/不确定 (OpenCodeGo/火山引擎/LM Studio), 提示用 ⟳ 拉取列表; **api_key 留空** = 必须用户自填, 不再预填 "sk-" 类占位 (旧 DeepSeek 预设预填占位会被误当已配置)
+- MiniMax 描述注明国内/国际站域名与密钥匹配关系 (错配 = 鉴权失败)
+- 前端: 下拉占位改"选择预设..."; 模型名留空的预设显示 "(拉取模型)"; description 作为选项悬浮说明
+- **Model 双框合一**: 移除"拉取后才出现的第二个下拉框", 改为单输入框 + 原生 datalist 补全 — 点 ⟳ 拉取后点输入框右侧箭头直接选择, 选中自动进防抖保存
+- 测试: `test_get_api_templates` 断言 10 项名称与顺序一致
+
+---
+
+## v4.3.1 (2026-09-06) — UX 直觉性修复批次 (用户视角审查 22 项全落地)
+
+**修订版**: 用户反馈"操作非常反直觉但说不清哪里"。派 agent 以认知走查法 (6 条用户旅程逐步骤核验) 产出 22 条反直觉清单, 本版全部修复。核心诊断: 反馈闭环与流程引导, 而非信息架构。**不打包, dev 验证**.
+
+### 🟠 核心病灶
+**全应用把"校对页日志区"当唯一反馈通道** — 复制/测试连接/保存/主题切换/Profile 操作的确认全部写进用户看不见的页面; 跨页任务 (配 API→校对→看结果、失败→修配置) 靠用户脑补; 错误信息原样抛异常栈词汇; 禁用按钮不说原因。
+
+### ✨ 修复清单 (按审查编号)
+
+#### 反馈闭环 (最大一类, 一个 toast 组件消四条)
+- **全局 toast** (`#toast-root` 右下角, success/info 3s、error 5s、同屏 4 条、点击即关): 复制/导出/主题切换/Profile 操作/拖入 等全部就地反馈 (原 #2)
+- **测试连接内联化** (原 #3): 按钮"测试中…"禁用态 + 卡片内绿/红结果行 (纯文字+状态色, 无 emoji)
+- **保存反馈统一** (原 #9/#10): "✓ 已保存"作用于被点的那个按钮 (两页各有保存钮); 参数页补自动保存说明 hint
+- **完成汇总人话** (原 #19): `完成：成功 N / 失败 M / 取消 K` + 分级 toast; **ETA 去重** (原 #20)
+
+#### 首跑与异常路径
+- **开始前置校验** (原 #4): Base URL/Key/Model 三缺一弹 ContentDialog 引导至 API 接口页 (不再陪跑重试链); 顺带修复 v4.2.0 回归——`setView('settings')` 指向已删除视图导致白屏 (原 #1)
+- **错误人话化 + 行动指引** (原 #5): `_humanizeError` 按 401/限速/超时/连接/404 分类翻译; 结果对比页 error-mark 显示人话 + 原始错误小字 + "前往 API 接口页"按钮; 失败 chip title 同步
+- **暂停不误杀** (原 #14): 暂停清看门狗/恢复重挂 — 暂停超 60s 文件不再被误标"失败"
+
+#### 流程补全
+- **重新校对入口** (原 #7): 右键菜单"重新校对（忽略缓存）"; 后端 `start_proofread` 加 `force_rerun` 参数 (prepare_tasks 跳过缓存), 重跑必真实执行
+- **缓存命中可见** (原 #8): 启动返回 `cached_files`, toast 提示"N 个文件命中缓存（右键可强制重跑）"
+- **块级进度** (原 #18): 多块文件每块完成推 `onChunkProgress`, 运行状态卡显示"当前文件: 块 X/Y" (不再长时间 0%)
+- **点击文件策略** (原 #6): completed/failed 才跳结果对比页; 处理中文件仅选中, 留在校对页看进度
+- **分块标签可点** (原 #21): 校对页"分块: 均衡"改为可点, 直跳校对参数页
+- **拖错文件有反应** (原 #22): 校对区非 .txt/.md 拖入 toast 拒绝不入列
+- **禁用原因 title** (原 #15): diff 切换/复制/导出/清空等条件禁用按钮全部说明启用条件
+
+#### 风格库补全 (原 #11/#12/#13/#15/#17)
+- 两页 Profile 下拉创建后同步 (原失同步); **Profile 列表卡片**: 查看 9 轴风格卡 (dialog 长文本形态) / 删除 (danger 确认); **蒸馏可取消** (复用"运行中按钮=取消"模式, cancelled 分流覆盖 distill); 预置 Profile 禁用原因 title; Few-shot 与 Profile 关系说明 hint
+
+#### 术语与文案 (原 #16)
+- "查看完整 diff/流式 diff" → "查看增删标记/返回逐字对比"; 空态去"流式"开发者词汇
+- 顺带修复: 重跑成功后旧 error-mark 永久残留 (onTaskComplete 无条件回写 error 字段)
+
+### 测试
+- 6 套件 **921/0** 全绿 (v4.3.0 基线 900 → +21: `test_v431_force_rerun_and_progress` 覆盖强制重跑/缓存上报/块进度回调)
+- 三个实施 agent 按文件所有权并行 (后端 / 前端基建 / 前端功能), 互零冲突, 均独立跑绿后合并
+
+### 已知限制
+- toast 不带操作按钮 (如错误 toast 直接跳转页) — 现阶段错误跳转走结果页 error-mark 与对话框
+
+---
+
+## v4.3.0 (2026-09-06) — DeAI 长文本支持 (分块/取消/降级推送) + 拖入文本
+
+**修订版**: 用户需求"待处理文本和 Few-shot 范文支持拖入, 极端情况塞进一本书也能处理". 实施前经 agent 逐行评审修正设计 (6 项必须修改全部落地). **不打包, dev 验证**.
+
+### 🟠 原有硬伤 (为什么一本书以前处理不了)
+1. **DeAI 无分块** — 校对引擎有 Chunker, 但 `_deai_run` 把整段文本塞进一次 LLM 调用, 一本书远超模型上下文直接 400
+2. **不可取消** — 三步一旦开跑无法中断, 长文本只能干等
+3. **拖入被全局吞掉** — body 级 drop preventDefault 让 textarea 的原生拖放完全无响应
+4. **输出端巨载** — onDeaiStream 每帧推全量 partial (评审实测: 30 万字收尾单帧 ~1MB x 30FPS 拖死 WebView)
+
+### ✨ 改动 (评审结论 6 项"必须修改"全部落地)
+
+#### 1. 分块引擎 (评审#2/#6)
+- `split_text` 从 processor 平移到 utils (processor 委托保兼容), 校对与 DeAI 共用
+- `_deai_run` 按当前分块预设切块逐块调用: **rewrite** 纯拼接 (块间注入前块结尾 400 字做衔接, 导出文本干净无分隔符); **detect/audit** 报告按「第 i/N 块」分节
+- **whole_file 兜底**: 该预设 + 文本超 2 万字 → 强制回退 large(6000), 杜绝"整本书单次调用"
+
+#### 2. 取消 (评审#3)
+- `_deai_tasks` 登记 `cancel_event`; 新增 `deai_cancel(task_id)` bridge; 逐 delta + 块间检查
+- **结构化取消 payload** (`cancelled: true`) 区分"用户取消"与"失败" (不撞 F3 语义); 已完成中间结果以 partial 保留填回输出框; 蒸馏任务同样可取消
+- 取消语义与校对对齐: 丢弃中间态, 重跑从块 0 (AGENTS.md 第 8 条)
+
+#### 3. 降级推送 + 结果落盘 (评审#1/#5)
+- partial 超 5 万字 (对齐 `_ORIGINAL_PUSH_LIMIT`) 只推尾部预览 + 进度 `{chunk, total}`
+- 完整结果落盘 `~/.proofreader/deai_results/<task_id>.txt`: onDeaiComplete 带 `result_file`; 复制/导出走新 bridge `deai_copy_result` / `deai_save_result` (后端直读, 全文不过 IPC)
+- step3 支持引用 step2 落盘结果 (`source_task_id` 参数), 超长链路全文不回传前端
+
+#### 4. 拖入支持 (评审#4)
+- 纯文本拖放: 只 `stopPropagation` 不 `preventDefault` — 保留浏览器原生"光标处插入"
+- 文件拖入: 双注册 `#deai-input/#deai-sample` 的 pywebview DOM drop → 拿路径走 Python `read_file_text` (BOM/gb18030 编码兜底), **规避 File.text() 恒 UTF-8 把 GBK 记事本文件变乱码**; 仅接受 .txt/.md
+- 已有内容时 WinUI 三命令对话框 (追加/替换/取消) — `showConfirmDialog` 扩展 closeText 第三命令按钮 (WinUI 3 ContentDialog 三命令模式)
+
+#### 5. 进度感知 (评审#5)
+- textarea 下方字符计数 + 预计块数 (与后端 whole_file 兜底算法一致)
+- 状态行显示「生成中… 块 i/N」; 超 20 万字启动前确认 (给出预计 LLM 调用次数)
+- Few-shot 范文超 2 万字自动截断并标注 (范文用途是学风格, 截断无增益损失)
+
+### 测试
+- 6 套件全部通过 (v4.2.0 基线 868 → 900+)
+- `test_f3_deai_error_no_complete` 从源码位置解析改为行为断言 (mock LLM 抛错)
+- 新增 `test_v430_deai_longtext` (~30 check): 多块调用/分节/纯拼接/衔接 prompt/降级落盘/取消 payload/step3 引用/whole_file 兜底/sample 截断/前端挂载点
+
+### 已知限制
+- 取消生效时机: 下一个流 delta 或块边界; 模型停流时等 timeout (与校对一致)
+- 输入方向 (textarea → bridge) 未设硬上限: 200 万字 ≈ 6MB postMessage 未经极限验证, 有 20 万字确认框拦截
+- DeAI 无断点续跑 (明确不做): 取消即丢弃, 重跑从块 0
+
+---
+
+## v4.2.0 (2026-09-06) — 信息架构重构: 3 视图拆成 7 视图 (Win11 设置应用式分组导航)
+
+**修订版**: 用户反馈"功能挤在 3 个视图里不直观" — 按 Win11 设置应用的导航模式拆成 7 页, 侧边栏分「工作区/设置」两组, 每页只做一件事. **不打包, dev 验证**.
+
+### 🟠 用户痛点
+1. **主页过载** — 文件/进度/日志/对比区挤一屏, 对比区常驻却多数时间在看进度
+2. **设置页 12 个字段 3 卡堆叠** — API 配置和校对参数混在一页, 找字段靠滚
+3. **去AI味页 4 组内容** — Step 0 Profile 管理(建/加范文/蒸馏)和 3 步工作流互相挤压
+
+### 拆分映射
+| 原 | 新 (7 视图) |
+|---|---|
+| 主页 | **校对** (文件+拖拽+启动控制+进度+日志) + **结果对比** (新页: diff/复制/导出, 点文件自动跳转) |
+| 设置 | **API 接口** (模板/Base/Key/Model/测试连接) + **校对参数** (生成参数/分块/System Prompt, 双卡) + **外观与关于** (主题持久化 + 版本/日志/快捷键速查) |
+| 去AI味 | **去 AI 味** (紧凑 Profile 下拉 + 输入 + 3 步工作流, 页头「管理风格库」跳转) + **风格库** (Profile 选择镜像/新建/加范文/蒸馏 + 9 轴说明卡) |
+
+### 改动
+- **侧边栏**: 分组标题 (`.nav-group`) + 7 个导航项 (启用闲置图标 check/document/app/info) + 底部版本号
+- **结果对比页**: 页头文件下拉 (`#result-file-select`, 与文件列表同一数据源, 带状态标签) + 对比卡撑满高度
+- **设置组三页**: `.content-narrow` 窄栏居中 (Win11 设置式); 校对参数页有独立保存按钮 (`.js-save-config` 同逻辑)
+- **JS 适配**: 配置防抖选择器覆盖拆分后的三页; 文件点击 `selectFile + setView('results')`; 风格库下拉与去AI味页镜像同步
+- **CSS**: 新增 nav-group/sidebar-footer/content-narrow/result-select/about-row/list-hint/run-card; 删除无引用的 `.compare-header`; home-grid 改两列等宽
+
+### 兼容性
+- **所有元素 id 拆分前后保持不变** — JS 绑定/事件推送零迁移; `data-nav` 通用跳转属性供页头按钮复用
+
+### 测试
+- 6 套件全部通过 (v4.1.9 基线 813 → 新增 `test_v420_nav_split` 约 45 check: 7 视图/分组/关键 id 唯一性/cfg 13 字段齐全/JS 适配点/CSS 组件)
+
+### 已知限制
+- 结果对比页暂无"上一处/下一处修改"导航 (diff 较长时需滚动)
+
+---
+
+## v4.1.9 (2026-09-06) — Win11 视觉完全体 (材料/动效/个性化三签名额补)
+
+**修订版**: v4.1.8 只搭好了 token 骨架, 本版把设计文档要求但未落地的三块补齐 — 材料 (Mica/Acrylic/Smoke 真实使用), 动效 (页面转换/reduced-motion), 个性化 (主题持久化). **不打包, dev 验证**.
+
+### 🟠 用户痛点 (5 项)
+1. **材料类零使用** — `.acrylic`/`.smoke-overlay` 定义了但没有任何元素引用 (审计确认), 清空文件用原生 `confirm()` 弹窗, 与 Fluent 视觉割裂
+2. **视图切换无转场** — 三个视图瞬间硬切, WinUI 3 顶级页面应有上滑入场转场 (§3.7.3)
+3. **主题不持久化** — 切换 light/dark 后重启回退 auto (违反 §2.3 个人原则)
+4. **字体栈不完整** — 未启用 Segoe UI Variable 光学尺寸轴 (§3.6.1)
+5. **组件硬编码色残留** — file-status 五态/hover 边框/log 深底写死色值, 暗色靠逐状态覆盖块打补丁
+
+### 改动
+
+#### 1. 材料 (§3.4) — 三种材料全部真实落地
+- **Mica 近似** (§3.4.3): body 用两个中性色 radial-gradient 模拟云母"淡染扎根" (web 内无法调 DWM, 注释说明为视觉近似); 侧边栏=基层, 内容卡=内容层 (§3.2.3 双层系统), 卡片阴影升为 Card 档 shadow-8 (§3.2.1 提升值表)
+- **Acrylic** (§3.4.2): 文件列表右键菜单 `.menu-flyout.acrylic` (blur 20px + saturate 180%), 带视口钳制/Esc/外点关闭 — 落实 §2.4 熟悉原则 (Windows 右键肌肉记忆)
+- **Smoke + ContentDialog** (§3.4.4): 新增 WinUI 3 原版样式的确认对话框 (Smoke 遮罩 + 不透明面板 + overlay 8px 圆角 + shadow-128 + 底部等宽双按钮 + 250ms 缩放入场), 替代 `clearFiles` 的原生 `confirm()`
+
+#### 2. 动效 (§3.7)
+- **页面转换** (§3.7.3): `.view.active` 上滑入场 (24px + 淡入, 167ms point-to-point 曲线)
+- **无障碍**: 全部动画/过渡包 `@media (prefers-reduced-motion: reduce)` 守卫; 新增全局 `:focus-visible` 键盘焦点环 (2px accent)
+
+#### 3. 个性化 (§2.3)
+- `ProjectConfig` 新增 `ui_theme` 字段 (auto/light/dark, 旧配置缺省 auto), 主题切换即写入配置并落盘, 启动时恢复; 主题逻辑抽为 `applyTheme()` 统一入口
+
+#### 4. Token 纪律 (§2.5 完整+连贯)
+- file-status 五态改用 status subtle/fg token, 删除 12 行逐状态暗色覆盖块 (token 自适应)
+- `.log` 改主题感知 (Background2 内凹面), input hover 新增 `--colorNeutralStrokeHover` token (4 主题块)
+- `.card` 等组件零硬编码色; 删除零引用死类 (diff-tabs/diff-content/diff-empty/btn-small/compare-empty/style-profile-card/style-profile-loading)
+- 启用 2 个闲置图标 (document/close) 做右键菜单图标, warning/error/info 用于对话框标题
+
+### 测试
+- 6 套件 813 check 全部通过 (v4.1.8.2 基线 784 → +29)
+- 新增 `test_v419_win11_polish` (22 check: Mica 渐变/ContentDialog/flyout/页面转换/reduced-motion/focus-visible/token 化/死类删除) + `test_v419_ui_theme_roundtrip` (5 check: 默认值/往返/旧配置兼容/bridge 可写)
+
+### 已知限制
+- Mica 为 CSS 视觉近似, 无法感知真实桌面壁纸 (需 DWM/WinUI 才能原生云母)
+- 右键菜单为浏览器内模拟, 非 DWM 原生上下文菜单
+
+---
+
 ## v4.1.8 (2026-09-05) — 前端按 Win11 Fluent 2 设计原则完整重构
 
 **修订版**: 按 `Windows11-设计原则.md` (Microsoft Learn 官方文档) 5 原则 + 7 签名体验**完全重构**前端, 从 4.0 临时方案对齐到 Win11 Fluent 2 视觉. **不打包, dev 验证**.
