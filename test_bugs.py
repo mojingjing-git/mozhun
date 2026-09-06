@@ -1,5 +1,5 @@
 """
-回归测试 — PySide6 版
+回归测试 — 引擎层 (Bug#1-13 均为 v4.0+ 现行行为的回归锚点)
 """
 import asyncio
 import re
