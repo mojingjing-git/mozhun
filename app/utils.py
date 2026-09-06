@@ -108,6 +108,28 @@ def compute_prompt_hash(
     return hashlib.sha256(raw).hexdigest()[:16]
 
 
+def compute_prompt_hash_for_config(cfg: "ProjectConfig") -> str:
+    """v5.0.1 (审计 I-3): 从 ProjectConfig 一把算断点指纹.
+
+    生产调用方 (processor) 与测试统一走这里 — 字段集与 compute_prompt_hash
+    严格同步且相邻可见, 杜绝"部分传参靠默认值碰巧匹配"的缓存屏障虚标
+    (旧 3 处测试只传 8/14 字段, 任何默认值漂移都会静默破坏屏障)."""
+    return compute_prompt_hash(
+        cfg.prompt_mode, cfg.model, cfg.custom_prompt,
+        chunking_preset=cfg.chunking_preset,
+        context_max_chars=cfg.context_max_chars,
+        context_max_chunks=cfg.context_max_chunks,
+        temperature=cfg.temperature,
+        api_base=cfg.api_base,
+        punct_fix=cfg.punct_fix,
+        punct_quote_style=cfg.punct_quote_style,
+        punct_fullwidth_alnum=cfg.punct_fullwidth_alnum,
+        punct_repeat_compress=cfg.punct_repeat_compress,
+        punct_dash_tilde=cfg.punct_dash_tilde,
+        md_strip=cfg.md_strip_before_llm,
+    )
+
+
 class TaskStatus(Enum):
     PENDING = "pending"
     RUNNING = "running"

@@ -2895,7 +2895,7 @@ def test_v431_force_rerun_and_progress():
     from unittest.mock import patch, MagicMock, AsyncMock
     from app.utils import (
         ProjectConfig, FileTask, FileResult, TaskStatus,
-        save_checkpoint, compute_prompt_hash,
+        save_checkpoint, compute_prompt_hash_for_config,
     )
     from app.processor import ProcessingEngine
     from app.web_backend import Backend
@@ -2906,14 +2906,7 @@ def test_v431_force_rerun_and_progress():
         task.status = TaskStatus.COMPLETED
         task.result = FileResult(
             original="cached content", corrected="cached fixed",
-            prompt_hash=compute_prompt_hash(
-                cfg.prompt_mode, cfg.model, cfg.custom_prompt,
-                chunking_preset=cfg.chunking_preset,
-                context_max_chars=cfg.context_max_chars,
-                context_max_chunks=cfg.context_max_chunks,
-                temperature=cfg.temperature,
-                api_base=cfg.api_base,  # v4.1.8.2 (E16): 指纹补纳 api_base, 与引擎一致
-            ),
+            prompt_hash=compute_prompt_hash_for_config(cfg),  # v5.0.1 (审计 I-3)
         )
         save_checkpoint(fp, task)
 

@@ -884,7 +884,8 @@ class Backend:
           复制/导出/step3 引用走后端直读, 全文不过 IPC.
         - 取消 (评审#3): 逐 delta + 块间检查 cancel_event; 取消走结构化 payload
           (cancelled: true) 区分"用户取消"与"失败" (F3 语义), 已完成部分以
-          partial/result_file 保留. 取消语义与校对一致: 丢弃中间态, 重跑从块 0.
+          partial/result_file 保留. 取消语义: 保留已完成 partial (超限落盘
+          result_file 供复制/导出/step3 引用), 重跑从块 0 — 非丢弃 (v5.0.1 审计 I-4 纠正).
         - 取消生效时机: 下一个流 delta 或块边界; 模型停流时等 timeout — 与校对一致.
         """
         cancel_event = None
@@ -1101,7 +1102,8 @@ class Backend:
     def deai_cancel(self, task_id: str) -> dict:
         """取消一个运行中的 deai/蒸馏任务 (v4.3.0).
 
-        取消语义与校对一致: 丢弃中间态, 重跑从块 0 (AGENTS.md 第 8 条).
+        取消语义: 保留已完成 partial (超限落盘 result_file), 重跑从块 0
+        — 注意与校对 (AGENTS.md 第 8 条"丢弃重跑") 语义不同 (v5.0.1 审计 I-4).
         取消生效时机: 下一个流 delta 或块边界; 模型停流时等 timeout.
         """
         with self._deai_lock:

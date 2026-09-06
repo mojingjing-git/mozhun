@@ -212,7 +212,7 @@ def test_processor():
     check("prepare_tasks 读取文本", engine2.tasks[str(tmp)].original_text == "test content for prepare")
 
     # prepare_tasks 断点缓存
-    from app.utils import save_checkpoint, compute_prompt_hash
+    from app.utils import save_checkpoint, compute_prompt_hash_for_config
     with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8') as f:
         f.write("cached content")
         tmp = Path(f.name)
@@ -223,14 +223,7 @@ def test_processor():
     task.status = TaskStatus.COMPLETED
     task.result = FileResult(
         original="cached content", corrected="fixed",
-        prompt_hash=compute_prompt_hash(
-            cfg.prompt_mode, cfg.model, cfg.custom_prompt,
-            chunking_preset=cfg.chunking_preset,
-            context_max_chars=cfg.context_max_chars,
-            context_max_chunks=cfg.context_max_chunks,
-            temperature=cfg.temperature,
-            api_base=cfg.api_base,  # v4.1.8.2 (E16): 指纹补纳 api_base, 与引擎一致
-        ),
+        prompt_hash=compute_prompt_hash_for_config(cfg),  # v5.0.1 (审计 I-3)
     )
     save_checkpoint(tmp, task)
     engine3 = ProcessingEngine(cfg)

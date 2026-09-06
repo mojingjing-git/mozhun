@@ -34,6 +34,7 @@ from app.logger import setup_logging
 from app.templates import PROMPT_MODES
 from app.punct_fix import fix_punctuation_ex
 from app.md_strip import strip_markdown
+from app.utils import compute_prompt_hash_for_config
 from app.utils import (
     FileTask,
     FileResult,
@@ -149,16 +150,21 @@ class ProcessingEngine:
         }
 
     def _collect_punct_reports(self, file_name: str, punct_stats: dict) -> None:
-        """把引号不平衡报告转成可读日志行 (v4.3.4; 只报不改 — 宁漏勿误互补)."""
+        """把引号不平衡报告转成可读日志行 (v4.3.4; 只报不改 — 宁漏勿误互补).
+
+        v5.0.1 (审计 I-2): 每条同时走 _log — prepare 阶段 on_log 回调未注册时
+        _log 静默丢弃 (该阶段有 web_backend 的专用 push), 运行期收集
+        (punct_local/md_local 分支, 后台线程) 则即时到达前端 — 修复
+        "运行期累积的报告无人推" 的断链."""
         for rep in punct_stats.get("imbalance", []):
             line_no = rep.get("line", "?")
             if "count" in rep:
                 detail = f"引号落单 (共 {rep['count']} 个)"
             else:
                 detail = f"引号不平衡 (开 {rep.get('open', 0)}/闭 {rep.get('close', 0)})"
-            self.punct_reports.append(
-                f"{file_name} 第 {line_no} 行 {detail}: {rep.get('line_text', '')}"
-            )
+            msg = f"{file_name} 第 {line_no} 行 {detail}: {rep.get('line_text', '')}"
+            self.punct_reports.append(msg)
+            self._log(f"[报告] {msg}")
 
     def _strip_md_guarded(self, text: str, file_name: str) -> str:
         """v4.4.2: strip_markdown 带空结果兜底 (评审 P2-16) — 纯标记文件
@@ -240,20 +246,9 @@ class ProcessingEngine:
         # 缓存 prompt/配置指纹 (后续 _process_file_async 写入 FileResult.prompt_hash 复用)
         # v4.1.8.1 (审计 C2): 纳入 chunking/context/temperature 等影响生成结果的字段
         # v4.1.8.2 (审计 E16): 补纳 api_base
-        self._current_prompt_hash = compute_prompt_hash(
-            self.config.prompt_mode, self.config.model, self.config.custom_prompt,
-            chunking_preset=self.config.chunking_preset,
-            context_max_chars=self.config.context_max_chars,
-            context_max_chunks=self.config.context_max_chunks,
-            temperature=self.config.temperature,
-            api_base=self.config.api_base,
-            punct_fix=self.config.punct_fix,
-            punct_quote_style=self.config.punct_quote_style,
-            punct_fullwidth_alnum=self.config.punct_fullwidth_alnum,
-            punct_repeat_compress=self.config.punct_repeat_compress,
-            punct_dash_tilde=self.config.punct_dash_tilde,
-            md_strip=self.config.md_strip_before_llm,
-        )
+        # v5.0.1 (审计 I-3): 统一走 compute_prompt_hash_for_config — 字段集
+        # 与 compute_prompt_hash 相邻同步, 杜绝漏传靠默认值碰巧匹配
+        self._current_prompt_hash = compute_prompt_hash_for_config(self.config)
 
         for fp in file_paths:
             key = str(fp)
@@ -866,10 +861,12 @@ class ProcessingEngine:
             cleaned = strip_markdown(text)
             if self.config.punct_fix:
                 cleaned, punct_stats = fix_punctuation_ex(cleaned, self._punct_options())
+                name = self.tasks[task_key].file_path.name if task_key in self.tasks else task_key
+                # v5.0.1 (审计 I-2): 收集移出 total 门控 — 只有落单引号
+                # (imbalance 非空) 而 total=0 的文件之前连累积都没有
+                self._collect_punct_reports(name, punct_stats)
                 if punct_stats["total"]:
                     self._log(f"[标点] 本地修复 {punct_stats['total']} 处半角标点")
-                    name = self.tasks[task_key].file_path.name if task_key in self.tasks else task_key
-                    self._collect_punct_reports(name, punct_stats)
             # 空结果兜底 (评审 P2-16): 纯标记文件产出空文本会击穿 diff/is_done
             if not cleaned.strip() and text.strip():
                 cleaned = text
@@ -892,6 +889,10 @@ class ProcessingEngine:
             local_results: list[FileResult] = []
             for c in chunks:
                 fixed, punct_stats = fix_punctuation_ex(c, self._punct_options())
+                # v5.0.1 (审计 I-1): 引号不平衡报告在此收集 — 旧版只认 strict
+                # 路径, 「仅标点修复」模式(报告的最主用场)从不显示不平衡报告
+                name = self.tasks[task_key].file_path.name if task_key in self.tasks else task_key
+                self._collect_punct_reports(name, punct_stats)
                 out_parts.append(fixed)
                 local_results.append(FileResult(original=c, corrected=fixed))
             self._log(f"[标点] 本地修复完成 ({len(chunks)} 块, 未调用 LLM)")

@@ -253,6 +253,26 @@ def test_config_and_hash():
     check("PROMPT_MODES 含 md_local", "Markdown" in modes_keys, modes_keys)
 
 
+def test_engine_md_local_reports():
+    """v5.0.1 (审计 I-2): total=0 但 imbalance 非空 (只有落单引号) 也要收集 — 旧 total 门控吞掉."""
+    print()
+    print("--- 引擎 md_local 不平衡报告 (total=0) ---")
+    from app.processor import ProcessingEngine
+    from app.utils import ProjectConfig
+
+    async def run():
+        cfg = ProjectConfig(api_base="", api_key="", model="", prompt_mode="md_local")
+        engine = ProcessingEngine(cfg)
+        if hasattr(engine, "_pause_event"):
+            engine._pause_event.set()
+        engine.stats.start_time = __import__("time").time()
+        corrected, tokens, chunks = await engine._call_api_stream("k", '只有"落单引号的一行')
+        return corrected, engine.punct_reports
+
+    corrected, reports = asyncio.run(run())
+    check("md_local total=0 也收集不平衡报告", len(reports) >= 1, str(reports))
+
+
 def main():
     global passed, failed
     tests = [
@@ -266,6 +286,7 @@ def main():
         test_idempotency,
         test_content_preserved_e2e,
         test_engine_md_local_mode,
+        test_engine_md_local_reports,
         test_engine_empty_fallback,
         test_config_and_hash,
     ]

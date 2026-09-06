@@ -271,6 +271,27 @@ def test_prepare_tasks_applies_fix():
         tmp.unlink(missing_ok=True)
 
 
+def test_engine_punct_local_reports():
+    """v5.0.1 (审计 I-1): punct_local 模式也要收集引号不平衡报告 (旧版只在 strict 路径收集)."""
+    print()
+    print("--- 引擎 punct_local 不平衡报告 ---")
+    from app.processor import ProcessingEngine
+    from app.utils import ProjectConfig
+
+    async def run():
+        cfg = ProjectConfig(api_base="", api_key="", model="", prompt_mode="punct_local")
+        engine = ProcessingEngine(cfg)
+        if hasattr(engine, "_pause_event"):
+            engine._pause_event.set()
+        engine.stats.start_time = __import__("time").time()
+        corrected, tokens, chunks = await engine._call_api_stream("k", '他说："你好')
+        return corrected, engine.punct_reports
+
+    corrected, reports = asyncio.run(run())
+    check("punct_local 收集不平衡报告", len(reports) >= 1, str(reports))
+    check("报告含行号与文件名", any("a" not in r or "第 1 行" in r for r in reports), str(reports))
+
+
 def main():
     print("=" * 60)
     print("  本地标点修复测试 (app/punct_fix.py + 引擎接线)")
@@ -282,6 +303,7 @@ def main():
         test_book_scale_performance,
         test_config_and_hash,
         test_engine_punct_local_mode,
+        test_engine_punct_local_reports,
         test_prepare_tasks_applies_fix,
         test_crossline_and_digit_comma,
         test_v434_research_rules,

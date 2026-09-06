@@ -36,21 +36,15 @@ def test_bug1():
     from app.processor import ProcessingEngine
     from app.utils import (
         ProjectConfig, save_checkpoint, FileTask, FileResult, TaskStatus,
-        compute_prompt_hash,
+        compute_prompt_hash_for_config,
     )
     with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8') as f:
         f.write('test'); tmp = Path(f.name)
     # v4.1.8.1 (C5): 断点命中现在要求 prompt_hash 与当前配置指纹一致 (load_checkpoint
     # 传 expected_hash), 测试断点必须带正确指纹, 否则空 hash 断点会被判失效.
     cfg = ProjectConfig(api_base='http://x', model='m')
-    ph = compute_prompt_hash(
-        cfg.prompt_mode, cfg.model, cfg.custom_prompt,
-        chunking_preset=cfg.chunking_preset,
-        context_max_chars=cfg.context_max_chars,
-        context_max_chunks=cfg.context_max_chunks,
-        temperature=cfg.temperature,
-        api_base=cfg.api_base,  # v4.1.8.2 (E16): 指纹补纳 api_base, 与引擎一致
-    )
+    # v5.0.1 (审计 I-3): 统一走 for_config helper — 14 字段一把传, 不再靠默认值
+    ph = compute_prompt_hash_for_config(cfg)
     task = FileTask(file_path=tmp, original_text='test')
     task.status = TaskStatus.COMPLETED
     task.result = FileResult(original='test', corrected='fixed', token_count=10, prompt_hash=ph)

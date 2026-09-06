@@ -51,8 +51,10 @@
 import re
 
 # 掩蔽占位符 (punct_fix 同款): NUL 在入口剥离, 不会与用户文本串号
-_FENCE_RE = re.compile(r"^ {0,3}(```+|~~~+).*$")
-_INLINE_CODE_RE = re.compile(r"`([^`\n]+)`")
+# v5.0.1 (审计 L-1/L-2): 围栏开/闭分离校验 (同字符同长度); 行内代码等长 run 配对
+_FENCE_OPEN_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})")        # 开: 可带语言标记
+_FENCE_CLOSE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})[ \t]*$")  # 闭: 仅尾随空白
+_CODE_SPAN_RE = re.compile(r"(`+)([^`]|[^`][\s\S]*?[^`])\1(?!`)")
 _MD_CHARS = set("*_~`#[]()!|>-+")
 _IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(([^)\s]*)\)")
 _LINK_RE = re.compile(r"\[([^\]]*)\]\(([^)\s]*)\)")
@@ -106,38 +108,47 @@ def _store(store: dict, content: str) -> str:
 
 
 def _mask_fences(text: str, store: dict) -> str:
-    """Phase 1a: 围栏代码块掩蔽 (行级状态机). 闭合块剥壳留内容; 未闭合块
-    (分块切开围栏, 评审 P1-6) 保守掩蔽到文本尾 — 去掉开围栏行, 内容原样保护."""
+    """Phase 1a: 围栏代码块掩蔽 (行级状态机, CommonMark §4.5).
+
+    v5.0.1 (审计 L-1): 闭合围栏必须与开启围栏**同字符且长度 >= 开启长度**
+    (``` 开的块不再被 ~~~ 行闭合, 异字符行按代码内容保留) — 旧实现任何围栏
+    行都当闭合, 异字符行被吞导致内容丢失 (触红线 1). 未闭合到 EOF 保守
+    掩蔽到尾. 开启行 (含语言标记) 与闭合行剥壳, 内容逐行保留."""
     lines = text.split("\n")
     out: list[str] = []
-    buf: list[str] | None = None
+    fence: tuple[str, int, list[str]] | None = None  # (围栏字符, 开启长度, 内容行)
     for ln in lines:
-        if buf is not None:
-            if _FENCE_RE.match(ln):
-                buf.append(ln)  # 闭合围栏行
-                out.append(_store(store, "\n".join(buf[1:-1])))  # 剥壳留内容
-                buf = None
+        if fence is not None:
+            m = _FENCE_CLOSE_RE.match(ln)
+            if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= fence[1]:
+                out.append(_store(store, "\n".join(fence[2])))  # 剥壳留内容
+                fence = None
             else:
-                buf.append(ln)
+                fence[2].append(ln)  # 异字符围栏行 / 普通行 → 代码内容
             continue
-        if _FENCE_RE.match(ln):
-            buf = [ln]  # 开围栏行 (随后丢弃)
+        m = _FENCE_OPEN_RE.match(ln)
+        if m:
+            fence = (m.group(1)[0], len(m.group(1)), [])  # 开围栏行剥壳丢弃
             continue
         out.append(ln)
-    if buf is not None:  # 未闭合到 EOF: 开围栏行丢弃, 其余内容整块保护
-        out.append(_store(store, "\n".join(buf[1:])))
+    if fence is not None:  # 未闭合到 EOF: 开围栏行丢弃, 内容整块保护
+        out.append(_store(store, "\n".join(fence[2])))
     return "\n".join(out)
 
 
 def _mask_inline_code(line: str, store: dict) -> str:
-    """Phase 1b: 行内代码. 内容含 md 字符 → 整体保留含反引号 (掩蔽保护,
-    防剥反引号后内容暴露于行内规则; 两分支各自幂等); 干净内容 → 剥反引号."""
+    """Phase 1b: 行内代码 (CommonMark §6.1 反引号 run 等长配对).
+
+    v5.0.1 (审计 L-2): 开/闭反引号 run **等长**配对 (``code`` 双反引号整段
+    剥壳) — 旧实现只配单反引号对, 双反引号残留半对. 内容含 md 字符 (含 `)
+    → 整体保留含反引号 (掩蔽保护, 防暴露后二次伤害); 干净内容 → 剥反引号.
+    两分支各自幂等."""
     def repl(m: re.Match) -> str:
-        content = m.group(1)
+        content = m.group(2)
         if any(c in _MD_CHARS for c in content):
             return _store(store, m.group(0))  # 含反引号整体保留
         return _store(store, content)  # 干净内容剥反引号
-    return _INLINE_CODE_RE.sub(repl, line)
+    return _CODE_SPAN_RE.sub(repl, line)
 
 
 def _strip_line(line: str) -> str:

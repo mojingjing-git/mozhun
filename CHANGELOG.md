@@ -1,5 +1,32 @@
 # Changelog
 
+## v5.0.1 (2026-09-07) — 三份外部审计修复批 (8 critical + 4 notable 全清)
+
+**修订版**: 3 份审计报告 (基线 v4.4.2) 经独立核验 agent 逐条复现 (12 条受核 finding 零误报, 1 条已过时, 2 条降档) 后按当前 HEAD 修复。审报告全文见 `.workbuddy/research/audit-bugs-*.md`。
+
+### 引擎 (app/md_strip.py)
+- **L-1 围栏同字符闭合** (CommonMark §4.5): 闭合围栏必须与开启同字符且长度 >= 开启 — 旧版任何围栏行都当闭合, `~~~` 开 ``` 闭导致内容行被吞 (触红线 1)
+- **L-2 行内代码等长 run 配对** (§6.1): ``code`` 双反引号整段剥壳 — 旧版只配单引号对, 双反引号残留半对; 含 ` 内容整体保留分支同步重验幂等
+
+### 集成 (app/processor.py)
+- **I-1**: punct_local 模式补引号不平衡报告收集 (旧版只认 strict 路径, 报告的主用场从不显示)
+- **I-2**: md_local 报告收集移出 total 门控 (只有落单引号 total=0 的文件旧版连累积都没有); `_collect_punct_reports` 每条同时走 `_log` — 修复"运行期累积的报告无人推前端"断链 (prepare 阶段回调未注册时 _log 静默丢弃, 该阶段仍有专用 push)
+
+### 工程化
+- **I-3**: 新增 `compute_prompt_hash_for_config(cfg)` — processor 与 3 处测试统一走它, 消灭"部分传参 8/14 字段靠默认值碰巧匹配"的缓存屏障虚标
+- **I-4**: deai_cancel 三处 docstring/AGENTS 第 26 条纠正 — 实际语义是"保留 partial 重跑从头", 非"丢弃"
+- **F-1**: warning.svg 感叹号点零长度 path 改 circle (与 info.svg 同构)
+
+### 文档 (D-2/D-3/D-4/D-5)
+- THIRD_PARTY_NOTICES 顶部索引与核验状态表补齐 §10-§16 (v4.1.8/v4.3.4/v4.4.2), 底部元数据更新
+- README: templates 模式数措辞收敛 (6 模式 + deai)、借鉴清单补 commonmark (15→16)、套件数三处口径统一
+- README 表"漏长句检测行" (D-1) 已过时: v5.0.0 砍模式后恰好对齐, 无需修
+
+### 测试
+- 新增: punct_local/md_local 不平衡报告收集 ×2; 8 个 L-1/L-2 复现用例并入套件; 8 套件 **1168/0**
+
+---
+
 ## v5.0.0 (2026-09-07) — 校对流程架构重构: 模式精简 + 校对→DeAI 联动
 
 **修订版**: 依据 `.workbuddy/research/` 三份调研报告 (2 explore + 1 verifier, 20 条核验/5 处契约澄清) 的决策落地。产品方向: 校对与改写分层 (竞品一致范式), 重润色类需求收拢到去 AI 味视图。

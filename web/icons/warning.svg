@@ -9,6 +9,6 @@
   <path d="M12 3 L22 20 L2 20 Z"/>
   <!-- 感叹号竖 -->
   <path d="M12 10 L12 14"/>
-  <!-- 感叹号点 -->
-  <path d="M12 17.5 L12 17.5"/>
+  <!-- 感叹号点 (v5.0.1 审计 F-1: 零长度 path 改 circle, 与 info.svg 同构) -->
+  <circle cx="12" cy="17.5" r="0.6" fill="currentColor"/>
 </svg>

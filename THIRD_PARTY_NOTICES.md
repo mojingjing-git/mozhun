@@ -6,6 +6,9 @@
 - **v3.0**（PySide6 GUI）借鉴 4 个上游项目（§1–§4）
 - **v4.0**（pywebview 重写）新增 4 个上游项目（§5–§8）
 - **v4.1.7**（蒸馏文风融入 DeAI）新增 1 个上游项目（§9）
+- **v4.1.8**（Win11 重构）新增 2 个参考（§10–§11）
+- **v4.3.4**（标点修复 v2）新增 4 个上游项目 + 国家标准（§12–§15）
+- **v4.4.2**（Markdown 清洗）新增 1 个规范引用（§16）
 
 ---
 
@@ -743,8 +746,30 @@ Copyright (c) 2014-2024 Roman Yurchak
 |------|------|---------|---------|
 | jianshuo/claude-skills | MIT | ✅ 已确认 | web_fetch raw.githubusercontent.com/jianshuo/claude-skills/main/LICENSE 拿到完整 ~1KB 文本, 字符级匹配粘贴 |
 
+### v4.1.8 借鉴 (Win11 重构, 致谢非协议)
+
+| 上游 | 协议 | 核验状态 | 核验方式 |
+|------|------|---------|---------|
+| Microsoft Learn 设计原则文档 | Microsoft Terms of Use | ✅ 已确认 | 官方文档页面抓取 (致谢非协议, 无 LICENSE 副本义务) |
+| microsoft/fluentui-system-icons | MIT | ✅ 已确认 | GitHub LICENSE 完整粘贴 (§11) |
+
+### v4.3.4 借鉴 (标点修复 v2)
+
+| 上游 | 协议 | 核验状态 | 核验方式 |
+|------|------|---------|---------|
+| woct0rdho/typeset | MIT | ✅ 已确认 | GitHub LICENSE 完整粘贴 (§12) |
+| huacnlee/autocorrect | MIT | ✅ 已确认 | GitHub LICENSE 完整粘贴 (§13) |
+| yongzhuo/macro-correct | Apache-2.0 | ✅ 已确认 | GitHub LICENSE 完整粘贴 (§14) |
+| sparanoid/chinese-copywriting-guidelines + GB/T 15834-2011 | MIT / 国家标准 | ✅ 已确认 | GitHub LICENSE 完整粘贴 + 国家标准可自由引用 (§15) |
+
+### v4.4.2 借鉴 (Markdown 清洗)
+
+| 上游 | 协议 | 核验状态 | 核验方式 |
+|------|------|---------|---------|
+| commonmark/commonmark-spec | CC-BY-SA 4.0 (spec 文本) / BSD-2 (参考实现) | ✅ 已确认 | GitHub LICENSE 阅读 (§16; 仅规范语义引用, 无文本复制, 不触发 share-alike) |
+
 ---
 
-**最后更新**: 2026-09-05
-**覆盖版本**: v3.0 + v4.0 + v4.1.7
+**最后更新**: 2026-09-07
+**覆盖版本**: v3.0 + v4.0 + v4.1.7 + v4.1.8 + v4.3.4 + v4.4.2
 **生成依据**: PLAN-chunking.md §4.2 + PLAN-pywebview.md §1.3 / §3.2 / §15 + PLAN-distill-style.md

@@ -75,7 +75,7 @@ main.py (webview.start)
 25. **Win11 设置应用式分组导航** (v4.2.0+): 侧边栏分「工作区/设置」两组 7 页 — 校对 (文件+任务) / 结果对比 (diff 独立页, 点文件跳转) / 去 AI 味 (纯工作流) / 风格库 (Step 0 Profile 管理独立页) / API 接口 / 校对参数 / 外观与关于; 关键元素 id 拆分前后保持不变, JS 绑定零迁移; 设置组三页用 `.content-narrow` 窄栏居中
 
 ### v4.3.0 新增（DeAI 长文本: 分块/取消/降级推送 + 拖入）
-26. **DeAI 分块与降级推送** (v4.3.0+): `split_text` 单点在 utils (校对/DeAI 共用); `_deai_run` 按分块预设切块, rewrite 纯拼接 + 块间衔接, whole_file 超 2 万字兜底回退 large; partial 超 5 万字只推尾部预览, 完整结果落盘 `deai_results/`, 复制/导出/step3 引用走后端直读 (`deai_copy_result`/`deai_save_result`/`source_task_id`), 全文不过 IPC; 取消用 `cancelled:true` 结构化 payload 与失败区分, 语义同校对 (丢弃重跑)
+26. **DeAI 分块与降级推送** (v4.3.0+): `split_text` 单点在 utils (校对/DeAI 共用); `_deai_run` 按分块预设切块, rewrite 纯拼接 + 块间衔接, whole_file 超 2 万字兜底回退 large; partial 超 5 万字只推尾部预览, 完整结果落盘 `deai_results/`, 复制/导出/step3 引用走后端直读 (`deai_copy_result`/`deai_save_result`/`source_task_id`), 全文不过 IPC; 取消用 `cancelled:true` 结构化 payload 与失败区分; 取消语义: 保留 partial (超限落盘) 重跑从头, 与校对的丢弃语义不同 (v5.0.1 审计 I-4 纠正)
 
 ### v4.3.1 / v4.3.2 新增（UX 直觉批次 + API 预设重写）
 27. **UX 直觉性修复批次** (v4.3.1+): 全局 toast 替代静默失败、错误信息人性化 (`_humanizeError`)、结果缓存 + **强制重跑** (`start_proofread(force_rerun)`, 缓存命中返回 `cached_files`)、活动感知 watchdog、风格库列表/删除/查看补全、连接测试内联反馈

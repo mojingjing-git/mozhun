@@ -1,4 +1,4 @@
-# 墨准 (MoZhun) v5.0.0 (pywebview + 水墨宣纸 / Win11 Fluent)
+# 墨准 (MoZhun) v5.0.1 (pywebview + 水墨宣纸 / Win11 Fluent)
 
 基于 LLM 的批量文本校对工具。**pywebview 6.2.1** 前端 + 原生 Web 设计令牌 + **Win11 Fluent 2 视觉**，支持流式输出、任意 OpenAI 兼容 API，以及**零 LLM 成本的本地标点修复**（v4.3.3+）。
 
@@ -171,12 +171,12 @@ python main.py       # 或直接开发模式运行
 │   ├── processor.py        # async LLM 引擎 (v3.0 保留)
 │   ├── punct_fix.py        # v4.3.3+ 本地标点修复规则引擎
 │   ├── context_builder.py  # v3.0+ 跨段 prefix
-│   ├── templates.py        # API 模板 (10 预设) + Prompt (7 模式 + deai)
+│   ├── templates.py        # API 模板 (10 预设) + Prompt (6 模式 + deai)
 │   ├── utils.py            # 数据模型 + 配置持久化 + 断点
 │   └── logger.py           # RotatingFileHandler
 ├── build.spec              # PyInstaller 打包（v4.0 重写）
 ├── check_exe.py            # 打包后 exe 资源完整性校验
-├── test_*.py               # 7 套件 1012 项
+├── test_*.py               # 8 套件 1165 项
 ├── run_all_tests.py        # 一键跑全部
 ├── PLAN-*.md               # 各版本升级 plan（完成态存档）
 ├── CHANGELOG.md            # 版本日志
@@ -209,7 +209,7 @@ python test_md_strip.py
 python test_web_backend.py
 ```
 
-当前状态：**8 个套件 1171 / 1171 通过**（v4.4.2）
+当前状态：**8 个套件 1165 / 1165 通过**（v5.0.0）
 
 ## 打包
 
@@ -225,13 +225,14 @@ python check_exe.py   # 校验 exe 内 web/ 资源与 style_profiles 完整性
 
 ## 借鉴来源
 
-v3.0 → v4.3.4 共借鉴 **15 个开源项目 / 文档**，全部思路借鉴，代码自写：
+v3.0 → v4.4.2 共借鉴 **16 个开源项目 / 文档**，全部思路借鉴，代码自写：
 
 - **业务层 (v3.0)**：tianhm/ollama-batch-processor / shreyan241/gpt-proofreader / Xueheng-Li/proofreading (MIT) + qasync (BSD-2)
 - **GUI 层 (v4.0)**：pywebview (BSD-3) + diff-match-patch (Apache-2.0) + marked.js (MIT) + Fluent UI System Icons (MIT)
 - **DeAI 升级 (v4.1.7)**：jianshuo/claude-skills (MIT) — 9 轴风格指纹 + 事实骨架 + AI 6 处反制 + 8 轴自评
 - **Win11 重构 (v4.1.8)**：[Microsoft Learn 设计原则文档](https://learn.microsoft.com/zh-cn/windows/apps/design/)（致谢非协议）+ Fluent UI System Icons
 - **标点修复调研 (v4.3.4)**：[woct0rdho/typeset](https://github.com/woct0rdho/typeset) (MIT) + [huacnlee/autocorrect](https://github.com/huacnlee/autocorrect) (MIT) + [yongzhuo/macro-correct](https://github.com/yongzhuo/macro-correct) (Apache-2.0) + [sparanoid/chinese-copywriting-guidelines](https://github.com/sparanoid/chinese-copywriting-guidelines) (MIT) + GB/T 15834-2011《标点符号用法》
+- **Markdown 清洗 (v4.4.2)**：[commonmark/commonmark-spec](https://github.com/commonmark/commonmark-spec)（CC-BY-SA 4.0 spec 文本 + BSD-2 参考实现）— 围栏/强调边界/表格形态的结构语义引用
 
 完整 LICENSE 副本见 [`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md)。
 
