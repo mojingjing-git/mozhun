@@ -1,6 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 # v4.0+ PyInstaller 打包配置
-# 输出: dist/新时代校对大师.exe (onefile, windowed)
+# 输出: dist/墨准.exe (onefile, windowed)
 # 目标: < 80 MB
 
 # 收集 pywebview 在 Windows 上需要的所有隐藏 import
@@ -88,7 +88,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name='新时代校对大师',
+    name='墨准',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

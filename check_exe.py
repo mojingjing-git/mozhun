@@ -1,7 +1,7 @@
 """检查打包后的 exe 是否包含 web/ 前端资源 + style_profiles builtin JSON.
 
 v4.1.8.1 (审计修复 D1/D2):
-- 路径锚定: 不再依赖 cwd, 用脚本所在目录定位 dist/新时代校对大师.exe
+- 路径锚定: 不再依赖 cwd, 用脚本所在目录定位 dist/墨准.exe
 - 分隔符: PyInstaller 在 Windows 上 CArchive 资源路径用反斜杠 (web\\index.html),
   源码里只查 b"web/" 恒匹配 0 次 -> 误报"资源未打入". 现在两种分隔符都查.
 - 校验项更新: 移除已不存在的 marked.min.js (web/lib 现在只剩 diff-match-patch.js),
@@ -15,7 +15,7 @@ import sys
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-exe_path = os.path.join(BASE_DIR, "dist", "新时代校对大师.exe")
+exe_path = os.path.join(BASE_DIR, "dist", "墨准.exe")
 if not os.path.exists(exe_path):
     print(f"ERROR: {exe_path} not found")
     sys.exit(1)

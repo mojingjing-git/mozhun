@@ -1,4 +1,4 @@
-// 新时代校对大师 v4.1.8 前端逻辑 (Win11 Fluent 2 完整重构, 业务逻辑保留 v4.1.5)
+// 墨准 v4.1.8 前端逻辑 (Win11 Fluent 2 完整重构, 业务逻辑保留 v4.1.5)
 //
 // 借鉴自 https://pywebview.flowrl.com/ (BSD-3-Clause) - Bridge 模式
 // 借鉴自 https://github.com/google/diff-match-patch (Apache-2.0) - diff 算法
@@ -100,7 +100,7 @@ const App = {
     this.bindEvents();
     this.startEventLoop();
     this.setView('home');
-    this.appendLog('[就绪] v4.3.4 pywebview 前端已加载');
+    this.appendLog('[就绪] v4.3.5 pywebview 前端已加载');
     // v4.1.7: 加载风格 profile 列表 (异步, 不阻塞 init)
     this.loadStyleProfiles();
     // v4.1.9 (S2.3 个人原则): 恢复持久化主题 (auto/light/dark)

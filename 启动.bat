@@ -1,6 +1,6 @@
 @echo off
 REM ============================================================
-REM  New Era Proofreader - unified launcher (thin wrapper)
+REM  MoZhun - unified launcher (thin wrapper)
 REM
 REM  All logic lives in start.py (UTF-8, no codepage issues).
 REM  Keep this file ASCII-only (project convention since v4.1.2:

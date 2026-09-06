@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.3.5 (2026-09-06) — 更名「墨准」
+
+**修订版**: 项目更名 「新时代校对大师」 → **「墨准」(MoZhun)**. 查重结论: 写作/校对赛道无同名产品 (全网唯一同名 "墨准天气" 为天气类应用, 品类无关).
+
+- 动机: 原名 "新时代" 口号感 + "大师" 自封感; "墨准" 取 "落墨即准", 对齐当前定位 — **本地标点修复 + LLM 批量校对 + 去 AI 味** 的 AI 稿件收尾工具
+- 同步更新: 窗口标题 (main.py)、前端 title/侧栏品牌/关于页定位行 (web/)、统一启动器与 PyInstaller 产物名 (start.py/build.spec → `dist/墨准.exe`)、check_exe.py、README (加 MoZhun 拼写)/AGENTS/THIRD_PARTY_NOTICES (标注曾用名)
+- 历史文档 (PLAN-*.md 与 CHANGELOG 旧条目) 保留旧名, 不改写历史
+- 配置目录 `~/.proofreader/` 与全部内部标识不变 (配置/断点/文风数据完全兼容); 功能零改动
+- 注意: 旧 `dist/新时代校对大师.exe` 为改名前产物, 下次 `PyInstaller build.spec` 输出 `dist/墨准.exe` 后可删
+
+---
+
 ## v4.3.4 (2026-09-06) — 标点修复 v2 (GitHub 调研成果全量吸收)
 
 **修订版**: 按"派 agent 深度调研 3 个 GitHub 同类项目 (typeset/autocorrect/macro-correct + 排版指北)"的结论, 全量落地 9 项改进; 实施中 1 轮 agent 实测评审 (P1-P10), 必修项全部修复. **不打包, dev 验证**.

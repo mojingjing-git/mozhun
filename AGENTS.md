@@ -92,7 +92,7 @@ main.py (webview.start)
 - Bridge: `app/web_backend.py`
 - 引擎: `app/processor.py` / `app/punct_fix.py`（v4.3.3+） / `app/context_builder.py` / `app/utils.py` / `app/templates.py` / `app/logger.py`
 - 前端: `web/index.html` / `web/app.js` / `web/style.css` / `web/icons/*.svg` / `web/lib/*.js`
-- 打包: `build.spec` / `check_exe.py`（exe 资源校验）/ `dist/新时代校对大师.exe`
+- 打包: `build.spec` / `check_exe.py`（exe 资源校验）/ `dist/墨准.exe`
 - 测试:
   - `test_bugs.py`（回归测试）
   - `test_components.py`（组件 + 冒烟测试）

@@ -1,5 +1,5 @@
 """
-新时代校对大师 v4.1 入口 (pywebview 版本)。
+墨准 v4.3.5 入口 (pywebview 版本)。
 
 借鉴自 https://pywebview.flowrl.com/ (BSD-3-Clause)
 借鉴内容: 标准窗口创建模式 + js_api Bridge 注入
@@ -66,7 +66,7 @@ def main():
 
     logger = setup_logging()
     logger.info("=" * 50)
-    logger.info("新时代校对大师 v4.1 启动 (pywebview)")
+    logger.info("墨准 v4.3.5 启动 (pywebview)")
     # v4.1.8.2 (审计 K11): 用 logger 模块的实际 LOG_FILE — 旧版硬编码
     # ~/.proofreader/app.log, PROOFREADER_HOME 重定向后提示路径是错的
     from app.logger import LOG_FILE
@@ -77,7 +77,7 @@ def main():
     # 借鉴自 pywebview (BSD-3-Clause) 的标准 js_api 注入范式.
     backend = Backend(window=None)
     window = webview.create_window(
-        title="新时代校对大师",
+        title="墨准",
         url=_resolve_web_index(),
         width=1200,
         height=800,
@@ -117,7 +117,7 @@ def main():
                     import ctypes
                     # MB_ICONERROR (0x10), 宽字符 API, ctypes 自动把 str 转 UTF-16
                     ctypes.windll.user32.MessageBoxW(
-                        None, err_text, "新时代校对大师 - 启动失败", 0x10
+                        None, err_text, "墨准 - 启动失败", 0x10
                     )
                 except Exception:
                     pass  # 弹窗也失败就静默, 至少不再二次崩溃

@@ -1,5 +1,5 @@
 # ============================================================
-#  新时代校对大师 v4.1.8.2 统一启动器 (start.py)
+#  墨准 v4.1.8.2 统一启动器 (start.py)
 #
 #  替代 dev_run.bat / dev_check.bat / dev_run.ps1 / dev_check.ps1
 #  四件套 + dev_launcher.py 的散乱结构, 一个入口覆盖全部场景:
@@ -7,7 +7,7 @@
 #    python start.py          # 智能模式 (默认): dist 里有 exe 启 exe,
 #                             #   没有则走开发模式 (venv/依赖/WebView2 检查 + main.py)
 #    python start.py dev      # 开发模式: 强制走 venv + main.py
-#    python start.py exe      # 直接启动打包版 dist/新时代校对大师.exe
+#    python start.py exe      # 直接启动打包版 dist/墨准.exe
 #    python start.py check    # 仅环境自检, 不启动任何东西
 #
 #  吸收 v4.1.8.2 审计 (K1/K2/K6/K8/K9) 的全部修复:
@@ -35,7 +35,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 VENV_DIR = ROOT / ".venv"
 VENV_PY = VENV_DIR / "Scripts" / "python.exe"
-EXE_PATH = ROOT / "dist" / "新时代校对大师.exe"
+EXE_PATH = ROOT / "dist" / "墨准.exe"
 REQUIREMENTS = ROOT / "requirements.txt"
 LOG_HINT = Path.home() / ".proofreader" / "app.log"
 
@@ -326,7 +326,7 @@ def cmd_auto() -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="新时代校对大师统一启动器 (智能模式默认: exe 优先, 否则开发模式)",
+        description="墨准统一启动器 (智能模式默认: exe 优先, 否则开发模式)",
     )
     parser.add_argument(
         "mode", nargs="?", default="auto",

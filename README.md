@@ -1,4 +1,4 @@
-# 新时代校对大师 v4.3.4 (pywebview + Win11 Fluent 2)
+# 墨准 (MoZhun) v4.3.5 (pywebview + Win11 Fluent 2)
 
 基于 LLM 的批量文本校对工具。**pywebview 6.2.1** 前端 + 原生 Web 设计令牌 + **Win11 Fluent 2 视觉**，支持流式输出、任意 OpenAI 兼容 API，以及**零 LLM 成本的本地标点修复**（v4.3.3+）。
 
@@ -155,7 +155,7 @@ python main.py       # 或直接开发模式运行
 ## 项目结构
 
 ```
-新时代校对大师/
+墨准/
 ├── main.py                 # 入口（pywebview.start）
 ├── start.py                # 统一启动器（智能/exe/dev/check 四模式）
 ├── 启动.bat                # start.py 的双击薄包装
@@ -207,7 +207,7 @@ python test_punct_fix.py
 python test_web_backend.py
 ```
 
-当前状态：**7 个套件 1012 / 1012 通过**（v4.3.4）
+当前状态：**7 个套件 1012 / 1012 通过**（v4.3.5）
 
 ## 打包
 
@@ -216,7 +216,7 @@ python -m PyInstaller build.spec --clean
 python check_exe.py   # 校验 exe 内 web/ 资源与 style_profiles 完整性
 ```
 
-输出 `dist/新时代校对大师.exe`（onefile，无控制台窗口）。
+输出 `dist/墨准.exe`（onefile，无控制台窗口）。
 
 > 详见 `build.spec`。需在干净 venv 下运行，避免污染系统包。
 > ⚠️ 打包后 exe 需要系统有 WebView2 Runtime（Win10 1803+ / Win11 默认带）。
