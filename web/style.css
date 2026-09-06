@@ -1,4 +1,4 @@
-/* 新时代校对大师 v4.1.8 — Win11 Fluent 2 风格 (完整 token 体系 + 暗色 + 5 类动画 + Acrylic/Smoke)
+/* 新时代校对大师 v4.3.3 — Win11 Fluent 2 风格 (完整 token 体系 + 暗色 + 5 类动画 + Acrylic/Smoke)
    借鉴自 https://learn.microsoft.com/zh-cn/windows/apps/design/ (Microsoft Terms of Use, 文档非版权材料)
    借鉴内容: 5 设计原则 + 7 签名体验的数值与命名
    借鉴方式: 思路借鉴,代码自写,token 命名遵循 Microsoft 官方约定
@@ -14,15 +14,17 @@
   --colorNeutralBackground4: #FFFFFF;   /* 弹层 */
   --colorNeutralForeground1: #1A1A1A;   /* 主文本 */
   --colorNeutralForeground2: #616161;   /* 次文本 */
-  --colorNeutralForeground3: #8A8A8A;   /* 三级 (hint) */
+  --colorNeutralForeground3: #6E6E6E;   /* 三级 (hint) — v4.1.8.2 (F27) 8A8A8A 对比度仅 3.3:1 */
   --colorNeutralStroke1: #EDEDED;       /* 细边 (separator) */
   --colorNeutralStroke2: #E0E0E0;       /* 粗边 (input border) */
+  --colorNeutralStrokeHover: #C5C5C5;   /* v4.1.9: input hover 边框 (WinUI 3 ControlStrokeHover) */
   /* Accent 5 档 (rest / hover / pressed / subtle / foreground) */
   --colorBrandBackground1: #0078D4;     /* accent 静止 */
   --colorBrandBackground2: #106EBE;     /* accent hover */
   --colorBrandBackground3: #005A9E;     /* accent pressed */
   --colorBrandForeground: #0078D4;
   --colorBrandSubtle: rgba(0, 120, 212, 0.08);
+  --colorAccentForegroundOnAccent: #FFFFFF;  /* v4.1.8.2 (F27): accent 底上的前景色 */
   --colorStatusSuccess: #107C10;
   --colorStatusWarning: #9D5D00;
   --colorStatusError: #C42B1C;
@@ -107,14 +109,16 @@
     --colorNeutralBackground4: #3C3C3C;
     --colorNeutralForeground1: #FFFFFF;
     --colorNeutralForeground2: #C5C5C5;
-    --colorNeutralForeground3: #8A8A8A;
+    --colorNeutralForeground3: #A0A0A0;  /* v4.1.8.2 (F27): 提亮, 暗色下 5.2:1 */
     --colorNeutralStroke1: #3F3F3F;
     --colorNeutralStroke2: #4F4F4F;
+    --colorNeutralStrokeHover: #5A5A5A;  /* v4.1.9 */
     --colorBrandBackground1: #2899F5;
     --colorBrandBackground2: #4DA8F8;
     --colorBrandBackground3: #1689D9;
     --colorBrandForeground: #4DA8F8;
     --colorBrandSubtle: rgba(40, 153, 245, 0.12);
+    --colorAccentForegroundOnAccent: #0B1220;  /* v4.1.8.2 (F27): 深字浅蓝底 6.2:1 (白字仅 3.0:1) */
     /* 暗色 status / diff 调色 (中等饱和度, 在 #1F1F1F 背景上对比 ≥ 4.5:1) */
     --colorStatusSuccess: #6CCB5F;
     --colorStatusWarning: #FCE100;
@@ -145,14 +149,16 @@
   --colorNeutralBackground4: #FFFFFF;
   --colorNeutralForeground1: #1A1A1A;
   --colorNeutralForeground2: #616161;
-  --colorNeutralForeground3: #8A8A8A;
+  --colorNeutralForeground3: #6E6E6E;
   --colorNeutralStroke1: #EDEDED;
   --colorNeutralStroke2: #E0E0E0;
+  --colorNeutralStrokeHover: #C5C5C5;
   --colorBrandBackground1: #0078D4;
   --colorBrandBackground2: #106EBE;
   --colorBrandBackground3: #005A9E;
   --colorBrandForeground: #0078D4;
   --colorBrandSubtle: rgba(0, 120, 212, 0.08);
+  --colorAccentForegroundOnAccent: #FFFFFF;  /* v4.1.8.2 (F27): accent 底上的前景色 */
   --colorStatusSuccess: #107C10;
   --colorStatusWarning: #9D5D00;
   --colorStatusError: #C42B1C;
@@ -173,14 +179,16 @@
   --colorNeutralBackground4: #3C3C3C;
   --colorNeutralForeground1: #FFFFFF;
   --colorNeutralForeground2: #C5C5C5;
-  --colorNeutralForeground3: #8A8A8A;
+  --colorNeutralForeground3: #A0A0A0;
   --colorNeutralStroke1: #3F3F3F;
   --colorNeutralStroke2: #4F4F4F;
+  --colorNeutralStrokeHover: #5A5A5A;
   --colorBrandBackground1: #2899F5;
   --colorBrandBackground2: #4DA8F8;
   --colorBrandBackground3: #1689D9;
   --colorBrandForeground: #4DA8F8;
   --colorBrandSubtle: rgba(40, 153, 245, 0.12);
+  --colorAccentForegroundOnAccent: #0B1220;  /* v4.1.8.2 (F27) */
   --colorStatusSuccess: #6CCB5F;
   --colorStatusWarning: #FCE100;
   --colorStatusError: #FF99A4;
@@ -206,7 +214,16 @@ html, body { height: 100%; overflow: hidden; }
 
 body {
   font-family: var(--fontFamilyBase);
-  background: var(--colorNeutralBackground1);
+  /* v4.1.9 (3.6.1): Segoe UI Variable 光学尺寸轴 - 小字号优先可读性 */
+  font-optical-sizing: auto;
+  /* v4.1.9 (3.4.3 Mica 近似): web 内无法调用 DWM 云母 (桌面壁纸染色),
+     用两个极淡的中性色 radial-gradient 模拟"淡染扎根" - 冷静原则: tint 不与内容争抢.
+     侧边栏 (.sidebar) = 基层, 内容卡 (.card) = 内容层 (3.2.3 双层系统) */
+  background:
+    radial-gradient(1100px 700px at 85% -10%, var(--colorNeutralBackground2), transparent 60%),
+    radial-gradient(900px 600px at -10% 110%, var(--colorNeutralBackground2), transparent 55%),
+    var(--colorNeutralBackground1);
+  background-attachment: fixed;
   color: var(--colorNeutralForeground1);
   font-size: var(--fontSizeBody);
   line-height: var(--lineHeightBody);
@@ -224,7 +241,7 @@ body {
   width: 100vw;
 }
 
-/* ===== 侧边栏 ===== */
+/* ===== 侧边栏 (3.2.3 基层: 应用菜单/命令/导航) ===== */
 .sidebar {
   width: 200px;
   background: var(--colorNeutralBackground2);
@@ -316,7 +333,16 @@ body {
   padding: var(--space-6);
   overflow: hidden;
 }
-.view.active { display: flex; }
+/* v4.1.9 (3.7.3 页面转换): WinUI 3 顶级页面从底部上滑入场,
+   167ms point-to-point 曲线 - 已连接/一致原则 */
+@keyframes pageTransitionIn {
+  from { opacity: 0; transform: translateY(24px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.view.active {
+  display: flex;
+  animation: pageTransitionIn var(--durationFast) var(--curvePointToPoint);
+}
 
 .page-header {
   display: flex;
@@ -342,7 +368,8 @@ body {
   border: 1px solid var(--colorNeutralStroke1);
   border-radius: var(--overlayCornerRadius);
   padding: var(--space-4);
-  box-shadow: var(--shadow-2);
+  /* v4.1.9 (3.2.1 提升值表): Card = 8 */
+  box-shadow: var(--shadow-8);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -378,8 +405,9 @@ body {
 
 .content-grid .card { min-height: 0; }
 
+/* v4.2.0: 对比区拆到结果页后, 校对页左右等宽 (文件 | 运行状态) */
 .content-grid.home-grid {
-  grid-template-columns: 1fr 1.5fr;
+  grid-template-columns: 1fr 1fr;
   gap: var(--space-4);
 }
 
@@ -411,14 +439,13 @@ body {
 .btn:active { transform: translateY(1px); }
 .btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
-/* Size variant - WinUI 3: 标准 32px / 小 28px */
+/* Size variant - WinUI 3: 标准 32px (v4.1.9: 删除零引用的小号按钮变体) */
 .btn-standard { min-height: 32px; padding: var(--space-2) var(--space-3); }
-.btn-small    { min-height: 28px; padding: 6px 10px; font-size: var(--fontSizeCaption); }
 
 /* Accent 按钮 (主操作, 蓝底白字) */
 .btn-accent {
   background: var(--colorBrandBackground1);
-  color: #FFFFFF;
+  color: var(--colorAccentForegroundOnAccent);
   border-color: var(--colorBrandBackground1);
 }
 .btn-accent:hover { background: var(--colorBrandBackground2); border-color: var(--colorBrandBackground2); }
@@ -522,27 +549,14 @@ body {
   font-weight: var(--fontWeightSemibold);
   line-height: var(--lineHeightCaption);
 }
-/* WinUI 3 浅色档: 5 状态 subtle 背景 + 强 fg (pill 18-20px 高) */
-.file-status.pending   { background: #F5F5F5; color: #616161; }
-.file-status.running   { background: #E8F1FB; color: #0078D4; }
-.file-status.paused    { background: #FFF4E5; color: #9D5D00; }
-.file-status.completed { background: #E8F5E8; color: #107C10; }
-.file-status.failed    { background: #FCE8E6; color: #C42B1C; }
-.file-status.cancelled { background: #F5F5F5; color: #8A8A8A; }
-/* 暗色档: 用现有 dark token (rgba 0.12-0.16 subtle, 在 #1F1F1F 上对比 4.5:1) */
-@media (prefers-color-scheme: dark) {
-  .file-status.running   { background: var(--colorBrandSubtle); }
-  .file-status.paused    { background: var(--colorStatusWarningSubtle); }
-  .file-status.completed { background: var(--colorStatusSuccessSubtle); }
-  .file-status.failed    { background: var(--colorStatusErrorSubtle); }
-  .file-status.cancelled { background: var(--colorNeutralBackground2); }
-}
-:root[data-theme="dark"] .file-status.running   { background: var(--colorBrandSubtle); }
-:root[data-theme="dark"] .file-status.paused    { background: var(--colorStatusWarningSubtle); }
-:root[data-theme="dark"] .file-status.completed { background: var(--colorStatusSuccessSubtle); }
-:root[data-theme="dark"] .file-status.failed    { background: var(--colorStatusErrorSubtle); }
-:root[data-theme="dark"] .file-status.cancelled { background: var(--colorNeutralBackground2); }
-
+/* v4.1.9: 状态色全部 token 化 (subtle 背景 + status fg), 暗色适配由 token
+   自身完成, 不再需要逐状态暗色覆盖块 (2.5 完整+连贯: 一套 token 全主题) */
+.file-status.pending   { background: var(--colorNeutralBackground2); color: var(--colorNeutralForeground2); }
+.file-status.running   { background: var(--colorBrandSubtle); color: var(--colorBrandForeground); }
+.file-status.paused    { background: var(--colorStatusWarningSubtle); color: var(--colorStatusWarning); }
+.file-status.completed { background: var(--colorStatusSuccessSubtle); color: var(--colorStatusSuccess); }
+.file-status.failed    { background: var(--colorStatusErrorSubtle); color: var(--colorStatusError); }
+.file-status.cancelled { background: var(--colorNeutralBackground2); color: var(--colorNeutralForeground3); }
 .file-remove {
   width: 20px;
   height: 20px;
@@ -656,58 +670,6 @@ body {
 }
 .input-with-action input { flex: 1; }
 
-/* ===== Diff ===== */
-.diff-tabs {
-  display: flex;
-  gap: var(--space-1);
-  margin-bottom: var(--space-2);
-  overflow-x: auto;
-  flex-shrink: 0;
-}
-.diff-tabs button {
-  padding: var(--space-1) var(--space-3);
-  background: transparent;
-  border: 1px solid var(--colorNeutralStroke1);
-  border-radius: var(--controlCornerRadius);
-  font-size: var(--fontSizeCaption);
-  color: var(--colorNeutralForeground2);
-  cursor: pointer;
-  transition: background-color var(--durationNormal) var(--curvePointToPoint),
-              color var(--durationNormal) var(--curvePointToPoint);
-  white-space: nowrap;
-  font-family: var(--fontFamilyBase);
-  line-height: var(--lineHeightCaption);
-}
-.diff-tabs button:hover { background: var(--colorNeutralBackground2); }
-.diff-tabs button.active {
-  background: var(--colorBrandSubtle);
-  color: var(--colorBrandForeground);
-  border-color: var(--colorBrandBackground1);
-}
-
-.diff-content {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-  background: var(--colorNeutralBackground2);
-  border-radius: var(--controlCornerRadius);
-  padding: var(--space-3);
-  font-family: var(--fontFamilyMono);
-  font-size: var(--fontSizeBody);
-  line-height: 1.6;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-/* F5 修补: italic -> normal */
-.diff-empty {
-  color: var(--colorNeutralForeground3);
-  text-align: center;
-  padding: var(--space-11) var(--space-4);
-  font-style: normal;
-  font-weight: var(--fontWeightRegular);
-}
-
 /* ===== 进度子页面 (v4.1.5 重构) ===== */
 .progress-subpanel {
   margin-top: auto;
@@ -737,16 +699,9 @@ body {
   max-height: 300px;
 }
 
-/* ===== compare 2 子栏 ===== */
-.compare-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: var(--space-3);
-  flex-shrink: 0;
-}
-.compare-header h2 { margin: 0; }
-
+/* ===== compare 2 子栏 (v4.2.0: 独占结果对比页, 撑满剩余高度) ===== */
+.compare-card { min-height: 0; }
+.compare-card .compare-grid { height: 100%; }
 .compare-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -789,15 +744,6 @@ body {
   border-radius: var(--radiusSmall);
   /* F7 修补: 加 border-left 形状标记 */
   border-left: 2px solid var(--colorDiffDel);
-}
-
-/* F5 修补: italic -> normal */
-.compare-empty {
-  color: var(--colorNeutralForeground3);
-  text-align: center;
-  padding: var(--space-9) var(--space-4);
-  font-style: normal;
-  font-weight: var(--fontWeightRegular);
 }
 
 /* 错误态 fallback */
@@ -855,9 +801,9 @@ del {
   transition: border-color var(--durationNormal) var(--curvePointToPoint),
               box-shadow var(--durationNormal) var(--curvePointToPoint);
 }
-/* WinUI 3 hover: 边框 #C5C5C5 (略深, 提示可交互) */
+/* WinUI 3 hover: 边框略深提示可交互 (v4.1.9 token 化) */
 .form-row input:hover, .form-row select:hover, .form-row textarea:hover {
-  border-color: #C5C5C5;
+  border-color: var(--colorNeutralStrokeHover);
 }
 /* WinUI 3 focus: 2px brand border (1px 边框 + 1px 阴影) + 1px brandSubtle 外圈 */
 .form-row input:focus, .form-row select:focus, .form-row textarea:focus {
@@ -952,39 +898,6 @@ del {
   flex: 1 1 180px;
   min-width: 140px;
 }
-.style-profile-card {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--colorNeutralStroke1);
-  border-radius: var(--radiusSmall);
-  background: var(--colorNeutralBackground2);
-  margin-top: var(--space-2);
-  font-size: var(--fontSizeCaption);
-  line-height: var(--lineHeightCaption);
-}
-.style-profile-card .style-profile-name {
-  font-weight: var(--fontWeightSemibold);
-  color: var(--colorBrandForeground);
-}
-.style-profile-card .style-profile-meta {
-  color: var(--colorNeutralForeground3);
-  font-size: var(--fontSizeCaption);
-}
-.style-profile-loading {
-  display: inline-block;
-  width: 12px;
-  height: 12px;
-  border: 2px solid var(--colorNeutralStroke2);
-  border-top-color: var(--colorBrandBackground1);
-  border-radius: 50%;
-  /* 5 类动画: linear (spinner 匀速旋转) */
-  animation: spin 0.8s linear infinite;
-  margin-right: var(--space-2);
-  vertical-align: middle;
-}
-
 /* ===== Spinner (DeAI 步骤运行中) ===== */
 @keyframes spin {
   to { transform: rotate(360deg); }
@@ -997,13 +910,14 @@ del {
   color: var(--colorBrandBackground1);
 }
 
-/* ===== Log 容器 (深色 monospace 区域) ===== */
+/* ===== Log 容器 (v4.1.9: 主题感知 - 原恒深底浅字硬编码违反 token 纪律;
+   改用 Background2 内凹面 + Foreground1, 跟随主题) ===== */
 .log {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  background: #1A1A1A;
-  color: #E0E0E0;
+  background: var(--colorNeutralBackground2);
+  color: var(--colorNeutralForeground1);
   border-radius: var(--controlCornerRadius);
   padding: var(--space-2) var(--space-3);
   font-family: var(--fontFamilyMono);
@@ -1077,3 +991,387 @@ del {
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--colorNeutralStroke2); border-radius: var(--controlCornerRadius); }
 ::-webkit-scrollbar-thumb:hover { background: var(--colorNeutralForeground3); }
+
+
+/* ===== ContentDialog (v4.1.9, WinUI 3 §3.4.4: Smoke 遮罩 + 不透明面板) =====
+   面板: Background3 不透明 + overlay 8px 圆角 + elevation 128 (§3.2.1 对话框档)
+   入场: 淡入 + 104% 缩放, 250ms fastIn (§3.7.2 强大入口简化档) */
+.dialog-root {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.dialog-root[hidden] { display: none; }
+.dialog-smoke {
+  position: absolute;
+  inset: 0;
+  background: var(--colorSmoke);
+  animation: smokeFadeIn var(--durationFast) var(--curveSoftOut);
+}
+.content-dialog {
+  position: relative;
+  width: min(420px, 90vw);
+  background: var(--colorNeutralBackground3);
+  border: 1px solid var(--colorNeutralStroke1);
+  border-radius: var(--overlayCornerRadius);
+  box-shadow: var(--shadow-128);
+  overflow: hidden;
+  animation: dialogIn var(--durationNormal) var(--curveFastIn);
+}
+@keyframes dialogIn {
+  from { opacity: 0; transform: scale(1.04); }
+  to   { opacity: 1; transform: scale(1); }
+}
+.dialog-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-5) var(--space-6) var(--space-2);
+  font-size: var(--fontSizeBodyLarge);
+  font-weight: var(--fontWeightSemibold);
+  line-height: var(--lineHeightBodyLarge);
+  color: var(--colorNeutralForeground1);
+}
+.dialog-title .nav-icon { width: 20px; height: 20px; flex-shrink: 0; color: var(--colorStatusWarning); }
+.dialog-title .nav-icon.icon-error { color: var(--colorStatusError); }
+.dialog-title .nav-icon.icon-info   { color: var(--colorBrandForeground); }
+.dialog-body {
+  padding: 0 var(--space-6) var(--space-5);
+  font-size: var(--fontSizeBody);
+  line-height: var(--lineHeightBody);
+  color: var(--colorNeutralForeground2);
+  word-break: break-word;
+}
+/* WinUI 3 ContentDialog 底部: 等宽双按钮 + 1px 分隔线 (Win11 原版样式) */
+.dialog-actions {
+  display: flex;
+  border-top: 1px solid var(--colorNeutralStroke1);
+  background: var(--colorNeutralBackground2);
+}
+.dialog-actions button {
+  flex: 1;
+  min-height: 40px;
+  border: none;
+  background: transparent;
+  font-family: var(--fontFamilyBase);
+  font-size: var(--fontSizeBody);
+  font-weight: var(--fontWeightSemibold);
+  color: var(--colorNeutralForeground1);
+  cursor: pointer;
+  transition: background-color var(--durationFast) var(--curvePointToPoint);
+}
+.dialog-actions button + button { border-left: 1px solid var(--colorNeutralStroke1); }
+.dialog-actions button:hover { background: var(--colorNeutralBackground1); }
+.dialog-actions button:active { background: var(--colorNeutralBackground2); }
+/* 主按钮: accent 文字 (破坏性操作用 error 文字, 主题安全) */
+.dialog-actions .dialog-primary { color: var(--colorBrandForeground); }
+.dialog-actions .dialog-primary.dialog-danger { color: var(--colorStatusError); }
+
+/* ===== 上下文菜单 Flyout (v4.1.9, §3.4.2 Acrylic + §2.4 熟悉原则) =====
+   材料走 .acrylic (blur 20px + saturate 180%), JS 组合 class="menu-flyout acrylic" */
+.menu-flyout {
+  position: fixed;
+  z-index: 10001;
+  min-width: 180px;
+  padding: var(--space-1);
+  animation: flyoutIn var(--durationFast) var(--curvePointToPoint);
+}
+.menu-flyout[hidden] { display: none; }
+@keyframes flyoutIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.menu-flyout button {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: none;
+  background: transparent;
+  border-radius: var(--controlCornerRadius);
+  font-family: var(--fontFamilyBase);
+  font-size: var(--fontSizeBody);
+  color: var(--colorNeutralForeground1);
+  cursor: pointer;
+  text-align: left;
+  transition: background-color var(--durationSubtle) var(--curvePointToPoint);
+}
+.menu-flyout button .nav-icon { width: 16px; height: 16px; flex-shrink: 0; color: var(--colorNeutralForeground2); }
+.menu-flyout button:hover { background: var(--colorNeutralBackground1); }
+.menu-flyout button.danger { color: var(--colorStatusError); }
+.menu-flyout button.danger .nav-icon { color: var(--colorStatusError); }
+.menu-flyout-separator {
+  border: none;
+  border-top: 1px solid var(--colorNeutralStroke1);
+  margin: var(--space-1) var(--space-2);
+}
+
+/* ===== 键盘焦点环 (v4.1.9, Win11 焦点矩形: 2px accent + 1px 偏移) =====
+   输入框有自己的 WinUI focus 样式 (box-shadow 双环), 优先级更高不受影响 */
+:focus-visible {
+  outline: 2px solid var(--colorBrandForeground);
+  outline-offset: 1px;
+}
+
+/* ===== 无障碍: 用户偏好减少动效 (§3.1.4 可用性) — 全部动画/过渡禁用 ===== */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+
+/* ===== v4.2.0: 7 视图导航 (Win11 设置应用式分组侧边栏 + 拆分页) ===== */
+/* 导航分组标题 (Settings 式小节标签) */
+.nav-group {
+  font-size: var(--fontSizeCaption);
+  line-height: var(--lineHeightCaption);
+  color: var(--colorNeutralForeground3);
+  font-weight: var(--fontWeightSemibold);
+  letter-spacing: 0.5px;
+  padding: var(--space-3) var(--space-3) var(--space-1);
+  user-select: none;
+}
+
+/* 侧边栏底部版本号 */
+.sidebar-footer {
+  margin-top: auto;
+  padding: var(--space-2) var(--space-3);
+  color: var(--colorNeutralForeground3);
+  font-size: var(--fontSizeCaption);
+  line-height: var(--lineHeightCaption);
+  user-select: none;
+}
+
+/* 设置组三页窄栏内容 (Win11 设置应用式单列居中) */
+.content-narrow {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  width: 100%;
+  max-width: 760px;
+  margin: 0 auto;
+  padding-bottom: var(--space-4);
+}
+.content-narrow .card { flex-shrink: 0; }
+
+/* 结果对比页文件下拉 (header 内, 与按钮同高) */
+.result-select {
+  min-height: 32px;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--colorNeutralStroke2);
+  border-radius: var(--controlCornerRadius);
+  background: var(--colorNeutralBackground3);
+  color: var(--colorNeutralForeground1);
+  font-family: var(--fontFamilyBase);
+  font-size: var(--fontSizeBody);
+  max-width: 280px;
+  cursor: pointer;
+  transition: border-color var(--durationNormal) var(--curvePointToPoint);
+}
+.result-select:hover { border-color: var(--colorNeutralStrokeHover); }
+.result-select:focus {
+  outline: none;
+  border-color: var(--colorBrandBackground1);
+  box-shadow: 0 0 0 1px var(--colorBrandBackground1), 0 0 0 4px var(--colorBrandSubtle);
+}
+
+/* 校对页文件卡底部操作提示 */
+.list-hint {
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--colorNeutralStroke1);
+  margin-top: var(--space-2);
+  flex-shrink: 0;
+}
+
+/* 外观与关于页信息行 */
+.about-row {
+  display: flex;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+  font-size: var(--fontSizeBody);
+  line-height: var(--lineHeightBody);
+  color: var(--colorNeutralForeground1);
+  border-bottom: 1px solid var(--colorNeutralStroke1);
+}
+.about-row:last-child { border-bottom: none; }
+.about-row .about-label {
+  flex-shrink: 0;
+  width: 72px;
+  color: var(--colorNeutralForeground3);
+  font-weight: var(--fontWeightSemibold);
+}
+.font-mono { font-family: var(--fontFamilyMono); }
+
+/* 运行状态卡: 日志占满剩余高度 */
+.run-card .progress-subpanel { margin-top: 0; border-top: none; padding-top: 0; }
+.run-card .log { max-height: none; }
+
+
+/* ===== v4.3.0: DeAI textarea 拖入高亮 ===== */
+.textarea-drag,
+.form-row textarea.textarea-drag {
+  border-color: var(--colorBrandBackground1) !important;
+  background: var(--colorBrandSubtle) !important;
+  box-shadow: 0 0 0 1px var(--colorBrandBackground1);
+}
+
+/* ===== v4.3.1 (UX #1): 全局 Toast 通知 (跨页操作反馈) =====
+   WinUI 3 语义: 右下角非模态轻提示 — Background4 不透明 + Stroke1 边 +
+   overlay 8px 圆角 + elevation 16 (Tooltip 档); 类型变体用 3px 状态色左边框
+   标记 (色盲补救同 §3.1.4 思路, 不只靠颜色区分) */
+.toast-root {
+  position: fixed;
+  right: var(--space-4);
+  bottom: var(--space-4);
+  z-index: 9000;  /* 低于 ContentDialog 10000 / flyout 10001, 模态层永远压过 toast */
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-2);
+  pointer-events: none;  /* 容器空隙不挡点击, toast 自身恢复 auto */
+}
+.toast {
+  pointer-events: auto;
+  background: var(--colorNeutralBackground4);
+  border: 1px solid var(--colorNeutralStroke1);
+  border-radius: var(--overlayCornerRadius);
+  box-shadow: var(--shadow-16);
+  padding: var(--space-2) var(--space-3);
+  max-width: 360px;
+  font-size: var(--fontSizeBody);
+  line-height: var(--lineHeightBody);
+  color: var(--colorNeutralForeground1);
+  word-break: break-word;
+  cursor: pointer;          /* 点击立即关闭 */
+  user-select: none;
+  /* 入场 167ms point-to-point (§3.7.2 连接动画档, 同页面转换) */
+  animation: toastIn var(--durationFast) var(--curvePointToPoint);
+}
+@keyframes toastIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+/* 类型变体: 3px 状态色左边框 */
+.toast-success { border-left: 3px solid var(--colorStatusSuccess); }
+.toast-error   { border-left: 3px solid var(--colorStatusError); }
+.toast-info    { border-left: 3px solid var(--colorBrandForeground); }
+
+/* ===== v4.3.1 (UX #3): API 测试连接内联结果 (#api-conn-result, 绿=成功 红=失败) =====
+   置于 .form-hint 定义之后, 同特异性靠源顺序覆盖灰色默认 */
+.conn-ok  { color: var(--colorStatusSuccess); }
+.conn-fail { color: var(--colorStatusError); }
+
+/* ===== v4.3.1 (UX #10): 页头自动保存说明 (校对参数页 actions 内, 与 form-hint 同语义) ===== */
+.header-hint {
+  align-self: center;
+  margin-right: var(--space-2);
+  font-size: var(--fontSizeCaption);
+  line-height: var(--lineHeightCaption);
+  color: var(--colorNeutralForeground3);
+}
+
+/* ===== v4.3.1 (UX #5): 错误卡内原始错误小字 + 行动按钮 =====
+   error-raw: Foreground3 + Caption 字号 + 可断行 (长英文错误串也能折行);
+   行动按钮与原因行留一档间距, 复用 .btn/.btn-subtle 既有 token */
+.error-raw {
+  margin-top: var(--space-2);
+  font-family: var(--fontFamilyMono);
+  font-size: var(--fontSizeCaption);
+  line-height: var(--lineHeightCaption);
+  color: var(--colorNeutralForeground3);
+  word-break: break-all;
+}
+.error-mark .btn { margin-top: var(--space-3); }
+
+/* ===== v4.3.1 (UX #21): 可点只读标签 (主页分块 chip → 校对参数页) =====
+   链接式按钮: 无背景无边框, BrandForeground 色, hover 下划线 — 全 token */
+.link-chip {
+  border: none;
+  background: transparent;
+  padding: 0;
+  font-family: var(--fontFamilyMono);
+  font-size: var(--fontSizeCaption);
+  line-height: var(--lineHeightCaption);
+  color: var(--colorBrandForeground);
+  cursor: pointer;
+  text-align: left;
+}
+.link-chip:hover { text-decoration: underline; }
+
+/* ===== v4.3.1 (UX #12): 风格卡查看 — dialog body 的长文本只读形态 =====
+   等宽 + Caption 字号 + 限高 50vh 滚动 (风格卡为长 markdown, 普通对话框 body 放不下);
+   与 .dialog-body 叠加使用 (class="dialog-body dialog-body-pre") */
+.dialog-body-pre {
+  white-space: pre-wrap;
+  font-family: var(--fontFamilyMono);
+  font-size: var(--fontSizeCaption);
+  line-height: var(--lineHeightCaption);
+  max-height: 50vh;
+  overflow-y: auto;
+}
+
+/* ===== v4.3.1 (UX #12): 风格库页 Profile 列表卡片 =====
+   一行一 profile: 名称/篇数/蒸馏时间 + 查看/删除小按钮 (btn-subtle 缩小为 24px 档) */
+.style-profile-list {
+  margin-top: var(--space-2);
+}
+.style-profile-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--colorNeutralStroke1);
+}
+.style-profile-item:last-child { border-bottom: none; }
+.style-profile-item-meta {
+  font-size: var(--fontSizeBody);
+  line-height: var(--lineHeightBody);
+  color: var(--colorNeutralForeground1);
+  word-break: break-all;
+}
+.style-profile-item-actions {
+  display: flex;
+  gap: var(--space-1);
+  flex-shrink: 0;
+}
+.style-profile-item-actions .btn {
+  min-height: 24px;
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--fontSizeCaption);
+  font-weight: var(--fontWeightRegular);
+}
+
+
+/* ===== v4.3.3: 标点修复开关 (checkbox 行) ===== */
+.form-row input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  min-height: 0;
+  padding: 0;
+  margin: 0;
+  accent-color: var(--colorBrandBackground1);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.form-row .checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--fontSizeBody);
+  color: var(--colorNeutralForeground1);
+  font-weight: var(--fontWeightRegular);
+  line-height: var(--lineHeightBody);
+  cursor: pointer;
+  user-select: none;
+}
