@@ -45,7 +45,6 @@ from app.utils import (
     save_checkpoint_async,
     load_checkpoint,
     read_file_text,
-    compute_prompt_hash,
     split_text,
     CHUNKING_PRESETS_MAP,
     DEFAULT_CHUNK_PRESET,
