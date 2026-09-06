@@ -7,7 +7,7 @@
 ### ✨ 皮肤轴 (fluent / ink)
 - **水墨宣纸 (ink)**: 浅=宣纸底 #F7F3E9 + 焦墨 accent + 朱砂印; 深=玄墨底 #191612 + 宣纸白正文 + 阳文反转 accent (纸底墨字, 如钤白文印); 全部 33 token 重新定义, 对比度验算 ≥4.5:1 并入回归
 - **2×2 自由组合**: 皮肤 (fluent/ink) × 深浅 (auto/light/dark) 两轴正交, 层叠特异性逐格验算 (ink 深 manual (0,2,1) 压过 fluent 手动深块; ink 浅/深 media 同特异性靠源序)
-- **主题内装饰**: 侧栏品牌「墨准」楷体 + 0.25em 疏排 + 朱砂方印「印」(取色全走 token); 页标题楷体; body 两团墨晕 (新 --skin-halo-1/2); 圆角放宽 6/10/3px; 暖墨低扩散阴影
+- **主题内装饰**: 侧栏品牌「墨准」楷体 + 0.25em 疏排 + 朱砂方印 (空心印面, 用户反馈去「印」字; 取色全走 token); 页标题楷体; body 两团墨晕 (新 --skin-halo-1/2); 圆角放宽 6/10/3px; 暖墨低扩散阴影
 - **brand 字体**: 新 --fontFamilyBrand (KaiTi → STKaiti → Noto Serif SC → serif, 系统字体零打包)
 
 ### 🔧 工程化

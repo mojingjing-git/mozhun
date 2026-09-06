@@ -366,20 +366,15 @@ html[data-skin="ink"] .sidebar-title {
   font-weight: var(--fontWeightRegular);
   letter-spacing: 0.25em;
 }
-/* 朱砂名印: 品牌字后一枚方印; 取色全走 token (--colorStatusError 印底 / --colorNeutralBackground4 印字), 印面走 --space-5 */
+/* 朱砂名印: 品牌字后一枚空心方印 (用户反馈去「印」字, 只留印面); 底色走 token, 印面走 --space-5 */
 html[data-skin="ink"] .sidebar-title::after {
-  content: "印";
+  content: "";
   display: inline-block;
   width: var(--space-5);
   height: var(--space-5);
   margin-left: var(--space-3);
   border-radius: var(--radiusSmall);
   background: var(--colorStatusError);
-  color: var(--colorNeutralBackground4);
-  font-family: var(--fontFamilyBrand);
-  font-size: var(--fontSizeCaption);
-  line-height: var(--space-5);
-  text-align: center;
   vertical-align: middle;
 }
 html[data-skin="ink"] .page-header h1 {
