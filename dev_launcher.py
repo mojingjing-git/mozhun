@@ -87,31 +87,60 @@ def find_python() -> str | None:
 
 
 def ensure_venv(py: str) -> str:
-    """Create .venv if missing, return path to venv python."""
+    """Create .venv if missing, return path to venv python.
+
+    v4.1.8.2 (审计 K8): 对已存在的 .venv 做活性探测 — base 解释器被卸载/升级
+    后 .venv 常见整体失效, 旧版直接 "[OK] already exists" 返回, 后续 pip/import
+    全部报难以理解的错误. 探测失败用 --clear 重建.
+    """
     if VENV_PY.exists():
-        print(f"  {color(GREEN, '[OK]')} .venv already exists")
-        return str(VENV_PY)
-    print(f"  {color(YELLOW, '[i]')} .venv not found, creating ...")
-    subprocess.check_call([py, "-m", "venv", str(VENV_DIR)])
+        try:
+            subprocess.check_output(
+                [str(VENV_PY), "-c", "print('ok')"],
+                stderr=subprocess.STDOUT, timeout=15,
+            )
+            print(f"  {color(GREEN, '[OK]')} .venv already exists")
+            return str(VENV_PY)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
+            print(f"  {color(YELLOW, '[WARN]')} .venv exists but python.exe broken, recreating ...")
+            subprocess.check_call([py, "-m", "venv", "--clear", str(VENV_DIR)])
+    else:
+        print(f"  {color(YELLOW, '[i]')} .venv not found, creating ...")
+        subprocess.check_call([py, "-m", "venv", str(VENV_DIR)])
     if not VENV_PY.exists():
         raise RuntimeError("venv creation succeeded but .venv\\Scripts\\python.exe missing")
-    print(f"  {color(GREEN, '[OK]')} venv created")
+    print(f"  {color(GREEN, '[OK]')} venv ready")
     return str(VENV_PY)
 
 
 def ensure_deps(py: str) -> None:
-    """Install requirements.txt into venv if missing."""
+    """Install requirements.txt into venv if missing.
+
+    v4.1.8.2 (审计 K2): 捕获 TimeoutExpired — pythonnet/clr_loader 首次导入
+    在杀软实时扫描/冷盘下可能超 10s, 旧版漏捕会绕过 pip install 直接终止启动.
+    v4.1.8.2 (审计 K8): 探测同时校验 pywebview >= 6.2.1 (旧版只查"能 import",
+    装着 5.x 的环境永远不触发安装, 运行期才以怪异方式出错).
+    """
     print(f"  {color(CYAN, '[i]')} checking deps in venv ...")
+    probe = (
+        "import re, webview, openai, requests, pythonnet, clr_loader, comtypes\n"
+        "from importlib.metadata import version\n"
+        "m = re.match(r'(\\d+)\\.(\\d+)', version('pywebview'))\n"
+        "assert m and (int(m.group(1)), int(m.group(2))) >= (6, 2), 'pywebview>=6.2.1 required, got ' + version('pywebview')\n"
+        "print('OK')\n"
+    )
     try:
         out = subprocess.check_output(
-            [py, "-c", "import webview, openai, requests, pythonnet, clr_loader, comtypes; print('OK')"],
-            stderr=subprocess.STDOUT, timeout=10,
+            [py, "-c", probe],
+            stderr=subprocess.STDOUT, timeout=30,
         ).decode().strip()
         if "OK" in out:
-            print(f"  {color(GREEN, '[OK]')} webview / openai / requests / pythonnet / clr_loader / comtypes all installed")
+            print(f"  {color(GREEN, '[OK]')} webview / openai / requests / pythonnet / clr_loader / comtypes all installed (pywebview >= 6.2)")
             return
+    except subprocess.TimeoutExpired:
+        print(f"  {color(YELLOW, '[i]')} dep probe timed out (AV scan / cold disk?), falling back to pip install")
     except subprocess.CalledProcessError as e:
-        print(f"  {color(YELLOW, '[i]')} some deps missing: {e.output.decode(errors='replace')[:200]}")
+        print(f"  {color(YELLOW, '[i]')} some deps missing/outdated: {e.output.decode(errors='replace')[:200]}")
     print(f"  {color(CYAN, '[i]')} pip install -r requirements.txt ...")
     if REQUIREMENTS.exists():
         subprocess.check_call([py, "-m", "pip", "install", "-r", str(REQUIREMENTS)])
@@ -138,12 +167,17 @@ def check_webview2_runtime() -> bool:
 
 
 def check_duplicate_process() -> bool:
-    """Check if main.py is already running. Returns True if duplicate detected."""
+    """Check if main.py is already running. Returns True if duplicate detected.
+
+    v4.1.8.2 (审计 K6): 过滤收紧到本项目根目录 — 旧版匹配任意 *main.py*,
+    开发机上其它 Python 项目 (FastAPI/脚本) 会被误判成重复进程拒绝启动.
+    """
     try:
+        root_marker = str(ROOT).replace("'", "''")  # PS 单引号转义
         out = subprocess.check_output(
             ["powershell", "-NoProfile", "-Command",
              "Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" "
-             "| Where-Object { $_.CommandLine -like '*main.py*' } "
+             f"| Where-Object {{ $_.CommandLine -like '*{root_marker}*main.py*' }} "
              "| Select-Object -ExpandProperty ProcessId"],
             stderr=subprocess.DEVNULL, timeout=10,
         ).decode().strip()
@@ -153,10 +187,16 @@ def check_duplicate_process() -> bool:
 
 
 def pop_tail_window(log_path: Path) -> None:
-    """Pop a separate PowerShell window that tails log file."""
+    """Pop a separate PowerShell window that tails log file.
+
+    v4.1.8.2 (审计 K1): 设置窗口标题供 kill_tail_window 的 WINDOWTITLE 过滤器
+    匹配 (旧版从未设置标题, taskkill 永远匹配 0 个窗口, 每次运行遗留一个孤儿
+    控制台并占用日志句柄); Get-Content 加 -Encoding UTF8 修中文乱码.
+    """
     cmd = (
-        f"Write-Host 'Live tail: close this window = stop tail (main.py keeps running)'; "
-        f"Get-Content -Path '{log_path}' -Wait"
+        "$host.UI.RawUI.WindowTitle='NewEraProofreader-tail'; "
+        "Write-Host 'Live tail: close this window = stop tail (main.py keeps running)'; "
+        f"Get-Content -Path '{log_path}' -Wait -Encoding UTF8"
     )
     subprocess.Popen(
         ["powershell", "-NoProfile", "-Command", cmd],

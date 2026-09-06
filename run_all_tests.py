@@ -7,16 +7,12 @@ from pathlib import Path
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-tests = [
-    "test_bugs.py",
-    "test_components.py",
-    "test_chunker_presets.py",
-    "test_chunk_lifecycle.py",
-    "test_context_builder.py",
-    "test_web_backend.py",
-    # v4.1.7: 12 个新测试已加到 test_web_backend.py (无需单独文件)
-    # v4.1.8.1: P0/P1/P2 新测试同样直接并入各文件
-]
+# v4.1.8.2 (审计 K14): 自动发现 test_*.py — 旧版硬编码清单, 新增测试文件
+# 忘记登记时对门禁完全不存在 (静默盲区). test_isolate.py 是隔离样板无 main, 排除.
+tests = sorted(
+    p.name for p in Path(__file__).parent.glob("test_*.py")
+    if p.name != "test_isolate.py"
+)
 
 total_pass = 0
 total_fail = 0

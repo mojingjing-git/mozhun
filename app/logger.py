@@ -14,7 +14,12 @@ from logging.handlers import RotatingFileHandler
 LOG_DIR = Path(
     os.environ.get("PROOFREADER_HOME") or (Path.home() / ".proofreader")
 )
-LOG_DIR.mkdir(exist_ok=True)
+try:
+    # v4.1.8.2 (审计 E10): parents=True + 兜底 — PROOFREADER_HOME 指向多级
+    # 不存在路径时旧版 import 期即抛 FileNotFoundError
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+except OSError as e:
+    sys.stderr.write(f"[logger] 日志目录创建失败: {LOG_DIR} — {e}\n")
 LOG_FILE = LOG_DIR / "app.log"
 # v4.1 (I10): 加一个 debug.log 专门存 DEBUG 级别日志 (含网络异常 / 推流失败 / 拖拽事件).
 # windowed 模式没控制台, 用户没法看 stdout; 文件能落地, 排查时让用户直接看路径.

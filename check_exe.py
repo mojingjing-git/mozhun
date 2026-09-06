@@ -10,6 +10,10 @@ v4.1.8.1 (审计修复 D1/D2):
 import os
 import sys
 
+# v4.1.8.2 (审计 K4): GBK 重定向下 ✅/❌ emoji 会 UnicodeEncodeError ->
+# 校验通过反而 exit 1 (假红). 与 run_all_tests.py 同款兜底.
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 exe_path = os.path.join(BASE_DIR, "dist", "新时代校对大师.exe")
 if not os.path.exists(exe_path):

@@ -67,7 +67,10 @@ def main():
     logger = setup_logging()
     logger.info("=" * 50)
     logger.info("新时代校对大师 v4.1 启动 (pywebview)")
-    logger.info(f"日志文件: {Path.home() / '.proofreader' / 'app.log'}")
+    # v4.1.8.2 (审计 K11): 用 logger 模块的实际 LOG_FILE — 旧版硬编码
+    # ~/.proofreader/app.log, PROOFREADER_HOME 重定向后提示路径是错的
+    from app.logger import LOG_FILE
+    logger.info(f"日志文件: {LOG_FILE}")
 
     # pywebview 启动顺序: 先建 Backend (window=None), 再 create_window 注入,
     # 最后把 window 引用反注入回 backend (因为 create_window 需要 js_api 但 window 自己才被创建).

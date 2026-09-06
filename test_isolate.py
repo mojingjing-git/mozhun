@@ -14,7 +14,9 @@
 app/style_profiles/loader.py STYLES_DIR 的根目录在 import 时读取该变量.
 因此本模块必须在任何 ``import app.*`` 之前被 import.
 """
+import atexit
 import os
+import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -27,3 +29,10 @@ if not _home:
     os.environ["PROOFREADER_HOME"] = _home
     # 预创建, 避免首次 mkdir 的竞态噪音 (无实际影响)
     Path(_home).mkdir(parents=True, exist_ok=True)
+    # v4.1.8.2 (审计 K10): 进程退出时清理 — 旧版每次跑套件在 %TEMP% 泄漏一个
+    # pr_test_home_* 目录树 (含 config/checkpoints/styles)
+    atexit.register(shutil.rmtree, _home, ignore_errors=True)
+else:
+    # v4.1.8.2 (审计 K10): 预设 PROOFREADER_HOME 时隔离承诺失效, 明确告警
+    print(f"[test_isolate][WARN] PROOFREADER_HOME 已预设为 {_home}, "
+          f"测试将写入该目录 (非一次性临时目录)", file=sys.stderr)

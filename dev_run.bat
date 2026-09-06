@@ -17,5 +17,15 @@ REM ============================================================
 
 chcp 65001 >nul
 cd /d "%~dp0"
-python dev_launcher.py
+REM v4.1.8.2 (审计 K9): python 不在 PATH 时回退 py launcher (Store stub 场景)
+where python >nul 2>nul
+if %errorlevel%==0 (
+  python dev_launcher.py
+) else (
+  py -3 dev_launcher.py
+)
+set EXITCODE=%errorlevel%
+echo.
+if not "%EXITCODE%"=="0" echo [FAIL] dev_launcher exited with code %EXITCODE%
 pause
+exit /b %EXITCODE%

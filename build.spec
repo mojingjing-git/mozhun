@@ -3,8 +3,6 @@
 # 输出: dist/新时代校对大师.exe (onefile, windowed)
 # 目标: < 80 MB
 
-block_cipher = None
-
 # 收集 pywebview 在 Windows 上需要的所有隐藏 import
 # 借鉴自 https://pywebview.flowrl.com/ (BSD-3-Clause) 官方打包说明
 # v4.1 (I9): 加 comtypes (webview.edgechromium 依赖), webview.dom + webview.platforms.mshtml
@@ -75,13 +73,13 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=[],
     excludes=excludes,
-    win_no_prefer_redirects=False,
-    win_private_assemblies=False,
-    cipher=block_cipher,
+    # v4.1.8.2 (审计 K13): 移除 PyInstaller 5.x 时代的弃用参数
+    # (block_cipher / cipher / win_no_prefer_redirects / win_private_assemblies),
+    # 6.x 仅在 False/None 时容忍, 未来版本移除即构建中断
     noarchive=False,
 )
 
-pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+pyz = PYZ(a.pure)
 
 exe = EXE(
     pyz,
