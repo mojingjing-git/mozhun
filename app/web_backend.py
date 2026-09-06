@@ -775,6 +775,30 @@ class Backend:
 
     # ==================== 去 AI 味 API (Phase 3 真实实现) ====================
 
+    def deai_load_source(self, file_key: str) -> dict:
+        """v5.0.0 (联动 UX): 读取已完成校对文件的 corrected, 供「→ 去AI味改写」载入.
+
+        取数路径: 当前 engine.tasks 内存. 失败分支:
+        - 无 engine / 任务不在当前 engine (已被新任务替换) → reason="stale"
+        - 任务未完成 (result None 或 corrected 空) → reason="not_completed"
+        断点兜底 (读 checkpoints) 为可选增强, v5.0.0 不做 — 重启后文件列表为空,
+        联动按钮无宿主行, 可达性低 (plan 决策 #5 best-effort).
+        """
+        eng = self._engine
+        if eng is None:
+            return {"ok": False, "reason": "stale"}
+        task = eng.tasks.get(file_key)
+        if task is None:
+            return {"ok": False, "reason": "stale"}
+        result = task.result
+        if result is None or not (result.corrected or "").strip():
+            return {"ok": False, "reason": "not_completed"}
+        return {
+            "ok": True,
+            "text": result.corrected,
+            "file_name": task.file_path.name,
+        }
+
     def deai_step1_detect(self, text: str, style_card_slug: str = "") -> str:
         """Step 1: 检测 AI 味, 返回 task_id 立即.
 

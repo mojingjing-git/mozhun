@@ -1,5 +1,25 @@
 # Changelog
 
+## v5.0.0 (2026-09-07) — 校对流程架构重构: 模式精简 + 校对→DeAI 联动
+
+**修订版**: 依据 `.workbuddy/research/` 三份调研报告 (2 explore + 1 verifier, 20 条核验/5 处契约澄清) 的决策落地。产品方向: 校对与改写分层 (竞品一致范式), 重润色类需求收拢到去 AI 味视图。
+
+### 模式精简 (Phase A): 9 模式 → 6 模式
+- **砍 3 模式**: `deep_polish`(重润色) / `anti_rambling`(去流水账) → **改走去 AI 味视图** (Step 2 改写覆盖 ~90% 用例); `long_sentence`(长句检测) → **并入 polish** (处理规则 4: 60+ 字长句断开)
+- 保留 6 模式: 纯纠错 / 纠错+轻润色 / 技术文档校对 / 仅标点修复 / 仅 Markdown 清洗 / 自定义 (`deai` 保持隐藏)
+- **旧配置静默归一**: `deep_polish/anti_rambling/long_sentence → polish` (utils `_LEGACY_MODE_MAP`, from_dict 时生效); schema_version 2→3; 模式值变化使旧断点自动失效重跑
+- **DeAI V5 prompt 补默认重组规则** (Step 1.5): 无 9 轴卡时的句式重组/主次前置/段落合并 — 补齐砍模式后的覆盖缺口 (事实不增不减前提下)
+- 兜底链第二道保险: 未知模式 → 日志警告 + 回退 strict (已有机制, 不变)
+
+### 校对→DeAI 联动 (Phase B)
+- 校对文件行 (仅已完成) 新增 **「→ 去AI味改写」** 按钮: 一键切换视图 + 载入该文件校对结果 + 跳过 Step 1 检测直接改写
+- 后端新增 `deai_load_source(file_key)`: 内存取数 (当前会话); engine 已被替换时返回 stale, 前端按钮置灰提示重跑 (断点兜底为可选增强, 暂不做)
+
+### 不做 (final report §5.4 确认)
+- tool calling 降级 fallback / 本地小模型特殊处理 / undo 栈 / 批量联动
+
+---
+
 ## v4.4.2 (2026-09-06) — Markdown 清洗 (md_local 本地引擎)
 
 **修订版**: 用户需求 "AI 产的 .md/md 格式 txt 直接丢进去, 产出一篇没有 md 标记的适宜人类阅读的文章". 决策: **不做独立功能页**, 复用 punct_local 本地脚本通道 (计划 + 1 轮 agent 复审, 7×P1 全吸收).

@@ -385,6 +385,30 @@ def test_smoke_prompt_content():
 # 主程序
 # ============================================================
 
+def test_v500_legacy_mode_migration():
+    """v5.0.0 Phase A4: 已砍模式 (deep_polish/anti_rambling/long_sentence) 静默归一."""
+    print()
+    print("--- v5.0.0: 旧模式归一化 ---")
+    from app.utils import ProjectConfig, compute_prompt_hash, _LEGACY_MODE_MAP
+    from app.templates import PROMPT_MODES
+    for old, expect in _LEGACY_MODE_MAP.items():
+        c = ProjectConfig.from_dict({"prompt_mode": old})
+        check(f"归一化 {old} -> {expect}", c.prompt_mode == expect)
+    check("schema v2 旧文件加载即升 3",
+          ProjectConfig.from_dict({"prompt_mode": "strict", "schema_version": 2}).schema_version == 3)
+    check("保留模式不受影响 (strict)",
+          ProjectConfig.from_dict({"prompt_mode": "strict"}).prompt_mode == "strict")
+    check("保留模式不受影响 (punct_local)",
+          ProjectConfig.from_dict({"prompt_mode": "punct_local"}).prompt_mode == "punct_local")
+    check("保留模式不受影响 (md_local)",
+          ProjectConfig.from_dict({"prompt_mode": "md_local"}).prompt_mode == "md_local")
+    check("旧断点自动失效 (模式归一改变 hash)",
+          compute_prompt_hash("deep_polish", "m", "") != compute_prompt_hash("polish", "m", ""))
+    check("PROMPT_MODES 无已砍模式",
+          all(k not in PROMPT_MODES for k in ("deep_polish", "anti_rambling", "long_sentence")))
+    check("PROMPT_MODES 精简后 7 条目 (6 可见 + deai 隐藏)", len(PROMPT_MODES) == 7)
+
+
 def main():
     print("=" * 60)
     print("  组件测试 + 冒烟测试 (v4.0+ 已脱离 PySide6 UI 依赖)")
@@ -393,6 +417,7 @@ def main():
     # v4.1.8.2 (审计 K12): per-test try/except — 旧版裸调, 一个用例抛异常
     # 即中断后续全部用例, 覆盖静默缩水 (与 test_web_backend/test_bugs 同款模式)
     all_tests = [
+        test_v500_legacy_mode_migration,
         test_smoke_config_roundtrip,
         test_smoke_engine_lifecycle,
         test_smoke_prompt_content,

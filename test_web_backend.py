@@ -143,7 +143,7 @@ def test_get_prompt_modes():
     backend = Backend(window=None)
     modes = backend.get_prompt_modes()
     check("返回 list", isinstance(modes, list))
-    check("至少 7 个模式", len(modes) >= 7)
+    check("恰好 6 个模式 (v5.0.0 模式精简)", len(modes) == 6, str([m["key"] for m in modes]))
     check("每个 mode 有 key + label", all("key" in m and "label" in m for m in modes))
     # v4.1.8.2 (审计 C4): deai 是去AI味视图专用遗留模式, 已从校对下拉过滤
     check("deai 模式已过滤", all(m["key"] != "deai" for m in modes))
@@ -2577,6 +2577,39 @@ def test_v442_md_local_ui():
     # 引擎分支端到端/幂等/规则全集在 test_md_strip.py (89 项)
 
 
+def test_v500_deai_load_source():
+    """v5.0.0 Phase B: deai_load_source 联动取数 — 内存命中/未完成/缺失/stale + 前端接线."""
+    print()
+    print("--- v5.0.0: deai_load_source 联动取数 ---", flush=True)
+    from pathlib import Path as _Path
+    from app.processor import ProcessingEngine
+    from app.utils import ProjectConfig, FileTask, FileResult
+    from app.web_backend import Backend
+    b = Backend(window=None)
+    check("无 engine -> stale",
+          b.deai_load_source("a.txt") == {"ok": False, "reason": "stale"})
+    engine = ProcessingEngine(ProjectConfig())
+    b._engine = engine
+    check("任务不存在 -> stale",
+          b.deai_load_source("a.txt") == {"ok": False, "reason": "stale"})
+    task = FileTask(file_path=_Path("a.txt"), original_text="原文")
+    engine.tasks["a.txt"] = task
+    check("未完成 -> not_completed",
+          b.deai_load_source("a.txt") == {"ok": False, "reason": "not_completed"})
+    task.result = FileResult(original="原文", corrected="改后")
+    r = b.deai_load_source("a.txt")
+    check("已完成 -> ok + text + file_name",
+          r.get("ok") is True and r.get("text") == "改后" and r.get("file_name") == "a.txt", str(r))
+    # 前端接线: 联动按钮 + 取数 + 跳检测直改
+    js = _read_app_js()
+    html = (_WEB_DIR / "index.html").read_text(encoding="utf-8")
+    check("前端联动按钮 (file-deai, 仅 completed 渲染)",
+          "file-deai" in js and "t.status === 'completed'" in js)
+    check("handoff 调后端取数 API", "deai_load_source(path)" in js)
+    check("handoff 跳过检测直接 Step 2", "await this.deaiStep2()" in js)
+    check("DeAI 输入框存在 (预填宿主)", html.count('id="deai-input"') == 1)
+
+
 
 def test_v420_nav_split():
     """v4.2.0: 3 视图 -> 7 视图拆分 (Win11 设置应用式分组导航).
@@ -3131,6 +3164,7 @@ def main():
         test_v440_ui_skin_roundtrip,
         test_v440_ink_skin_css,
         test_v442_md_local_ui,
+        test_v500_deai_load_source,
     ]
     for t in tests:
         try:

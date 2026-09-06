@@ -223,6 +223,21 @@ class FileTask:
         return task
 
 
+# v5.0.0 (Phase A4): 模式精简 — 3 个已砍模式静默归一.
+# 语义: from_dict 时 in-memory 生效; 磁盘旧值保留到下次防抖写回 (下次启动再归一,
+# 行为等价, 审计时勿据磁盘值误判未生效). 对 punct_local/md_local 零影响.
+_LEGACY_MODE_MAP = {
+    "deep_polish": "polish",     # 重润色 → 改走去 AI 味视图, 常规需求落在轻润色
+    "anti_rambling": "polish",   # 去流水账 → 同上
+    "long_sentence": "polish",   # 长句拆分 → 已并入 polish 处理规则 4
+}
+
+
+def _normalize_legacy_mode(mode: str) -> str:
+    """旧配置的已砍模式归一为保留模式 (未命中原样返回)."""
+    return _LEGACY_MODE_MAP.get(mode, mode)
+
+
 @dataclass
 class ProjectConfig:
     api_base: str = ""
@@ -237,7 +252,7 @@ class ProjectConfig:
     temperature: float = 0.1
     output_dir: str = ""
     chunking_preset: str = "balanced"  # NEW (v3.0+): chunking 档位 (fast/balanced/high_context/large/whole_file)
-    schema_version: int = 2  # NEW (v3.0+): 配置 schema 版本号 (Phase 3 断点迁移用)
+    schema_version: int = 3  # v3.0+ 配置 schema 版本号; v5.0.0: 2→3 (模式精简+归一化)
     context_max_chars: int = 800   # NEW (v3.0+): 跨段上下文最大字符数
     context_max_chunks: int = 2    # NEW (v3.0+): 跨段上下文取最近几个 chunk
     ui_theme: str = "auto"  # NEW (v4.1.9): 主题三态 (auto/light/dark), Win11 §2.3 个人原则 — 主题持久化
@@ -287,12 +302,12 @@ class ProjectConfig:
             max_retries=d.get("max_retries", 3),
             concurrency=d.get("concurrency", 2),
             output_format=d.get("output_format", "txt"),
-            prompt_mode=d.get("prompt_mode") or "strict",
+            prompt_mode=_normalize_legacy_mode(d.get("prompt_mode") or "strict"),
             custom_prompt=d.get("custom_prompt", ""),
             temperature=d.get("temperature", 0.1),
             output_dir=d.get("output_dir", ""),
             chunking_preset=d.get("chunking_preset") or "balanced",
-            schema_version=d.get("schema_version", 2),
+            schema_version=3,  # v5.0.0: 旧文件 (值 2) 加载即升级, to_dict 落盘 3
             context_max_chars=d.get("context_max_chars", 800),
             context_max_chunks=d.get("context_max_chunks", 2),
             ui_theme=d.get("ui_theme") or "auto",

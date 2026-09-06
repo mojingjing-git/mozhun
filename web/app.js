@@ -100,7 +100,7 @@ const App = {
     this.bindEvents();
     this.startEventLoop();
     this.setView('home');
-    this.appendLog('[就绪] v4.4.2 pywebview 前端已加载');
+    this.appendLog('[就绪] v5.0.0 pywebview 前端已加载');
     // v4.1.7: 加载风格 profile 列表 (异步, 不阻塞 init)
     this.loadStyleProfiles();
     // v4.1.9 (S2.3 个人原则): 恢复持久化主题 (auto/light/dark)
@@ -916,11 +916,16 @@ const App = {
       const statusText = {
         pending: '待处理', running: '处理中', paused: '已暂停', completed: '完成', failed: '失败', cancelled: '已取消',
       }[t.status] || t.status;
+      // v5.0.0 (联动 UX): 已完成文件行加「→ 去AI味」按钮 — 一键送去改写
+      const deaiBtn = t.status === 'completed'
+        ? `<button class="file-deai" data-path="${this.escapeHtml(t.path)}" title="把校对结果送去「去 AI 味」直接改写 (跳过检测)" type="button">→去AI味</button>`
+        : '';
       li.innerHTML = `<span class="file-name" title="${this.escapeHtml(t.path)}">${this.escapeHtml(name)}</span>
                       <span class="file-status ${t.status}">${statusText}</span>
+                      ${deaiBtn}
                       <button class="file-remove" data-path="${this.escapeHtml(t.path)}" title="删除" type="button">×</button>`;
       li.addEventListener('click', (e) => {
-        if (e.target.classList.contains('file-remove')) return;
+        if (e.target.classList.contains('file-remove') || e.target.classList.contains('file-deai')) return;
         this.selectFile(t.path);
         // v4.3.1 (UX #6): 只有完成/失败才跳结果对比页 (看成品/看错误);
         // 待处理/处理中/暂停/已取消仅选中不跳转 — 留在校对页看进度, 保持安静不弹 toast
@@ -935,11 +940,17 @@ const App = {
       if (t.path === this.selectedFileKey) li.classList.add('selected');
       ul.appendChild(li);
     }
-    // 绑定删除按钮
+    // 绑定删除按钮 + 联动按钮 (v5.0.0)
     ul.querySelectorAll('.file-remove').forEach(btn => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
         this.removeFile(btn.dataset.path);
+      });
+    });
+    ul.querySelectorAll('.file-deai').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.deaiHandoff(btn.dataset.path);
       });
     });
     this.updateFileCount();
@@ -2182,6 +2193,38 @@ const App = {
       this.deai['running' + step] = false;
       this.setDeaiStepUI(step, 'error', String(e));
     }
+  },
+
+  // v5.0.0 (联动 UX): 校对结果一键送去「去 AI 味」改写.
+  // 取数顺序: JS 内存 task.corrected (常规结果推送时已有全文) → 后端
+  // deai_load_source (超长降级场景) → stale 则引导重跑. 载入后切视图 +
+  // 跳过 Step 1 检测直接 Step 2 (deai_step2 不依赖 step1 结果).
+  async deaiHandoff(path) {
+    const t = this.tasks.find(x => x.path === path);
+    let text = t ? (t.corrected || '') : '';
+    let source = t ? path.split(/[\\/]/).pop() : path;
+    if (!text.trim()) {
+      let r = null;
+      try {
+        r = await window.pywebview.api.deai_load_source(path);
+      } catch (e) { /* IPC 失败按 stale 处理 */ }
+      if (!r || !r.ok) {
+        this.showToast(r && r.reason === 'not_completed'
+          ? '该文件尚未完成校对' : '结果已不在当前会话, 请重新校对后再联动', 'error');
+        return;
+      }
+      text = r.text;
+      source = r.file_name || source;
+    }
+    const input = document.getElementById('deai-input');
+    if (!input) return;
+    input.value = text;
+    input.title = `已从「${source}」校对结果载入 (v5.0 联动)`;
+    this._updateDeaiCharCount();
+    this.setView('deai');
+    this.appendLog(`[联动] 已从「${source}」校对结果载入去AI味 (跳过检测, 直接改写)`);
+    this.showToast('已载入校对结果, 跳过检测直接改写', 'info');
+    await this.deaiStep2();
   },
 
   async deaiStep1() {
