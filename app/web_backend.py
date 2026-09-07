@@ -550,12 +550,25 @@ class Backend:
         engine.on_file_start = _on_file_start
         # v4.1.8.2 (审计 C2): onFileDone/onFileCompleted 附带 status — 旧版
         # 成功/失败/取消三条路径都推且 payload 无状态, 前端无条件标"完成"
-        engine.on_file_done = lambda k, status: self._push("onFileDone", {
-            "file_key": k, "status": status,
-        })
-        engine.on_file_completed = lambda k, status: self._push("onFileCompleted", {
-            "file_key": k, "status": status,
-        })
+        # v5.1.0: payload 附加 audit (engine 按 file_key 存的编辑审计, 见
+        # ProcessingEngine.file_audits) 与 warnings (部分成功标记, 见
+        # FileResult.warnings) — 前端据此渲染「改动清单」与状态文案
+        def _file_done_payload(k: str, status: str, _eng: ProcessingEngine = engine) -> dict:
+            warnings = False
+            task = _eng.tasks.get(k)
+            if task is not None and task.result is not None:
+                warnings = bool(task.result.warnings)
+            return {
+                "file_key": k,
+                "status": status,
+                "audit": list(_eng.file_audits.get(k, [])),
+                "warnings": warnings,
+            }
+
+        engine.on_file_done = lambda k, status: self._push("onFileDone", _file_done_payload(k, status))
+        engine.on_file_completed = lambda k, status: self._push("onFileCompleted", _file_done_payload(k, status))
+        # v5.1.0: harness 非流式调用开始 — 无 token 流时前端的用户反馈
+        engine.on_harness_wait = lambda k: self._push("onHarnessWait", {"file_key": k})
         engine.on_stats_update = lambda s: self._push("onStatsUpdate", {
             "total_files": s.total_files,
             "completed_files": s.completed_files,
@@ -572,10 +585,13 @@ class Backend:
 
         # v4.1.8.2 (审计 C2/F4): 缓存命中文件不进 pending, 收不到任何事件,
         # 前端会全程显示"处理中" — 这里补发完成事件让 UI 即刻收敛.
+        # v5.1.0: 附 warnings (audit 是会话内存态, 缓存命中的新 engine 无历史
+        # audit, 改动清单不显示属预期; warnings 随 FileResult 落盘可恢复)
         for k, t in engine.tasks.items():
             if t.is_done:
-                self._push("onFileDone", {"file_key": k, "status": t.status.value})
-                self._push("onFileCompleted", {"file_key": k, "status": t.status.value})
+                payload = _file_done_payload(k, t.status.value)
+                self._push("onFileDone", payload)
+                self._push("onFileCompleted", payload)
 
         # 后台线程跑 (避免阻塞 pywebview 主线程)
         def run(_eng: ProcessingEngine = engine, _task_id: str = task_id):
@@ -1670,11 +1686,16 @@ class Backend:
         results = {}
         for file_key, task in eng.tasks.items():
             if task.result is not None:
-                results[file_key] = {
+                entry = {
                     "file_path": str(task.file_path),
                     "status": task.status.value,
                     "result": task.result.to_dict() if task.result else None,
                 }
+                # v5.1.0: 附 harness 编辑审计 (会话内存态; onTaskComplete 与
+                # onFileDone 两条推送路径都要带, 前端才不依赖事件到达顺序)
+                if eng.file_audits.get(file_key):
+                    entry["audit"] = list(eng.file_audits[file_key])
+                results[file_key] = entry
         return results
 
     def _push(self, event_name: str, data=None):
@@ -1727,6 +1748,7 @@ class Backend:
         MULTI_ALLOWED = {
             "onFileStart", "onFileDone", "onFileCompleted",
             "onTaskComplete", "onDeaiComplete", "onDeaiError",
+            "onHarnessWait",
             "onDeaiStream", "onFilesDropped", "onFetchModelsComplete",
         }
         with self._push_throttle_lock:

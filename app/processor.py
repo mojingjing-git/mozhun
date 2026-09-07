@@ -34,6 +34,16 @@ from app.logger import setup_logging
 from app.templates import PROMPT_MODES
 from app.punct_fix import fix_punctuation_ex
 from app.md_strip import strip_markdown
+# v5.1.0: harness 化 — Edit 工具链 (LLM 返回编辑建议, 客户端精确匹配应用)
+from app.harness import (
+    CHUNK_SCOPE_NOTE,
+    EDIT_TOOLS,
+    TOOL_CHOICE,
+    TOOL_DISCIPLINE,
+    apply_edits,
+    audit_has_warnings,
+    parse_tool_calls,
+)
 from app.utils import compute_prompt_hash_for_config
 from app.utils import (
     FileTask,
@@ -112,9 +122,15 @@ class ProcessingEngine:
         self._client: AsyncOpenAI | None = None
         # v4.3.4: 标点不平衡报告 (只报不改) — 桥接层在 prepare 后/run 结束后推送
         self.punct_reports: list[str] = []
+        # v5.1.0: harness 编辑审计 (file_key -> 合并后的 audit 列表)。
+        # 按设计决策不放 FileResult — 桥接层在 onFileDone/onTaskComplete 时
+        # 从这里读取并附加到推送 payload; 会话内存态, 不落断点。
+        self.file_audits: dict[str, list[dict]] = {}
 
         self.on_file_done: Optional[Callable[[str, str], None]] = None
         self.on_file_start: Optional[Callable[[str], None]] = None
+        # v5.1.0: harness 非流式调用开始 (无 token 流, 前端显示等待文案)
+        self.on_harness_wait: Optional[Callable[[str], None]] = None
         # NEW (v3.0+): 所有 chunk 完成 (v4.1.8.2 C2: 均附 status 参数)
         self.on_file_completed: Optional[Callable[[str, str], None]] = None
         self.on_stats_update: Optional[Callable[[ProcessStats], None]] = None
@@ -491,6 +507,8 @@ class ProcessingEngine:
 
                 # Phase 3: chunks_results 累积到整文件 result
                 failed_chunks = [i for i, c in enumerate(chunks_results) if c.error]
+                # v5.1.0: harness 部分成功 (边界 12) — 有未生效的编辑建议或
+                # 整轮级告警时置 warnings (不新增 TaskStatus 枚举)
                 result = FileResult(
                     original=text,
                     corrected=corrected,
@@ -500,6 +518,7 @@ class ProcessingEngine:
                     chunks_results=chunks_results,
                     failed_chunks=failed_chunks,
                     schema_version=2,
+                    warnings=audit_has_warnings(self.file_audits.get(key, [])),
                 )
                 with self._lock:
                     task.status = TaskStatus.COMPLETED
@@ -668,6 +687,7 @@ class ProcessingEngine:
         text: str,
         system_prompt_override: Optional[str] = None,
         stream_prefix: str = "",
+        harness_chunk_note: str = "",
     ) -> tuple[str, int]:
         """单块文本的流式调用。
 
@@ -677,6 +697,12 @@ class ProcessingEngine:
         stream_prefix: 本块之前已完成的全文 (多 chunk 场景). v4.1.8.1 (审计 M4):
         每次 emit 推 prefix + 当前累积 -> 对前端单调增长, 消除多 chunk 时"块内只
         推本块 buffer 覆盖掉前面内容"造成的回缩/闪断. 单 chunk 时为空串, 行为不变.
+
+        harness_chunk_note: v5.1.0 harness 分块时附加到 user 消息的 scope 说明
+        (上下文只是参照物, 不可编辑); 非 harness 或单块时为空串。
+
+        v5.1.0: strict/polish + harness_enabled 双条件生效时改走 Edit 工具链
+        (_harness_call, 非流式) — LLM 返回编辑建议而非整篇全文。
         """
         if system_prompt_override is not None:
             system_prompt = system_prompt_override
@@ -696,6 +722,14 @@ class ProcessingEngine:
                 self._log(f"[警告] 校对模式 '{self.config.prompt_mode}' 为占位模式，回退到纯纠错模式")
                 mode_info = PROMPT_MODES["strict"]
             system_prompt = mode_info["system"]
+
+        # v5.1.0: harness 分支 — 非流式 tool_calls + 本地 apply (无 token 流需求,
+        # 解析更简单; 烟测结论协议固定, 不做运行时降级)
+        if self._harness_active():
+            return await self._harness_call(
+                task_key, text, system_prompt,
+                stream_prefix=stream_prefix, chunk_note=harness_chunk_note,
+            )
 
         # v4.1.8.2 (审计 E5): stream_options={"include_usage":True} 对旧版
         # LM Studio / Ollama / vLLM 的 OpenAI 兼容层返回 400, 且 BadRequest 被
@@ -768,6 +802,110 @@ class ProcessingEngine:
 
         return corrected, token_count
 
+    def _harness_active(self) -> bool:
+        """v5.1.0: harness 生效判定 — 双决策 (AGENTS.md §36)。
+
+        生效条件 = ProjectConfig.harness_enabled (用户逃生口, 校对参数页
+        checkbox) **且** prompt_mode ∈ {strict, polish} (模式白名单)。
+        custom 由用户自带 prompt 语义不可控, punct_local/md_local 是纯本地
+        引擎, 均不走 harness。
+        """
+        return (
+            bool(getattr(self.config, "harness_enabled", True))
+            and self.config.prompt_mode in ("strict", "polish")
+        )
+
+    async def _harness_call(
+        self,
+        task_key: str,
+        text: str,
+        system_prompt: str,
+        stream_prefix: str = "",
+        chunk_note: str = "",
+    ) -> tuple[str, int]:
+        """v5.1.0: harness 分支 — 非流式 tool_calls 调用 + 客户端 apply。
+
+        与 _stream_single 流式路径的分工:
+          - 非流式 (无 token 流需求, 解析更简单; 协议由烟测选定 = OpenAI
+            兼容 tools/function calling, 运行时不做任何降级 fallback)。
+          - 在途取消由 B2 强制中断机制覆盖 (cancel() cancel 主任务打断
+            非流式 await), 本函数不额外检查 cancel_event。
+          - edits 空 → corrected=原文 (正常, 烟测证实模型对无错文本返回
+            0 个 tool_calls); 全部编辑未生效 → raise ValueError (同
+            "API 返回空内容" 语义, 走通用重试链, 耗尽后整文件 FAILED);
+            部分成功 → audit 记录未生效条目, 由 _process_file_async 据
+            file_audits 置 FileResult.warnings (边界 12)。
+        """
+        name = self.tasks[task_key].file_path.name if task_key in self.tasks else task_key
+        self._emit(self.on_harness_wait, task_key)
+        self._log(f"[harness] {name}: 已提交校对请求, 等待模型返回编辑建议 (非流式)")
+
+        system_content = f"{system_prompt}\n\n{TOOL_DISCIPLINE}"
+        user_content = f"{text}\n\n{chunk_note}" if chunk_note else text
+
+        completion = await self._client.chat.completions.create(
+            model=self.config.model,
+            messages=[
+                {"role": "system", "content": system_content},
+                {"role": "user", "content": user_content},
+            ],
+            temperature=self.config.temperature,
+            tools=EDIT_TOOLS,
+            tool_choice=TOOL_CHOICE,
+            stream=False,
+        )
+
+        token_count = completion.usage.total_tokens if getattr(completion, "usage", None) else 0
+        message = completion.choices[0].message
+        edits, parse_audit = parse_tool_calls(message)
+
+        # 本块 audit = 参数解析失败条目 + apply 回执 (重编号保证 index 连续)
+        chunk_audit: list[dict] = list(parse_audit)
+        if edits:
+            corrected, round_audit = apply_edits(text, edits)
+            chunk_audit.extend(round_audit)
+        else:
+            corrected = text
+
+        # index 重编号: 连续正整数标可解析编辑的顺序, -1 保留给整轮级告警
+        seq = 0
+        for entry in chunk_audit:
+            if entry["index"] >= 0:
+                entry["index"] = seq
+                seq += 1
+
+        # 边界 11: 存在有效编辑 (非 NOOP) 但全部未生效 → 与"API 返回空内容"
+        # 同语义 raise, 交给通用重试链 (耗尽后整文件 FAILED)。
+        effective = [
+            e for e in edits
+            if isinstance(e, dict) and e.get("old_text") and e.get("old_text") != e.get("new_text")
+        ]
+        if effective and corrected == text:
+            self.file_audits[task_key] = self.file_audits.get(task_key, []) + chunk_audit
+            skipped = sum(1 for e in chunk_audit if e["status"].startswith("SKIPPED"))
+            raise ValueError(
+                f"harness 全部编辑未生效 ({skipped} 条 SKIPPED, "
+                f"NOT_FOUND/NOT_UNIQUE/CAP), 原文保持不变"
+            )
+
+        prev = self.file_audits.get(task_key, [])
+        self.file_audits[task_key] = prev + chunk_audit
+        if chunk_audit:
+            ok_n = sum(1 for e in chunk_audit if e["status"] == "OK")
+            skip_n = sum(1 for e in chunk_audit if e["status"].startswith("SKIPPED"))
+            self._log(
+                f"[harness] {name}: {len(edits)} 条编辑建议, 生效 {ok_n} 条"
+                + (f", 未生效 {skip_n} 条 (见改动清单)" if skip_n else "")
+            )
+        else:
+            self._log(f"[harness] {name}: 模型未提交编辑 (无需修改)")
+
+        # 块级完成全量 emit (与流式路径同语义): prefix + 本块 corrected,
+        # 多 chunk 时对前端保持单调增长
+        self._emit(self.on_stream, task_key, stream_prefix + corrected)
+
+        return corrected, token_count
+
     async def _stream_chunked(self, task_key: str, chunks: list[str]) -> tuple[str, int, list[FileResult]]:
         """v3.0 多块串行 + 跨段上下文注入 + chunks_results 累积。
 
@@ -818,10 +956,13 @@ class ProcessingEngine:
 
             # v4.1.8.1 (M4): stream_prefix = 已完成块拼接, 让 _stream_single 每次
             # emit 都是单调增长的全文; 块间不再把 UI 内容缩回本块 buffer
+            # v5.1.0: harness 分块时附 scope 说明 (上下文只是参照物, 不可编辑;
+            # agent1 §3.4 "edit 跨块不允许")
             part, tokens = await self._stream_single(
                 task_key, chunk,
                 system_prompt_override=system_prompt_override,
                 stream_prefix="".join(all_parts),
+                harness_chunk_note=CHUNK_SCOPE_NOTE if self._harness_active() else "",
             )
             all_parts.append(part)
             total_tokens += tokens
@@ -852,6 +993,9 @@ class ProcessingEngine:
 
         返回 (full_corrected, total_tokens, chunks_results)
         """
+        # v5.1.0: 每次进入 (含整文件重试) 重建 audit, 防跨 attempt 重复累积
+        self.file_audits.pop(task_key, None)
+
         # v4.4.2: 仅 Markdown 清洗模式 — 纯本地规则 (app/md_strip.py), 不调用 LLM.
         # 整文件处理 (不切块): 围栏代码块是跨行状态, 分块可能把围栏切开 (评审 P1-6);
         # strip 为纯 regex 无调用限制, 整文件对任意体量都安全. 标点修复开关在此

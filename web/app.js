@@ -100,7 +100,7 @@ const App = {
     this.bindEvents();
     this.startEventLoop();
     this.setView('home');
-    this.appendLog('[就绪] v5.0.2 pywebview 前端已加载');
+    this.appendLog('[就绪] v5.1.0 pywebview 前端已加载');
     // v4.1.7: 加载风格 profile 列表 (异步, 不阻塞 init)
     this.loadStyleProfiles();
     // v4.1.9 (S2.3 个人原则): 恢复持久化主题 (auto/light/dark)
@@ -363,7 +363,7 @@ const App = {
     // (暂停/取消按钮被禁而后端仍在跑, 重新开始会静默取消旧任务).
     if (this.isProcessing && ['onStream', 'onStatsUpdate', 'onLog',
       'onFileStart', 'onFileDone', 'onFileCompleted',
-      'onChunkProgress'].includes(event)) {  // v4.3.1 (UX #18): 块级进度也是活动信号
+      'onChunkProgress', 'onHarnessWait'].includes(event)) {  // v5.1.0: harness 等待也是活动信号 (非流式调用期间无 onStream)
       this._armProofreadWatchdog();
     }
     switch (event) {
@@ -376,9 +376,11 @@ const App = {
       // 再 markFileRunning 设 status='running'
       case 'onFileStart':      this.handleFileStart(data); this.markFileRunning(data.file_key); break;
       // v4.1.8.2 (审计 C2): onFileDone/onFileCompleted payload 改为
-      // {file_key, status}, 失败/取消不再被误标"完成"
+      // {file_key, status, audit?, warnings?}, 失败/取消不再被误标"完成"
       case 'onFileDone':       this.markFileDone(data); break;
       case 'onFileCompleted':  this.markFileDone(data); break;
+      // v5.1.0: harness 非流式调用开始 (无 token 流) — 显示等待文案
+      case 'onHarnessWait':    this.showHarnessWait(data); break;
       case 'onStatsUpdate':    this.updateStats(data); break;
       case 'onTaskComplete':   this.onTaskComplete(data); break;
       // v4.1.7: 风格 profile 蒸馏 (step='distill') 也复用 onDeaiStream 事件
@@ -497,6 +499,11 @@ const App = {
     {
       const mcb = document.getElementById('cfg-md-strip');
       if (mcb) mcb.checked = this.config.md_strip_before_llm === true;
+    }
+    // v5.1.0: harness Edit 工具链开关 (默认 True 字段, 缺失视为 true)
+    {
+      const hcb = document.getElementById('cfg-harness-enabled');
+      if (hcb) hcb.checked = this.config.harness_enabled !== false;
     }
     // v4.3.4: 标点修复 v2 规则选项
     {
@@ -929,9 +936,12 @@ const App = {
       const li = document.createElement('li');
       li.dataset.path = t.path;  // v4.1.9: 右键菜单定位用
       const name = t.path.split(/[\\/]/).pop();
-      const statusText = {
+      // v5.1.0: harness 部分成功 (有编辑建议未生效) → 状态文案区分于纯"完成"
+      const baseStatusText = {
         pending: '待处理', running: '处理中', paused: '已暂停', completed: '完成', failed: '失败', cancelled: '已取消',
       }[t.status] || t.status;
+      const statusText = (t.status === 'completed' && t.warnings)
+        ? '完成（部分建议未采纳）' : baseStatusText;
       // v5.0.0 (联动 UX): 已完成文件行加「→ 去AI味」按钮 — 一键送去改写
       const deaiBtn = t.status === 'completed'
         ? `<button class="file-deai" data-path="${this.escapeHtml(t.path)}" title="把校对结果送去「去 AI 味」直接改写 (跳过检测)" type="button">→去AI味</button>`
@@ -981,8 +991,7 @@ const App = {
     const statusText = {
       pending: '待处理', running: '处理中', paused: '已暂停',
       completed: '完成', failed: '失败', cancelled: '已取消',
-    };
-    sel.innerHTML = '';
+    };    sel.innerHTML = '';
     if (this.tasks.length === 0) {
       const opt = document.createElement('option');
       opt.value = '';
@@ -996,7 +1005,10 @@ const App = {
       const opt = document.createElement('option');
       opt.value = t.path;
       const name = t.path.split(/[\\/]/).pop();
-      opt.textContent = `${name} (${statusText[t.status] || t.status})`;
+      // v5.1.0: harness 部分成功 → 下拉文案同步区分
+      let label = statusText[t.status] || t.status;
+      if (t.status === 'completed' && t.warnings) label = '完成（部分建议未采纳）';
+      opt.textContent = `${name} (${label})`;
       if (t.path === this.selectedFileKey) opt.selected = true;
       sel.appendChild(opt);
     }
@@ -1328,6 +1340,9 @@ const App = {
     const t = this.tasks.find(t => t.path === fileKey);
     if (t) {
       t.status = 'running';
+      // v5.1.0: 清掉上一轮的 harness 审计与部分成功标记 (重跑时防旧数据残留)
+      t.audit = [];
+      t.warnings = false;
       this.renderFileList();
       // v4.1.5: handleFileStart 已在 dispatch 阶段同步设了 t.original
       // 如果当前选中的就是这个文件, 重渲染 compare (左栏立刻显示原文)
@@ -1345,6 +1360,9 @@ const App = {
     const t = this.tasks.find(t => t.path === fileKey);
     if (t) {
       t.status = status;
+      // v5.1.0: 缓存 harness 改动审计与部分成功标记 (onFileDone payload 附带)
+      if (data && data.audit !== undefined) t.audit = data.audit;
+      if (data && data.warnings !== undefined) t.warnings = !!data.warnings;
       this.renderFileList();
       // v4.1.5: 文件完成, 刷新按钮态
       if (this.selectedFileKey === fileKey) {
@@ -1352,6 +1370,17 @@ const App = {
         this.selectFile(fileKey);
       }
     }
+  },
+
+  // v5.1.0: harness 非流式调用等待文案 — harness 模式无 token 流, 校对输出
+  // 窗格在模型返回前是空的, 用占位文案告知用户"在等模型"而非"卡住了"。
+  // 直接写 innerHTML (不进 renderState): 完成时 renderCompare 会覆盖。
+  showHarnessWait(data) {
+    const fileKey = data && data.file_key;
+    const revisedEl = document.getElementById('compare-revised');
+    if (!revisedEl || !fileKey || fileKey !== this.selectedFileKey) return;
+    if (!this.isProcessing) return;
+    revisedEl.innerHTML = '<div class="type-emptystate">harness 模式：模型正在逐条生成编辑建议…<br><span class="harness-wait-hint">此模式不逐字流式输出，完成后在下方「改动清单」查看每条改动</span></div>';
   },
 
   updateStats(stats) {
@@ -1434,6 +1463,10 @@ const App = {
           t.original = info.result.original || '';
           t.corrected = info.result.corrected || '';
           t.status = info.status || 'completed';
+          // v5.1.0: harness 审计与部分成功标记 (onTaskComplete 与 onFileDone
+          // 双路径都带, 前端不依赖事件到达顺序; audit 字段缺失时保留旧值)
+          if (info.audit !== undefined) t.audit = info.audit;
+          t.warnings = !!info.result.warnings;
           // v4.3.1 (UX #5): 无条件回写 error — 旧版只在有值时覆盖, 重跑成功后
           // 上一轮旧 error 残留, 结果页永远显示 error-mark
           t.error = info.result.error || '';
@@ -1529,6 +1562,10 @@ const App = {
     // v4.1.8.2 (审计 F2): 兜底守卫 — 非当前选中文件的渲染请求直接丢弃
     // (RAF 回调可能在用户切换文件后才执行)
     if (fileKey !== this.selectedFileKey) return;
+
+    // v5.1.0: harness 改动清单面板 (放守卫后 — 错误态/空态分支也要刷新,
+    // 避免切换文件后残留上一文件的清单)
+    this.renderAuditPanel(fileKey);
 
     // 2. (修复 9): 错误态 fallback — 右栏显示 error-mark
     if (t.error) {
@@ -1627,6 +1664,56 @@ const App = {
     revisedEl.innerHTML = state.renderedHTML;
     state.lastPartialLen = partial.length;
     state.renderedOriginalLen = prevRenderedOriginal + newOriginalSlice.length;
+  },
+
+  // v5.1.0: harness 改动清单渲染 — 逐条 status/reason/old→new 预览,
+  // SKIPPED_* 灰显, WARN_* 告警色, default 收起 (<details> 原生折叠)
+  renderAuditPanel(fileKey) {
+    const panel = document.getElementById('audit-panel');
+    const listEl = document.getElementById('audit-list');
+    const summaryEl = document.getElementById('audit-summary');
+    if (!panel || !listEl) return;
+    const t = this.tasks.find(t => t.path === fileKey);
+    const audit = (t && Array.isArray(t.audit)) ? t.audit : [];
+    if (audit.length === 0) {
+      panel.hidden = true;
+      listEl.innerHTML = '';
+      if (summaryEl) summaryEl.textContent = '';
+      return;
+    }
+    const STATUS_LABEL = {
+      OK: '已应用',
+      SKIPPED_NOT_FOUND: '未找到原文',
+      SKIPPED_NOT_UNIQUE: '匹配多处',
+      SKIPPED_CASCADED: '已被前序编辑修改',
+      SKIPPED_NOOP: '无意义调用',
+      SKIPPED_CAP: '超出条数上限',
+      SKIPPED_BAD_ARGS: '参数无效',
+      WARN_EDIT_CAP: '建议数超限',
+      WARN_RATIO: '改动比例异常',
+    };
+    const rows = audit.map(e => {
+      const st = e.status || '';
+      const cls = st.indexOf('SKIPPED') === 0 ? 'audit-item audit-skipped'
+        : (st.indexOf('WARN') === 0 ? 'audit-item audit-warn' : 'audit-item audit-ok');
+      const label = STATUS_LABEL[st] || st;
+      const idx = (typeof e.index === 'number' && e.index >= 0) ? ('#' + (e.index + 1) + ' ') : '';
+      const arrow = (e.old_preview || e.new_preview)
+        ? '<div class="audit-diff"><span class="audit-old">' + this.escapeHtml(e.old_preview || '(空)') + '</span>'
+          + '<span class="audit-arrow">→</span>'
+          + '<span class="audit-new">' + this.escapeHtml(e.new_preview || '(空)') + '</span></div>'
+        : '';
+      const note = e.note ? '<div class="audit-note">' + this.escapeHtml(e.note) + '</div>' : '';
+      return '<div class="' + cls + '"><div class="audit-head">'
+        + '<span class="audit-status">' + this.escapeHtml(label) + '</span>'
+        + '<span class="audit-reason">' + this.escapeHtml(idx + (e.reason || '')) + '</span>'
+        + '</div>' + arrow + note + '</div>';
+    }).join('');
+    listEl.innerHTML = rows;
+    const okN = audit.filter(e => e.status === 'OK').length;
+    const skipN = audit.filter(e => (e.status || '').indexOf('SKIPPED') === 0).length;
+    if (summaryEl) summaryEl.textContent = '(' + audit.length + ' 条, 生效 ' + okN + ', 未生效 ' + skipN + ')';
+    panel.hidden = false;
   },
 
   // 大文件 fallback: onFileStart 没推 original 时, 异步调 read_file 补
@@ -1977,6 +2064,11 @@ const App = {
       md_strip_before_llm: (() => {
         const cb = document.getElementById('cfg-md-strip');
         return cb ? cb.checked : (this.config.md_strip_before_llm === true);
+      })(),
+      // v5.1.0: harness Edit 工具链开关 (默认 True 字段, 元素缺失时回退当前配置)
+      harness_enabled: (() => {
+        const cb = document.getElementById('cfg-harness-enabled');
+        return cb ? cb.checked : (this.config.harness_enabled !== false);
       })(),
       // v4.3.4: 标点修复 v2 规则选项 (checkbox 缺失时回退当前配置)
       punct_quote_style:  this.getVal('cfg-punct-quote-style') || this.config.punct_quote_style || 'curly',

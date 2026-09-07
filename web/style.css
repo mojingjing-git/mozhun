@@ -1,4 +1,4 @@
-/* 墨准 v5.0.2 — Win11 Fluent 2 风格 (完整 token 体系 + 暗色 + 5 类动画 + Acrylic/Smoke)
+/* 墨准 v5.1.0 — Win11 Fluent 2 风格 (完整 token 体系 + 暗色 + 5 类动画 + Acrylic/Smoke)
    借鉴自 https://learn.microsoft.com/zh-cn/windows/apps/design/ (Microsoft Terms of Use, 文档非版权材料)
    借鉴内容: 5 设计原则 + 7 签名体验的数值与命名
    借鉴方式: 思路借鉴,代码自写,token 命名遵循 Microsoft 官方约定
@@ -1573,4 +1573,115 @@ del {
   line-height: var(--lineHeightBody);
   cursor: pointer;
   user-select: none;
+}
+
+
+/* ===== v5.1.0: harness 改动清单 (audit panel) ===== */
+/* 颜色全部走既有 token (Status 三色 + Neutral 三级前景), 不硬编码 — AGENTS 红线 */
+.audit-panel {
+  margin-top: var(--space-4);
+  border: 1px solid var(--colorNeutralStroke1);
+  border-radius: var(--controlCornerRadius);
+  background: var(--colorNeutralBackground1);
+  overflow: hidden;
+}
+.audit-panel summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--fontSizeBody);
+  font-weight: var(--fontWeightSemibold, 600);
+  color: var(--colorNeutralForeground1);
+  cursor: pointer;
+  user-select: none;
+  min-height: 32px;
+}
+.audit-panel summary:hover {
+  background: var(--colorNeutralBackground2);
+}
+.audit-summary-hint {
+  font-size: var(--fontSizeCaption, 12px);
+  font-weight: var(--fontWeightRegular);
+  color: var(--colorNeutralForeground3);
+}
+.audit-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3) var(--space-3);
+  max-height: 320px;
+  overflow-y: auto;
+}
+.audit-item {
+  border: 1px solid var(--colorNeutralStroke1);
+  border-left: 3px solid var(--colorStatusSuccess);
+  border-radius: var(--radiusSmall);
+  padding: var(--space-2) var(--space-3);
+  background: var(--colorNeutralBackground3);
+}
+.audit-item.audit-skipped {
+  border-left-color: var(--colorNeutralForeground3);
+  color: var(--colorNeutralForeground2);
+}
+.audit-item.audit-warn {
+  border-left-color: var(--colorStatusWarning);
+}
+.audit-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.audit-status {
+  font-size: var(--fontSizeCaption, 12px);
+  font-weight: var(--fontWeightSemibold, 600);
+  color: var(--colorStatusSuccess);
+  flex-shrink: 0;
+}
+.audit-skipped .audit-status {
+  color: var(--colorNeutralForeground3);
+}
+.audit-warn .audit-status {
+  color: var(--colorStatusWarning);
+}
+.audit-reason {
+  font-size: var(--fontSizeCaption, 12px);
+  color: var(--colorNeutralForeground2);
+  word-break: break-all;
+}
+.audit-diff {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+  font-size: var(--fontSizeCaption, 12px);
+  line-height: var(--lineHeightBody);
+  word-break: break-all;
+}
+.audit-old {
+  color: var(--colorDiffDel);
+  background: var(--colorDiffDelBg);
+  padding: 0 var(--space-1);
+  border-radius: var(--radiusSmall);
+}
+.audit-new {
+  color: var(--colorDiffAdd);
+  background: var(--colorDiffAddBg);
+  padding: 0 var(--space-1);
+  border-radius: var(--radiusSmall);
+}
+.audit-arrow {
+  color: var(--colorNeutralForeground3);
+  flex-shrink: 0;
+}
+.audit-note {
+  margin-top: var(--space-1);
+  font-size: var(--fontSizeCaption, 12px);
+  color: var(--colorNeutralForeground3);
+}
+/* v5.1.0: harness 等待文案辅注 (右栏占位提示) */
+.harness-wait-hint {
+  font-size: var(--fontSizeCaption, 12px);
+  color: var(--colorNeutralForeground3);
 }

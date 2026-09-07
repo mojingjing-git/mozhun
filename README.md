@@ -1,4 +1,4 @@
-# 墨准 (MoZhun) v5.0.2 (pywebview + 水墨宣纸 / Win11 Fluent)
+# 墨准 (MoZhun) v5.1.0 (pywebview + 水墨宣纸 / Win11 Fluent)
 
 基于 LLM 的批量文本校对工具。**pywebview 6.2.1** 前端 + 原生 Web 设计令牌 + **Win11 Fluent 2 视觉**，支持流式输出、任意 OpenAI 兼容 API，以及**零 LLM 成本的本地标点修复**（v4.3.3+）。
 
@@ -11,6 +11,7 @@
 - **1px 单线图标 + 暗色模式 (v4.1.8)** — 13 SVG Segoe Fluent Icons 风格；主题 auto / light / dark 三态切换
 - **本地标点修复 (v4.3.3 / v4.3.4)** — 纯规则脚本，**不调用 LLM、零成本、零 API 延迟**：中文引号自动配对（弯/直角两种风格）、省略号/破折号/波浪号归一、全角字母数字折叠、引号不平衡行号报告
 - **Markdown 清洗 (v4.4.2)** — AI 产出的 .md / md 格式 txt 直接丢进来，产出一篇无标记、适宜人类阅读的文章（本地规则引擎 `md_strip`，零成本零延迟）；可选「送 LLM 前剥离 Markdown」让校对/去AI味不再读标记
+- **Edit 工具链 harness (v5.1.0)** — 「严格校对 / 纠错+轻润色」模式默认改走 function calling：模型逐条返回编辑建议（改哪 / 改成什么 / 为什么），客户端精确匹配应用，**输出 token 大幅下降**；结果对比页「改动清单」逐条审计（已应用 / 未找到原文 / 匹配多处 / 级联失效），部分未采纳时文件标「完成（部分建议未采纳）」
 - **流式输出** — 边生成边显示，实时预览校对结果
 - **后台线程 + asyncio (v4.0+)** — 主线程跑 pywebview 事件循环，桥接 `window.pywebview.api.xxx`
 - **5 档分块预设 (v3.0+)** — 2000/3000/4000/6000 字 + 整文件模式；**跨段上下文**自动注入前 N 段校对结果
@@ -106,6 +107,15 @@ python main.py       # 或直接开发模式运行
 | 重复标点压缩 | 关 | `？？？` → `？`（小说刻意强调场景可留） |
 
 引号不平衡（落单/奇数）不改文本，只在日志输出**行号报告**供人工复核。
+
+## Edit 工具链 harness (v5.1.0)
+
+设置 → 校对参数 → **「启用 Edit 工具链 (harness 模式)」**（默认开，可关闭）。仅「严格校对」与「纠错+轻润色」两种模式生效，关闭或其它模式回退为模型整篇重输出。
+
+- **工作方式**：模型不再输出修改后全文，而是逐条调用 `edit_text(old_text, new_text, reason)` 工具提交编辑建议；客户端按精确字符串匹配（唯一命中）串行应用，只发送/保存真正的改动
+- **改动清单**：结果对比页底部折叠面板，逐条显示状态与理由 —— 已应用 / 未找到原文 / 匹配多处 / 已被前序编辑修改 / 无意义调用；未采纳的条目灰显，文件状态显示「完成（部分建议未采纳）」
+- **安全边界**：old_text 匹配多处时**不猜**（跳过并报告）；换行符差异（\r\n/\n）自动归一匹配；单块超 50 条建议自动截断并告警；全部编辑未生效时整文件标失败（走既有重试链）
+- **取消/断点语义不变**；harness 开关纳入缓存指纹，切换开关后旧断点自动失效重跑一次
 
 ## 去 AI 味 (v3.1+，独立视图)
 
@@ -230,7 +240,7 @@ python check_exe.py   # 校验 exe 内 web/ 资源与 style_profiles 完整性
 
 ## 借鉴来源
 
-v3.0 → v5.0.2 共借鉴 **19 个开源项目 / 文档**，全部思路借鉴，代码自写：
+v3.0 → v5.1.0 共借鉴 **20 个开源项目 / 文档**，全部思路借鉴，代码自写：
 
 - **业务层 (v3.0)**：tianhm/ollama-batch-processor / shreyan241/gpt-proofreader / Xueheng-Li/proofreading (MIT) + qasync (BSD-2)
 - **GUI 层 (v4.0)**：pywebview (BSD-3) + diff-match-patch (Apache-2.0) + marked.js (MIT) + Fluent UI System Icons (MIT)
@@ -239,6 +249,7 @@ v3.0 → v5.0.2 共借鉴 **19 个开源项目 / 文档**，全部思路借鉴�
 - **标点修复调研 (v4.3.4)**：[woct0rdho/typeset](https://github.com/woct0rdho/typeset) (MIT) + [huacnlee/autocorrect](https://github.com/huacnlee/autocorrect) (MIT) + [yongzhuo/macro-correct](https://github.com/yongzhuo/macro-correct) (Apache-2.0) + [sparanoid/chinese-copywriting-guidelines](https://github.com/sparanoid/chinese-copywriting-guidelines) (MIT) + GB/T 15834-2011《标点符号用法》
 - **Markdown 清洗 (v4.4.2)**：[commonmark/commonmark-spec](https://github.com/commonmark/commonmark-spec)（CC-BY-SA 4.0 spec 文本 + BSD-2 参考实现）— 围栏/强调边界/表格形态的结构语义引用
 - **DeAI 后置三件套 (v5.0.2)**：[harshaneel/humanize](https://github.com/harshaneel/humanize) (MIT) — audit-revise 出戏句反馈循环 + 4 pass 法；[blader/humanizer](https://github.com/blader/humanizer) (MIT) — AI 痕迹分类语义（现行 v3.0 "five sections + 25 patterns"，本项目不用其编号）；[Aboudjem/humanizer-skill](https://github.com/Aboudjem/humanizer-skill) (MIT) — 0-100 AI-tell 本地评分范式（分数是信号不是判定）
+- **校对 harness (v5.1.0)**：[Claude Code Edit 工具](https://code.claude.com/docs/)（Anthropic 文档，致谢非协议）— old_text/new_text 精确匹配 + 唯一性要求 + 逐条状态回执的 Edit 工具设计范式
 
 完整 LICENSE 副本见 [`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md)。
 

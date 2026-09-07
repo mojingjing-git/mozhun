@@ -83,6 +83,7 @@ def compute_prompt_hash(
     punct_repeat_compress: bool = False,
     punct_dash_tilde: bool = True,
     md_strip: bool = False,
+    harness_enabled: bool = True,
 ) -> str:
     """计算 prompt/生成配置指纹 — 断点缓存随配置变化而失效。
 
@@ -93,6 +94,9 @@ def compute_prompt_hash(
 
     v4.1.8.2 (审计 E16): 补纳 api_base — 同 model 名换端点 (官方 <-> 代理/本地
     网关) 时产出不同, 旧指纹不变会静默复用旧端点的断点.
+
+    v5.1.0: 补纳 harness_enabled — harness 开关改变 LLM 的输出形态
+    (整篇全文 vs edit_text 工具调用), 开关切换后旧断点必须失效。
     """
     raw = (
         f"{prompt_mode}|{model}|{custom_prompt}"
@@ -104,6 +108,8 @@ def compute_prompt_hash(
         # v4.4.2: md_strip 开关无条件纳入 — 全部旧断点一次性失效 (C2/E16 同语义,
         # 评审 P2-9: 与其零失效而漏纳, 不如一次失效保证缓存正确)
         f"|ms={md_strip}"
+        # v5.1.0: harness 开关纳入 (输出形态改变; 与 md_strip 同失效语义)
+        f"|he={harness_enabled}"
     ).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()[:16]
 
@@ -127,6 +133,7 @@ def compute_prompt_hash_for_config(cfg: "ProjectConfig") -> str:
         punct_repeat_compress=cfg.punct_repeat_compress,
         punct_dash_tilde=cfg.punct_dash_tilde,
         md_strip=cfg.md_strip_before_llm,
+        harness_enabled=cfg.harness_enabled,
     )
 
 
@@ -152,6 +159,9 @@ class FileResult:
     chunks_results: list["FileResult"] = field(default_factory=list)
     failed_chunks: list[int] = field(default_factory=list)  # 失败 chunk index
     schema_version: int = 2
+    # v5.1.0: harness 部分成功标记 (边界 12) — 存在未生效的编辑建议/整轮级
+    # 告警时置位, UI 显示"完成（部分建议未采纳）"。不新增 TaskStatus 枚举。
+    warnings: bool = False
 
     @property
     def is_chunked(self) -> bool:
@@ -183,6 +193,7 @@ class FileResult:
             "chunks_results": [r.to_dict() for r in self.chunks_results],
             "failed_chunks": list(self.failed_chunks),
             "schema_version": self.schema_version,
+            "warnings": self.warnings,
         }
 
     @classmethod
@@ -197,6 +208,7 @@ class FileResult:
             chunks_results=[cls.from_dict(c) for c in d.get("chunks_results", [])],
             failed_chunks=list(d.get("failed_chunks", [])),
             schema_version=d.get("schema_version", 2),
+            warnings=bool(d.get("warnings", False)),
         )
 
 
@@ -291,6 +303,11 @@ class ProjectConfig:
     deai_strip_after: bool = True   # rewrite 完整输出后剥离 Markdown 标记 (app/md_strip.py, 空结果兜底)
     deai_ai_score: bool = True      # rewrite 完成后跑客户端 0-100 AI 味评分 (app/ai_score_local.py, 零 LLM)
     deai_revise: bool = False       # 评分 >= REVISE_THRESHOLD 时以出戏句反馈追加一轮改写 (额外 1 次 LLM, <=2 万字)
+    # v5.1.0: 校对 harness 化总开关 (用户逃生口)。生效条件 = 本开关为 True 且
+    # prompt_mode ∈ {strict, polish} (白名单双决策, 见 AGENTS.md §36)。
+    # True 时 strict/polish 走 Edit 工具链 (LLM 返回编辑建议, 客户端 apply),
+    # 纳入 compute_prompt_hash (|he=) — 切换开关会使旧断点一次性失效。
+    harness_enabled: bool = True
 
     def to_dict(self) -> dict:
         return {
@@ -320,6 +337,7 @@ class ProjectConfig:
             "deai_strip_after": self.deai_strip_after,
             "deai_ai_score": self.deai_ai_score,
             "deai_revise": self.deai_revise,
+            "harness_enabled": self.harness_enabled,
         }
 
     @classmethod
@@ -351,6 +369,7 @@ class ProjectConfig:
             deai_strip_after=bool(d.get("deai_strip_after", True)),
             deai_ai_score=bool(d.get("deai_ai_score", True)),
             deai_revise=bool(d.get("deai_revise", False)),
+            harness_enabled=bool(d.get("harness_enabled", True)),
         )
 
 

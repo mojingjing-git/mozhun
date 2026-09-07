@@ -96,12 +96,15 @@ main.py (webview.start)
 34. **ai_score_local 权重与阈值裁定** (v5.0.2+): 借鉴 Aboudjem/humanizer-skill (MIT) 0-100 AI-tell 本地评分范式 + blader/humanizer (MIT, 现行 v3.0 为 **"five sections + 25 patterns"**, 引用一律用此表述**禁用其新旧编号** — v3.0 重排过编号) + harshaneel/humanize (MIT) audit-revise。六维权重 (和恒=100, 模块 assert + test 兜底): 硬黑名单词频 28 / 7 大类痕迹 24 (第 1 类=黑名单不双计) / AI 6 处反制 18 (本地可测 5 项 4+4+4+4+2, "原型不匹配"需语义理解本地不计, 诚实缺位优于硬凑) / 句长方差 burstiness 12 / Markdown 装饰密度 10 / 标点签名 8。`REVISE_THRESHOLD=50` 与全部权重均为**初始拍定值, 待真实样本校准** — 严禁在文档/注释编造"实测平均 N"之类校准数据来源
 35. **DeAI 3 开关不进 compute_prompt_hash** (v5.0.2+): `deai_strip_after` / `deai_ai_score` / `deai_revise` (默认 True/True/False, ProjectConfig 字段 23→26) 只影响去 AI 味 rewrite 步**后置处理**, 而 DeAI 全程无断点缓存体系 (web_backend 无 prompt_hash) — 塞进校对断点指纹只会让校对断点无谓失效, 故裁定不入 hash。与 `md_strip_before_llm` (进 hash `|ms=`) 的本质区别: 后者改变**送 LLM 前的输入内容**, 属校对生成语义; 前者只改**产出后的展示/评分/修订**
 
+### v5.1.0 新增（校对流程 harness 化: Edit 工具链）
+36. **harness 化设计决策** (v5.1.0+): strict/polish 模式 LLM 不再整篇重输出, 改走 OpenAI 兼容 function calling — `app/harness.py` 定义 `EDIT_TOOLS` (edit_text: old_text/new_text/reason) + `TOOL_DISCIPLINE` (工具纪律 7 条 + "只产出 tool_calls 不输出全文") + `CHUNK_SCOPE_NOTE` (分块时上下文只是参照物) 单点。**生效条件 = 双决策**: `ProjectConfig.harness_enabled` (默认 True, 校对参数页 `cfg-harness-enabled` checkbox, 用户逃生口) **且** prompt_mode ∈ {strict, polish} 白名单 (custom 语义不可控, punct_local/md_local 纯本地); `harness_enabled` 纳入 compute_prompt_hash `|he=` + compute_prompt_hash_for_config 同步加参 (开关切换旧断点失效)。协议由 MiniMax-M3 真实烟测选定 (tools 一次通过: 单响应最多 8 个 tool_calls, 11 条编辑 0 NOT_FOUND), **运行时不做任何降级 fallback** (json_object / 内嵌 JSON 阶梯仅设计期备用)。`apply_edits` 按 [agent1-tech-feasibility.md §3.3 的 12 条边界表](file:.workbuddy/research/agent1-tech-feasibility.md) 全表实施: 严格按返回顺序 `str.replace(old, new, 1)` 串行不重排; 单条 status ∈ {OK, SKIPPED_NOT_FOUND, SKIPPED_NOT_UNIQUE, SKIPPED_CASCADED, SKIPPED_NOOP} + 现实扩展 SKIPPED_CAP (每块 ≤50 条, 超限不应用+WARN_EDIT_CAP) / SKIPPED_BAD_ARGS / 整轮级 WARN_RATIO (>50% 不熔断只告警); `\r\n` 归一匹配 + 位置映射替换 (新文本风格跟随被替换区域); **apply 不抛异常** (单条失败记录 audit), 全失败由调用方判 (corrected==original 且有有效编辑 → raise 走既有重试链耗尽 FAILED)。audit 按 file_key 存 `engine.file_audits` (**不放 FileResult** — dataclass 只加 `warnings: bool` 部分成功标记 26→27 字段, 不新增 TaskStatus 枚举), web_backend 在 onFileDone/onTaskComplete payload 附加 `audit`+`warnings`, 前端「改动清单」`<details>` 折叠面板逐条渲染 (SKIPPED 灰显), 文件行显示「完成（部分建议未采纳）」; audit 是会话内存态不落断点 (缓存命中文件无改动清单属预期)。分块路径每块独立 edits/apply, audit 合并; 整文件重试时 audit 重建防跨 attempt 累积。借鉴 Claude Code Edit 工具设计范式 (THIRD_PARTY §20, 致谢非协议同 §10 先例)
+
 ## 文件命名
 
 ### 主代码
 - 入口: `main.py`；启动器: `start.py`（统一启动器）+ `启动.bat`（双击薄包装）
 - Bridge: `app/web_backend.py`
-- 引擎: `app/processor.py` / `app/punct_fix.py`（v4.3.3+） / `app/md_strip.py`（v4.4.2+） / `app/ai_score_local.py`（v5.0.2+） / `app/context_builder.py` / `app/utils.py` / `app/templates.py` / `app/logger.py`
+- 引擎: `app/processor.py` / `app/punct_fix.py`（v4.3.3+） / `app/md_strip.py`（v4.4.2+） / `app/ai_score_local.py`（v5.0.2+） / `app/harness.py`（v5.1.0+） / `app/context_builder.py` / `app/utils.py` / `app/templates.py` / `app/logger.py`
 - 前端: `web/index.html` / `web/app.js` / `web/style.css` / `web/icons/*.svg` / `web/lib/*.js`
 - 打包: `build.spec` / `check_exe.py`（exe 资源校验）/ `dist/墨准.exe`
 - 测试:
@@ -112,6 +115,7 @@ main.py (webview.start)
   - v4.3.3+ 测试: `test_punct_fix.py`（标点规则引擎全规则回归，含跨行降级/不平衡报告/幂等）
   - v4.4.2+ 测试: `test_md_strip.py`（Markdown 清洗全规则回归，含幂等双跑/围栏保护/引擎 md_local 分支端到端/空结果兜底）
   - v5.0.2+ 测试: `test_ai_score.py`（客户端 AI 味评分回归，含权重和=100/各维命中/幂等/offenders 截断/空文本）
+  - v5.1.0+ 测试: `test_harness.py`（harness Edit 工具链回归，含 12 边界逐条/\r\n 归一/≤50 cap/引擎端到端 strict/polish/custom/harness_enabled=False/全失败 FAILED/warnings 置位/多 chunk audit 合并）
 - 一键跑: `run_all_tests.py`
 - 无 pytest 依赖，纯脚本运行
 
@@ -143,6 +147,9 @@ DeAI 后置层（3 项，v3.0/v4.1.7 起借鉴，v5.0.2 补登记 LICENSE）：
 - 0-100 AI-tell 本地评分范式: https://github.com/Aboudjem/humanizer-skill (MIT)
 - AI 痕迹分类语义 (现行 v3.0 "five sections + 25 patterns", 不用其编号): https://github.com/blader/humanizer (MIT)
 - audit-revise 循环 (评分 → 出戏句反馈 → 再改写): https://github.com/harshaneel/humanize (MIT)
+
+校对 harness 层（1 项，v5.1.0 新增）：
+- Edit 工具设计范式 (old_text/new_text 精确匹配 + 唯一性要求 + 逐条状态回执): https://code.claude.com/docs/ (Anthropic 文档, 致谢非协议, 同 §10 Microsoft 先例)
 
 ### 文档
 - `README.md` — 用户向文档（特性、快速开始、快捷键、配置、架构）

@@ -2975,7 +2975,8 @@ def test_v431_force_rerun_and_progress():
 
     # --- d) _stream_chunked 块级进度回调 (fake _stream_single, 参照 test_chunk_lifecycle) ---
     async def fake_stream_single(self, task_key, text,
-                                 system_prompt_override=None, stream_prefix=""):
+                                 system_prompt_override=None, stream_prefix="",
+                                 harness_chunk_note=""):
         return text.upper(), 10
 
     async def _run_chunked():
@@ -3201,7 +3202,7 @@ def test_v502_deai_switches_roundtrip():
           cfg.deai_strip_after is True and cfg.deai_ai_score is True
           and cfg.deai_revise is False)
     d = cfg.to_dict()
-    check("to_dict 字段数 26", len(d) == 26, str(len(d)))
+    check("to_dict 字段数 27", len(d) == 27, str(len(d)))  # v5.1.0: + harness_enabled
     cfg2 = ProjectConfig.from_dict({**d, "deai_strip_after": False,
                                     "deai_ai_score": False, "deai_revise": True})
     check("from_dict 往返保留修改",

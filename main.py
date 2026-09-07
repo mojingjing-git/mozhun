@@ -1,5 +1,5 @@
 """
-墨准 v5.0.2 入口 (pywebview 版本)。
+墨准 v5.1.0 入口 (pywebview 版本)。
 
 借鉴自 https://pywebview.flowrl.com/ (BSD-3-Clause)
 借鉴内容: 标准窗口创建模式 + js_api Bridge 注入
@@ -66,7 +66,7 @@ def main():
 
     logger = setup_logging()
     logger.info("=" * 50)
-    logger.info("墨准 v5.0.2 启动 (pywebview)")
+    logger.info("墨准 v5.1.0 启动 (pywebview)")
     # v4.1.8.2 (审计 K11): 用 logger 模块的实际 LOG_FILE — 旧版硬编码
     # ~/.proofreader/app.log, PROOFREADER_HOME 重定向后提示路径是错的
     from app.logger import LOG_FILE

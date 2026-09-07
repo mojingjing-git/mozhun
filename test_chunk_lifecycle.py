@@ -442,8 +442,11 @@ def test_custom_prompt_only_when_mode_custom():
     from app.templates import PROMPT_MODES
 
     async def run(mode, custom):
+        # v5.1.0: harness_enabled=False — 本测试针对流式路径的 prompt 选择,
+        # strict + harness(默认开) 会改走非流式 Edit 工具分支
         engine = ProcessingEngine(ProjectConfig(
             api_base="http://x", model="m", prompt_mode=mode, custom_prompt=custom,
+            harness_enabled=False,
         ))
         engine._pause_event = threading.Event()
         engine._pause_event.set()
@@ -483,7 +486,10 @@ def test_m4_stream_monotonic_fulltext():
     import asyncio
 
     async def run():
-        cfg = ProjectConfig(api_base="http://x", model="m", chunking_preset="fast")
+        # v5.1.0: harness_enabled=False — 本测试针对流式 on_stream 前缀链,
+        # strict + harness(默认开) 会改走非流式 Edit 工具分支
+        cfg = ProjectConfig(api_base="http://x", model="m", chunking_preset="fast",
+                            harness_enabled=False)
         eng = ProcessingEngine(cfg)
         eng._pause_event = threading.Event()
         eng._pause_event.set()

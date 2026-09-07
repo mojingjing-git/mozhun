@@ -1,5 +1,47 @@
 # Changelog
 
+## v5.1.0 (2026-09-07) — 校对流程 harness 化: Edit 工具链 (function calling) + 改动清单审计
+
+**依据**: `final-report.md` §5.2 harness 改造方案 + `agent1-tech-feasibility.md` §3 (Edit 工具 schema + 12 条边界表 + 工具纪律 prompt)。LLM 不再整篇重输出，改为逐条返回编辑建议、客户端精确匹配应用 — 输出 token 大幅下降，且每条改动可审计。
+
+### Phase C 烟测结论 (MiniMax-M3 真实 API, 3 次调用, key 只用末 4 位核对)
+- **协议选定: OpenAI 兼容 tools / function calling** (`edit_text(old_text, new_text, reason)`, 非流式, `tool_choice="auto"`) — 请求被接受, `finish_reason=tool_calls`
+- **单响应 tool_calls 数量**: 最多 8 条 (≥2 = 并行可用); json_object / 内容内嵌 JSON 两条降级阶梯**未启用** (tools 一次通过, 运行时不做任何 fallback)
+- **NOT_FOUND/SKIPPED 基线**: 两轮真实样本 (7 错 + 3 错, 含多段/引号/换行) 共 11 条编辑 **11 OK / 0 NOT_FOUND / 0 NOT_UNIQUE**, 7 处预埋错误全命中 + 1 处附加修正; 无错文本返回 0 个 tool_calls + "无需修改" (空 edits 边界实证)
+- 模型 content 带 `<think>` 推理块 — harness 只解析 tool_calls, 不受影响
+
+### 新模块 app/harness.py (零 LLM 纯函数, 与 punct_fix/md_strip 同层同纪律)
+- **apply_edits(original, edits) -> (corrected, audit)**: agent1 §3.3 **12 条边界全表实施** — 单条 status ∈ {OK, SKIPPED_NOT_FOUND, SKIPPED_NOT_UNIQUE, SKIPPED_CASCADED, SKIPPED_NOOP}, 另有现实边界扩展 SKIPPED_CAP (超 50 条上限) / SKIPPED_BAD_ARGS (坏 JSON) 与整轮级告警 WARN_EDIT_CAP / WARN_RATIO (改动 >50% 不熔断只告警)
+- 严格按返回顺序 `str.replace(old, new, 1)` 串行 (不重排); 边界 8 `\r\n` 归一匹配 + 位置映射替换, 新文本换行风格跟随被替换区域, audit 标注; 每块 ≤50 条 (超限不应用 + 告警); audit 条目 {index, status, reason, old_preview, new_preview(≤80 字符)[, note]}
+- **全失败由调用方判** (corrected==original 且存在有效编辑 → 引擎 raise, 走既有重试链耗尽后 FAILED); 部分成功接受不重试
+- EDIT_TOOLS schema + TOOL_DISCIPLINE (工具纪律 7 条 + 输出要求) + CHUNK_SCOPE_NOTE 单点定义; 借鉴头注释: Claude Code Edit 工具 (思路借鉴, THIRD_PARTY §20)
+
+### 引擎 (app/processor.py)
+- `_stream_single` harness 分支: `harness_enabled` **且** prompt_mode ∈ {strict, polish} 双条件生效 (白名单双决策); 构建非流式 tools 调用 + system prompt 尾部注入工具纪律; **建议不做流式** — 无 token 流需求, 取消语义不变 (B2 强制中断覆盖在途 await)
+- edits 空 → corrected=原文 (正常); 全部未生效 → raise ValueError (同"API 返回空内容"语义); **engine 按 file_key 存 audit** (`file_audits`, 各 chunk 合并, 会话内存态不落断点); 部分成功 → `FileResult.warnings=True` (边界 12)
+- 分块路径注入 CHUNK_SCOPE_NOTE (跨段上下文只是参照物, 不可编辑, agent1 §3.4 "edit 跨块不允许"); 整文件重试时 audit 重建防跨 attempt 累积
+
+### 配置与缓存 (app/utils.py)
+- ProjectConfig `harness_enabled: bool = True` (字段 26→27, to_dict/from_dict 同步; 用户逃生口, 校对参数页 checkbox)
+- compute_prompt_hash 补纳 `|he=` + compute_prompt_hash_for_config 同步加参 (两函数相邻同步) — 开关切换旧断点一次性失效 (C2/E16 同语义)
+- FileResult `warnings: bool = False` 新字段 (不新增 TaskStatus 枚举; to_dict/from_dict 序列化, 旧断点缺字段兜底 False); **audit 列表按设计决策不放 FileResult**
+
+### 桥接与前端 (web_backend + index.html/app.js/style.css)
+- onFileDone/onFileCompleted payload 附加 `audit` + `warnings`; onTaskComplete 每文件条目附 `audit`; 缓存命中补推同样携带 (audit 会话内存态, 缓存命中的新 engine 无历史 audit 属预期)
+- 结果对比页新增「改动清单」`<details>` 折叠面板 (default 收起): 逐条 status/reason/old→new 预览, SKIPPED 灰显 / WARN 告警色, 全走既有 token; 文件行 warnings 时状态显示「完成（部分建议未采纳）」
+- 校对参数页 harness checkbox (`cfg-harness-enabled`, 沿用 cfg-md-strip 模式); 新事件 `onHarnessWait` — harness 非流式调用无 token 流, 右栏显示等待文案 (watchdog 活动信号同步纳入)
+- set_config 走 dataclass 通用 setattr, bool 类型无需新增分支
+
+### 借鉴合规
+- THIRD_PARTY_NOTICES 新增 §20 Claude Code Edit 工具 (Anthropic 文档, 致谢非协议, 同 §10 Microsoft 先例 — 不贴 LICENSE 全文); 顶部索引同步
+- AGENTS 新增 §36 (harness 设计决策 + 12 边界表出处); README 特性段 + 借鉴清单 19→20
+
+### 测试
+- 新增 `test_harness.py` (110 checks): 12 边界逐条 / 部分成功与全失败 / \r\n 归一双向 / ≤50 cap / audit 结构 / parse_tool_calls / 顺序与重叠 / 引擎端到端 ×8 (strict 走 harness / 空 edits / warnings 置位 / 全失败 FAILED / harness_enabled=False 不走 / custom 不走 / polish 走 / 多 chunk audit 合并) / 重试 audit 重建 / hash 双函数
+- test_chunk_lifecycle 2 处流式路径测试显式 `harness_enabled=False` (语义即为测流式); test_components 字段计数 26→27; 全量 run_all_tests.py 全绿
+
+---
+
 ## v5.0.2 (2026-09-07) — DeAI 后置三件套: strip 后置 + 本地评分 + revise
 
 **依据**: `.workbuddy/research/verifier-plan-v5.0.1.md` 独立审核报告的最终裁定 (§8 P0/P1 经 parent 复核修正后实施)。全部为去 AI 味 rewrite 步的**后置处理**, 校对链路 0 改动。

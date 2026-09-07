@@ -60,7 +60,7 @@ def test_utils():
     d = c.to_dict()
     c2 = ProjectConfig.from_dict(d)
     check("ProjectConfig 往返完整", c == c2)
-    check("ProjectConfig 包含所有字段", len(d) == 26)  # ...v4.4.2: + md_strip_before_llm; v5.0.2: + deai_strip_after/deai_ai_score/deai_revise
+    check("ProjectConfig 包含所有字段", len(d) == 27)  # ...v4.4.2: + md_strip_before_llm; v5.0.2: + deai_strip_after/deai_ai_score/deai_revise; v5.1.0: + harness_enabled
 
     # ProjectConfig 边界值
     c_empty = ProjectConfig()
@@ -247,7 +247,9 @@ def test_processor():
 
     # _call_api_stream 空响应
     async def test_empty_stream():
-        eng = ProcessingEngine(ProjectConfig(api_base='http://x', model='m'))
+        # v5.1.0: harness_enabled=False — 本测试针对流式空响应路径,
+        # strict + harness(默认开) 会改走非流式 Edit 工具分支
+        eng = ProcessingEngine(ProjectConfig(api_base='http://x', model='m', harness_enabled=False))
         eng._loop = asyncio.get_running_loop()
         # v4.0+: _pause_event 改 threading.Event (跨线程 pause/resume 线程安全)
         eng._pause_event = threading.Event()
@@ -275,7 +277,9 @@ def test_processor():
 
     # _call_api_stream 正常流式
     async def test_normal_stream():
-        eng = ProcessingEngine(ProjectConfig(api_base='http://x', model='m'))
+        # v5.1.0: harness_enabled=False — 本测试针对流式路径,
+        # strict + harness(默认开) 会改走非流式 Edit 工具分支
+        eng = ProcessingEngine(ProjectConfig(api_base='http://x', model='m', harness_enabled=False))
         eng._loop = asyncio.get_running_loop()
         eng._pause_event = threading.Event()
         eng._pause_event.set()

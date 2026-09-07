@@ -10,6 +10,7 @@
 - **v4.3.4**（标点修复 v2）新增 4 个上游项目 + 国家标准（§12–§15）
 - **v4.4.2**（Markdown 清洗）新增 1 个规范引用（§16）
 - **v5.0.2**（DeAI 后置三件套）补登记 3 个上游项目（§17–§19，其中 2 个自 v3.0/v4.1.7 起借鉴，本版补齐 LICENSE 副本）
+- **v5.1.0**（校对流程 harness 化）新增 1 个文档参考（§20，致谢非协议，同 §10 先例）
 
 ---
 
@@ -804,6 +805,19 @@ SOFTWARE.
 ```
 
 > 来源：https://raw.githubusercontent.com/Aboudjem/humanizer-skill/main/LICENSE
+
+## 20. Claude Code Edit 工具 (v5.1.0 新增)
+
+- **URL**: https://code.claude.com/docs/ （Anthropic 官方文档）
+- **License**: 无开源许可证适用 — 产品文档，仅作设计思路致谢（同 §10 Microsoft Learn 先例，不附 LICENSE 全文）
+- **Copyright**: (c) 2026 Anthropic PBC
+- **借鉴内容**: Edit 工具设计范式 — old_text/new_text 精确字符串匹配 + 全局唯一性要求
+  （匹配多处不自动选第一个）+ 逐条状态回执（成功/未找到/需更多上下文）+ 失败可观察
+  （不静默重试）。对应 app/harness.py 的 apply_edits 12 条边界表
+  （调研全文见 .workbuddy/research/agent1-tech-feasibility.md §3.3）与
+  EDIT_TOOLS / TOOL_DISCIPLINE 单点定义
+- **借鉴方式**: 思路借鉴（A 类），无代码复制
+- **落点**: app/harness.py
 
 ## 借鉴来源文件头注释约定
 

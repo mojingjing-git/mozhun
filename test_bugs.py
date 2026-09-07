@@ -96,7 +96,9 @@ def test_bug5():
     from app.processor import ProcessingEngine
     from app.utils import ProjectConfig
     async def run():
-        eng = ProcessingEngine(ProjectConfig(api_base='http://x', model='m'))
+        # v5.1.0: harness_enabled=False — 本测试针对流式空响应路径,
+        # strict + harness(默认开) 会改走非流式 Edit 工具分支
+        eng = ProcessingEngine(ProjectConfig(api_base='http://x', model='m', harness_enabled=False))
         eng._loop = asyncio.get_running_loop()
         # v4.0+: _pause_event 改 threading.Event,异步等待走 _wait_if_paused
         eng._pause_event = threading.Event(); eng._pause_event.set()
