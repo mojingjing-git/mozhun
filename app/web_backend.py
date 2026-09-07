@@ -44,6 +44,10 @@ from app.templates import (
     SYSTEM_PROMPT_DEAI_REWRITE_V5,
     SYSTEM_PROMPT_DEAI_AUDIT_V5,
 )
+# v5.0.2: DeAI rewrite 步后置三件套 — strip 后置 / ai_score / revise
+# (3 个 deai_* 开关不进 compute_prompt_hash, 裁定见 AGENTS.md §35)
+from app.ai_score_local import ai_score as _ai_score_local, REVISE_THRESHOLD
+from app.md_strip import strip_markdown
 from app.style_profiles.loader import StyleProfileLoader, MIN_SAMPLES_FOR_DISTILL
 
 logger = setup_logging()
@@ -64,6 +68,9 @@ _DEAI_PUSH_LIMIT = 50000
 _DEAI_WHOLE_FILE_LIMIT = 20000
 # - Few-shot 范文截断 (评审#6): 范文用途是学风格, 超长部分无增益还爆上下文
 _DEAI_SAMPLE_LIMIT = 20000
+# - v5.0.2 revise 内层循环的字数上限: 改写结果超过它不再整文重改一轮
+#   (整文单次调用风险与 whole_file 兜底同源, 数值一致但语义独立, 不复用常量避免耦合)
+_DEAI_REVISE_LIMIT = 20000
 
 
 # 异步模型 (PLAN-pywebview.md §2.2):
@@ -1013,8 +1020,18 @@ class Backend:
             except Exception:
                 pass
 
+        # ===== v5.0.2: rewrite 步后置处理 (strip 后置 → ai_score → 可选 revise) =====
+        # 检测/评分步不做后置; 主循环已取消或空输出时不进入 (取消后不得再发 LLM 调用)
+        ai_score_payload = None
+        if step == "rewrite" and not cancelled and partial.strip():
+            partial, ai_score_payload, revise_cancelled = await self._deai_postprocess_rewrite(
+                task_id, client, system_prompt, partial, cancel_event)
+            if revise_cancelled:
+                cancelled = True
+
         if cancelled:
-            # v4.3.0 (评审#3): 结构化取消 — cancelled 标志 + 保留已完成部分
+            # v4.3.0 (评审#3) + v5.0.2: 主循环或 revise 轮取消 — 结构化取消
+            # (cancelled 标志区分"用户取消"与"失败", F3 语义) + 保留已完成部分
             payload = {
                 "task_id": task_id, "step": step, "error": "已取消",
                 "cancelled": True, "partial": self._deai_preview(partial),
@@ -1035,18 +1052,181 @@ class Backend:
         # 收尾帧 (helper 内部处理降级)
         self._push_deai_stream(task_id, step, partial, total, total)
         # 完成 (v4.3.0 评审#1: 超阈值完整结果落盘, 前端拿头部预览 + result_file)
+        # v5.0.2: rewrite 步附加本地 ai_score payload (仅 transient 推送, 不落盘不进缓存)
+        complete_extra = (
+            {"ai_score": ai_score_payload} if ai_score_payload is not None else {}
+        )
         if len(partial) > _DEAI_PUSH_LIMIT:
             result_file = self._save_deai_result(task_id, partial)
             self._push("onDeaiComplete", {
                 "task_id": task_id, "step": step,
                 "result": partial[:2000] + "\n…(内容过长, 完整结果已存盘, 复制/导出将取完整内容)",
                 "truncated": True, "total_len": len(partial), "result_file": result_file,
+                **complete_extra,
             })
         else:
             self._push("onDeaiComplete", {
                 "task_id": task_id, "step": step, "result": partial, "truncated": False,
+                **complete_extra,
             })
         self._deai_tasks_pop(task_id)
+
+    # ---------- v5.0.2: rewrite 步后置处理 (strip 后置 / ai_score / revise) ----------
+
+    async def _deai_postprocess_rewrite(
+        self, task_id: str, client, system_prompt: str, partial: str, cancel_event,
+    ):
+        """rewrite 完整输出拼装后的后置管线. 返回 (最终文本, ai_score payload|None, 取消?).
+
+        - **strip 后置**: md_strip 纯函数剥 Markdown 装饰 (rewrite prompt 已禁装饰,
+          此为兜底); 空结果兜底回退原文本 (v4.4.2 评审 P2-16 共识: 空输出会击穿
+          diff/完成语义); **diff 链路不动** — 前端 diff 仍是"原文 vs 改写", 不引入
+          "原文 vs 剥后"切换 (verifier P1-6 措辞修正). 落盘 result_file 与
+          onDeaiComplete payload 均用剥后版本 (收尾帧同).
+        - **ai_score**: 客户端 0-100 评分 (app/ai_score_local.py, 零 LLM), 附在
+          onDeaiComplete payload; 分数是信号不是判定, **不进任何缓存/断点**
+          (DeAI 本无断点体系). 评分失败降级为无 payload, 不影响主流程.
+        - **revise 内层循环** (借鉴 harshaneel/humanize MIT audit-revise 思路):
+          仅 rewrite 步 + deai_revise 开 + 评分 >= REVISE_THRESHOLD + 文本
+          <= _DEAI_REVISE_LIMIT 时, 把 offenders 出戏句反馈并入 user_prompt 再改写
+          一轮 (最多 1 轮, v1 不做多轮), 重新 strip + 评分, **取分低者**; 跨步编排
+          (step2→step3→回 step2) 放 v5.1.0 — verifier C.11 裁定. revise 失败/空输出
+          一律兜底保留上一轮结果 (增益步不拖垮主任务).
+        """
+        strip_on = self._config.deai_strip_after
+        if strip_on:
+            stripped = strip_markdown(partial)
+            if stripped.strip():
+                partial = stripped
+            else:
+                logger.warning(
+                    f"deai {task_id}: strip_markdown 输出为空, 兜底保留原改写文本 (P2-16)"
+                )
+
+        payload = None
+        offenders: list = []
+        if self._config.deai_ai_score:
+            try:
+                sc = _ai_score_local(partial)
+                payload = {
+                    "score": sc["score"],
+                    "dims": {k: v["score"] for k, v in sc["dims"].items()},
+                }
+                offenders = sc["offenders"]
+            except Exception as e:
+                logger.warning(f"deai {task_id}: ai_score 本地评分失败: {type(e).__name__}: {e}")
+
+        if not self._config.deai_revise:
+            return partial, payload, False
+        if payload is None:
+            logger.info(f"deai {task_id}: revise 需要本地评分, deai_ai_score 已关, 跳过")
+            return partial, payload, False
+        if payload["score"] < REVISE_THRESHOLD:
+            return partial, payload, False
+        if len(partial) > _DEAI_REVISE_LIMIT:
+            logger.info(
+                f"deai {task_id}: 改写结果 {len(partial)} 字 > {_DEAI_REVISE_LIMIT}, "
+                f"revise 跳过 (整文单次调用超上下文风险)"
+            )
+            return partial, payload, False
+        if not offenders:
+            logger.info(
+                f"deai {task_id}: 评分 {payload['score']} 超阈值但无句子级出戏句, revise 跳过"
+            )
+            return partial, payload, False
+
+        logger.info(
+            f"deai {task_id}: 本地评分 {payload['score']} >= {REVISE_THRESHOLD}, 启动 revise 一轮"
+        )
+        revised = await self._deai_revise_round(
+            client, task_id, system_prompt, partial, offenders, cancel_event)
+        if revised is None:
+            return partial, payload, True  # revise 轮取消 → 保留原文本走取消路径
+        if not revised.strip():
+            logger.warning(f"deai {task_id}: revise 轮空输出, 保留原改写")
+            return partial, payload, False
+        rev_text = strip_markdown(revised) if strip_on else revised
+        if not rev_text.strip():
+            logger.warning(f"deai {task_id}: revise 结果 strip 后为空, 保留原改写")
+            return partial, payload, False
+        try:
+            rev_sc = _ai_score_local(rev_text)
+        except Exception as e:
+            logger.warning(f"deai {task_id}: revise 后重新评分失败, 保留原改写: {e}")
+            return partial, payload, False
+        if rev_sc["score"] < payload["score"]:
+            logger.info(
+                f"deai {task_id}: revise 后评分 {rev_sc['score']} < "
+                f"{payload['score']}, 采用 revise 结果"
+            )
+            partial = rev_text
+            payload = {
+                "score": rev_sc["score"],
+                "dims": {k: v["score"] for k, v in rev_sc["dims"].items()},
+            }
+        else:
+            logger.info(
+                f"deai {task_id}: revise 后评分 {rev_sc['score']} 未低于 "
+                f"{payload['score']}, 保留原改写"
+            )
+        return partial, payload, False
+
+    async def _deai_revise_round(self, client, task_id: str, system_prompt: str,
+                                 base_text: str, offenders: list, cancel_event):
+        """revise 内层循环单轮: 出戏句反馈并入 user_prompt, 全文再改写一次.
+
+        借鉴自 https://github.com/harshaneel/humanize (MIT License) audit-revise 思路,
+        思路借鉴, 无代码复制.
+
+        返回: 本轮输出文本; 用户取消返回 None; LLM 失败/空输出返回 ""
+        (调用方对 "" 一律兜底保留上一轮结果). 流式经 _push_deai_stream 推前端,
+        用户能看到修订轮实时生成 (进度显示 块 1/1).
+        """
+        feedback = "\n".join(
+            f"- 「{o['text']}」(命中: {', '.join(o['reasons'])})" for o in offenders
+        )
+        user_prompt = (
+            "你之前输出了下面这段改写文本, 本地 AI 味检测仍发现以下出戏句. "
+            "请只针对这些问题再改写一轮 (其余内容保持原样), "
+            "直接输出改写后的完整文本, 不输出解释:\n\n"
+            f"# 出戏句反馈\n{feedback}\n\n"
+            f"# 待改进文本\n{base_text}"
+        )
+        out = ""
+        last_push = 0.0
+        try:
+            stream = await client.chat.completions.create(
+                model=self._config.model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=self._config.temperature,
+                stream=True,
+            )
+            async for event in stream:
+                if cancel_event is not None and cancel_event.is_set():
+                    return None
+                if not event.choices:
+                    continue
+                delta = event.choices[0].delta
+                content = getattr(delta, "content", None) if delta else None
+                if content:
+                    out += content
+                    now = time.time()
+                    if now - last_push >= 0.05:
+                        self._push_deai_stream(task_id, "rewrite", out, 1, 1)
+                        last_push = now
+            if cancel_event is not None and cancel_event.is_set():
+                return None
+        except Exception as e:
+            logger.warning(
+                f"deai {task_id}: revise 轮调用失败, 保留原改写: {type(e).__name__}: {e}"
+            )
+            return ""
+        if not out.strip():
+            return ""
+        return out
 
     # ---------- v4.3.0: 分块/降级/取消 辅助 ----------
 

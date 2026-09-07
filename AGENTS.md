@@ -91,12 +91,17 @@ main.py (webview.start)
 ### v4.4.2 新增（Markdown 清洗: md_local 本地引擎）
 32. **本地清洗通道双引擎** (v4.4.2+): `app/md_strip.py` 与 `punct_fix.py` 同类 — 零 LLM 纯规则变换, 复用 punct_local 全部通路 (模式下拉 / 不建 AsyncOpenAI / 前端跳过 API 校验 / diff / 缓存)。新增模式 `md_local`「仅 Markdown 清洗」**强制整文件不切块** (围栏代码块是跨行状态, 分块会切开围栏) + 可选开关 `md_strip_before_llm` (剥离先于标点修复 — 剥标记后标点的 CJK 邻接上下文才准; 纳入 compute_prompt_hash `|ms=`)。md_strip 四红线: 内容不丢 (例外仅 URL 丢弃+纯标记行删除) / 代码内容保留 (围栏剥壳留内容; 行内代码脏内容整体保留) / 幂等 (非代码区) / 保守 (`__` 下划线强调整类不剥, `__init__` 必误伤; 星号带 ASCII 词边界)。**新增本地引擎时以此为模板**: 模式 PLACEHOLDER 同 punct_local (三个 PROMPT_MODES 遍历测试循环需同步豁免), 空结果兜底回退原文 (防击穿 diff/is_done), 引擎分支端到端测试镜像 `test_punct_fix.py::test_engine_punct_local_mode`
 
+### v5.0.2 新增（DeAI 后置三件套: strip 后置 / ai_score / revise）
+33. **DeAI rewrite 步后置管线** (v5.0.2+): `_deai_run` 在完整输出拼装后走 `_deai_postprocess_rewrite` — ① **strip 后置**: `strip_markdown` 剥 Markdown 装饰 (rewrite prompt 已加「输出形态」节禁装饰, 此为兜底), 空结果兜底回退原文本 (P2-16 共识); 落盘 result_file / onDeaiComplete payload / 收尾帧均用剥后版本; **diff 链路不动** (前端 diff 仍是原文 vs 改写, 不引入"原文 vs 剥后"切换, verifier P1-6); ② **ai_score**: `app/ai_score_local.py` 客户端 0-100 评分附 onDeaiComplete payload (`ai_score: {score, dims}`), transient 推送**不进任何缓存/断点** (DeAI 本无断点体系), 与 Step 3 LLM audit 评分**并存互补** (本地粗筛 / LLM 定性质, verifier P1-5); ③ **revise 内层循环**: 仅 rewrite 步 + `deai_revise` 开 + 评分 ≥ REVISE_THRESHOLD + 文本 ≤ 2 万字时, 把 offenders 出戏句反馈并入 user_prompt 再改写**一轮** (v1 不做多轮), 重新 strip + 评分**取分低者**; revise 失败/空输出/取消一律兜底保留上一轮 (增益步不拖垮主任务); **不做跨步编排** (step2→step3→回 step2 放 v5.1.0, verifier C.11)
+34. **ai_score_local 权重与阈值裁定** (v5.0.2+): 借鉴 Aboudjem/humanizer-skill (MIT) 0-100 AI-tell 本地评分范式 + blader/humanizer (MIT, 现行 v3.0 为 **"five sections + 25 patterns"**, 引用一律用此表述**禁用其新旧编号** — v3.0 重排过编号) + harshaneel/humanize (MIT) audit-revise。六维权重 (和恒=100, 模块 assert + test 兜底): 硬黑名单词频 28 / 7 大类痕迹 24 (第 1 类=黑名单不双计) / AI 6 处反制 18 (本地可测 5 项 4+4+4+4+2, "原型不匹配"需语义理解本地不计, 诚实缺位优于硬凑) / 句长方差 burstiness 12 / Markdown 装饰密度 10 / 标点签名 8。`REVISE_THRESHOLD=50` 与全部权重均为**初始拍定值, 待真实样本校准** — 严禁在文档/注释编造"实测平均 N"之类校准数据来源
+35. **DeAI 3 开关不进 compute_prompt_hash** (v5.0.2+): `deai_strip_after` / `deai_ai_score` / `deai_revise` (默认 True/True/False, ProjectConfig 字段 23→26) 只影响去 AI 味 rewrite 步**后置处理**, 而 DeAI 全程无断点缓存体系 (web_backend 无 prompt_hash) — 塞进校对断点指纹只会让校对断点无谓失效, 故裁定不入 hash。与 `md_strip_before_llm` (进 hash `|ms=`) 的本质区别: 后者改变**送 LLM 前的输入内容**, 属校对生成语义; 前者只改**产出后的展示/评分/修订**
+
 ## 文件命名
 
 ### 主代码
 - 入口: `main.py`；启动器: `start.py`（统一启动器）+ `启动.bat`（双击薄包装）
 - Bridge: `app/web_backend.py`
-- 引擎: `app/processor.py` / `app/punct_fix.py`（v4.3.3+） / `app/md_strip.py`（v4.4.2+） / `app/context_builder.py` / `app/utils.py` / `app/templates.py` / `app/logger.py`
+- 引擎: `app/processor.py` / `app/punct_fix.py`（v4.3.3+） / `app/md_strip.py`（v4.4.2+） / `app/ai_score_local.py`（v5.0.2+） / `app/context_builder.py` / `app/utils.py` / `app/templates.py` / `app/logger.py`
 - 前端: `web/index.html` / `web/app.js` / `web/style.css` / `web/icons/*.svg` / `web/lib/*.js`
 - 打包: `build.spec` / `check_exe.py`（exe 资源校验）/ `dist/墨准.exe`
 - 测试:
@@ -106,6 +111,7 @@ main.py (webview.start)
   - v4.0+ 测试: `test_web_backend.py`（Bridge API 单元 + 集成测试，**替代** v3.x 的 `test_qasync_smoke.py`）
   - v4.3.3+ 测试: `test_punct_fix.py`（标点规则引擎全规则回归，含跨行降级/不平衡报告/幂等）
   - v4.4.2+ 测试: `test_md_strip.py`（Markdown 清洗全规则回归，含幂等双跑/围栏保护/引擎 md_local 分支端到端/空结果兜底）
+  - v5.0.2+ 测试: `test_ai_score.py`（客户端 AI 味评分回归，含权重和=100/各维命中/幂等/offenders 截断/空文本）
 - 一键跑: `run_all_tests.py`
 - 无 pytest 依赖，纯脚本运行
 
@@ -132,6 +138,11 @@ main.py (webview.start)
 
 Markdown 清洗层（1 项，v4.4.2 新增）：
 - 结构语义 (围栏/强调边界/ATX/表格形态): https://github.com/commonmark/commonmark-spec (CC-BY-SA 4.0, 仅 spec 文本; 规范语义引用, 无文本复制)
+
+DeAI 后置层（3 项，v3.0/v4.1.7 起借鉴，v5.0.2 补登记 LICENSE）：
+- 0-100 AI-tell 本地评分范式: https://github.com/Aboudjem/humanizer-skill (MIT)
+- AI 痕迹分类语义 (现行 v3.0 "five sections + 25 patterns", 不用其编号): https://github.com/blader/humanizer (MIT)
+- audit-revise 循环 (评分 → 出戏句反馈 → 再改写): https://github.com/harshaneel/humanize (MIT)
 
 ### 文档
 - `README.md` — 用户向文档（特性、快速开始、快捷键、配置、架构）

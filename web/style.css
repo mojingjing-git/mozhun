@@ -1,4 +1,4 @@
-/* 墨准 v5.0.1 — Win11 Fluent 2 风格 (完整 token 体系 + 暗色 + 5 类动画 + Acrylic/Smoke)
+/* 墨准 v5.0.2 — Win11 Fluent 2 风格 (完整 token 体系 + 暗色 + 5 类动画 + Acrylic/Smoke)
    借鉴自 https://learn.microsoft.com/zh-cn/windows/apps/design/ (Microsoft Terms of Use, 文档非版权材料)
    借鉴内容: 5 设计原则 + 7 签名体验的数值与命名
    借鉴方式: 思路借鉴,代码自写,token 命名遵循 Microsoft 官方约定
@@ -1059,6 +1059,31 @@ del {
 .deai-step .log {
   min-height: 60px;
   max-height: 180px;
+}
+
+/* ===== v5.0.2: DeAI 后置参数折叠区 + 本地评分显示 ===== */
+/* details 折叠区: 默认收起, summary 作伪按钮 (颜色/间距全走 token) */
+.deai-params {
+  border: 1px solid var(--colorNeutralStroke1);
+  border-radius: var(--controlCornerRadius);
+  padding: var(--space-2) var(--space-3);
+  background: var(--colorNeutralBackground2);
+}
+.deai-params summary {
+  cursor: pointer;
+  font-size: var(--fontSizeCaption);
+  color: var(--colorNeutralForeground2);
+  user-select: none;
+  line-height: var(--lineHeightCaption);
+}
+.deai-params summary:hover { color: var(--colorBrandForeground); }
+.deai-params .checkbox-row { margin-top: var(--space-2); }
+/* 本地评分显示: Step 3 输出区顶部, 品牌前景 token (不硬编码) */
+.deai-ai-score {
+  font-size: var(--fontSizeCaption);
+  font-weight: var(--fontWeightSemibold);
+  color: var(--colorBrandForeground);
+  line-height: var(--lineHeightCaption);
 }
 
 /* ===== 风格 Profile 区域 (v4.1.7) ===== */

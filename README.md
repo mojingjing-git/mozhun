@@ -1,4 +1,4 @@
-# 墨准 (MoZhun) v5.0.1 (pywebview + 水墨宣纸 / Win11 Fluent)
+# 墨准 (MoZhun) v5.0.2 (pywebview + 水墨宣纸 / Win11 Fluent)
 
 基于 LLM 的批量文本校对工具。**pywebview 6.2.1** 前端 + 原生 Web 设计令牌 + **Win11 Fluent 2 视觉**，支持流式输出、任意 OpenAI 兼容 API，以及**零 LLM 成本的本地标点修复**（v4.3.3+）。
 
@@ -120,13 +120,18 @@ python main.py       # 或直接开发模式运行
 
 **3 步独立运行**，每步都可单独"重跑"。
 
+**后置三件套 (v5.0.2+)**：Step 2 改写完成后，可选三步客户端后处理（去AI味视图「输入」卡片下方折叠参数区，持久化保存）——
+- **剥离 Markdown 标记**（默认开）：`md_strip` 本地规则剥掉改写结果里的井号/星号/列表符等装饰（空结果自动保留原文）；
+- **本地 AI 味评分**（默认开）：`ai_score_local` 六维加权打 0-100 分（越高 AI 味越重），显示在 Step 3 输出区顶部；分数是**信号不是判定**，不进任何缓存；
+- **自动修订一轮**（默认关）：评分超阈值时把"出戏句"反馈回 LLM 再改写一次（额外 1 次调用，仅 ≤2 万字），两轮取分低者。阈值为初始拍定值，上线后按真实样本校准。
+
 **长文本支持 (v4.3.0+)**：待处理文本与 Few-shot 范文均支持**拖入 txt/md 文件或直接粘贴大段文本**；按当前分块预设切块逐块调用（块间自动衔接），超 5 万字自动降级为尾部预览推送（完整结果落盘 `deai_results/`，复制/导出/Step 3 引用均走后端直读），整本书也不会撑爆界面。
 
 **借鉴来源**（思路借鉴，代码全自写）：
-- [harshaneel/humanize](https://github.com/harshaneel/humanize) (MIT) — 4 pass 编辑法
-- [blader/humanizer](https://github.com/blader/humanizer) (MIT) — 7 大类 AI 味分类（来自 Wikipedia: Signs of AI writing）
+- [harshaneel/humanize](https://github.com/harshaneel/humanize) (MIT) — 4 pass 编辑法 + audit-revise 出戏句反馈循环 (v5.0.2)
+- [blader/humanizer](https://github.com/blader/humanizer) (MIT) — AI 味分类语义（来自 Wikipedia: Signs of AI writing；上游现行 v3.0 为 "five sections + 25 patterns"，本项目不用其编号）
 - **[jianshuo/claude-skills](https://github.com/jianshuo/claude-skills)** (MIT, v4.1.7+) — 9 轴风格指纹 + 事实骨架 + AI 6 处反制 + 8 轴自评
-- [Aboudjem/humanizer-skill](https://github.com/Aboudjem/humanizer-skill) (MIT) — ruthless editor 思路
+- [Aboudjem/humanizer-skill](https://github.com/Aboudjem/humanizer-skill) (MIT) — ruthless editor 思路 + 0-100 AI-tell 本地评分范式 (v5.0.2)
 
 详见 `THIRD_PARTY_NOTICES.md`。
 
@@ -225,7 +230,7 @@ python check_exe.py   # 校验 exe 内 web/ 资源与 style_profiles 完整性
 
 ## 借鉴来源
 
-v3.0 → v4.4.2 共借鉴 **16 个开源项目 / 文档**，全部思路借鉴，代码自写：
+v3.0 → v5.0.2 共借鉴 **19 个开源项目 / 文档**，全部思路借鉴，代码自写：
 
 - **业务层 (v3.0)**：tianhm/ollama-batch-processor / shreyan241/gpt-proofreader / Xueheng-Li/proofreading (MIT) + qasync (BSD-2)
 - **GUI 层 (v4.0)**：pywebview (BSD-3) + diff-match-patch (Apache-2.0) + marked.js (MIT) + Fluent UI System Icons (MIT)
@@ -233,6 +238,7 @@ v3.0 → v4.4.2 共借鉴 **16 个开源项目 / 文档**，全部思路借鉴�
 - **Win11 重构 (v4.1.8)**：[Microsoft Learn 设计原则文档](https://learn.microsoft.com/zh-cn/windows/apps/design/)（致谢非协议）+ Fluent UI System Icons
 - **标点修复调研 (v4.3.4)**：[woct0rdho/typeset](https://github.com/woct0rdho/typeset) (MIT) + [huacnlee/autocorrect](https://github.com/huacnlee/autocorrect) (MIT) + [yongzhuo/macro-correct](https://github.com/yongzhuo/macro-correct) (Apache-2.0) + [sparanoid/chinese-copywriting-guidelines](https://github.com/sparanoid/chinese-copywriting-guidelines) (MIT) + GB/T 15834-2011《标点符号用法》
 - **Markdown 清洗 (v4.4.2)**：[commonmark/commonmark-spec](https://github.com/commonmark/commonmark-spec)（CC-BY-SA 4.0 spec 文本 + BSD-2 参考实现）— 围栏/强调边界/表格形态的结构语义引用
+- **DeAI 后置三件套 (v5.0.2)**：[harshaneel/humanize](https://github.com/harshaneel/humanize) (MIT) — audit-revise 出戏句反馈循环 + 4 pass 法；[blader/humanizer](https://github.com/blader/humanizer) (MIT) — AI 痕迹分类语义（现行 v3.0 "five sections + 25 patterns"，本项目不用其编号）；[Aboudjem/humanizer-skill](https://github.com/Aboudjem/humanizer-skill) (MIT) — 0-100 AI-tell 本地评分范式（分数是信号不是判定）
 
 完整 LICENSE 副本见 [`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md)。
 

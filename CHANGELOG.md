@@ -1,5 +1,37 @@
 # Changelog
 
+## v5.0.2 (2026-09-07) — DeAI 后置三件套: strip 后置 + 本地评分 + revise
+
+**依据**: `.workbuddy/research/verifier-plan-v5.0.1.md` 独立审核报告的最终裁定 (§8 P0/P1 经 parent 复核修正后实施)。全部为去 AI 味 rewrite 步的**后置处理**, 校对链路 0 改动。
+
+### 新模块 app/ai_score_local.py (零 LLM 纯函数, 与 md_strip 同层同纪律)
+- **客户端 0-100 AI 味评分**: 六维加权求和 (权重和恒=100, 模块 assert + 测试兜底) — 硬黑名单词频 28 / 7 大类痕迹 24 (第 1 类=黑名单不双计) / AI 6 处反制 18 (本地可测 5 项 4+4+4+4+2, "原型不匹配"需语义理解本地不计) / 句长方差 burstiness 12 / Markdown 装饰密度 10 / 标点签名 8
+- 接口 `ai_score(text) -> {score, dims, offenders}`; offenders 出戏句 (最多 5 条) 供 revise 反馈
+- `REVISE_THRESHOLD=50` 与全部权重均为**初始拍定值, 待真实样本校准** (严禁编造校准数据来源); 评分与 Step 3 LLM audit 并存互补 (本地粗筛 / LLM 定性质)
+- 纯函数幂等 / 0 依赖 0 网络 0 IO; 正则全部有界防回溯爆炸
+
+### 集成 (app/web_backend.py)
+- **strip 后置**: rewrite 完整输出拼装后 `strip_markdown` 剥 Markdown 装饰 (prompt 侧「输出形态」节配合), 空结果兜底回退原文本 (P2-16 共识); 落盘 result_file / onDeaiComplete payload / 收尾帧均用剥后版本; **diff 链路不动** (verifier P1-6)
+- **ai_score 附 payload**: onDeaiComplete 新增 `ai_score: {score, dims}` (仅 rewrite 步), transient 推送**不进任何缓存/断点** (DeAI 本无断点体系)
+- **revise 内层循环** (借鉴 harshaneel/humanize audit-revise 思路): 仅 rewrite 步 + 开关开 + 评分 ≥ 阈值 + 文本 ≤ 2 万字时, offenders 反馈并入 user_prompt 再改写一轮, 重新 strip + 评分**取分低者**; 失败/空输出/取消一律兜底保留上一轮; **不做跨步编排** (verifier C.11, 放 v5.1.0); 新增 `_deai_postprocess_rewrite` / `_deai_revise_round` 两个方法, 取消检查合并为单一结构化取消块
+
+### 配置 (app/utils.py + 前端)
+- ProjectConfig 3 开关: `deai_strip_after=True` / `deai_ai_score=True` / `deai_revise=False` (字段 23→26, to_dict/from_dict 同步); **裁定: 不进 compute_prompt_hash** — DeAI 无断点缓存体系, 塞进校对断点指纹只会让校对断点无谓失效 (AGENTS §35)
+- 前端去AI味视图「输入」卡片下方新增 `<details>` 折叠参数区 (3 checkbox, 沿用 checkbox-with-config-fallback 接线); Step 3 输出区顶部显示「本地 AI 味评分：N/100」(无 payload 则不显示; 颜色走 token)
+
+### Prompt (app/templates.py)
+- REWRITE_V5 末尾新增「输出形态」节: 输出纯文本正文、禁 Markdown 装饰 (strip 后置的 prompt 侧配合)
+- AUDIT_V5 末尾补「与本地评分的关系」: 出戏句口径对齐 ai_score.offenders (摘原句不许转述)
+
+### 借鉴合规
+- THIRD_PARTY_NOTICES 新增 §17 harshaneel/humanize (MIT) / §18 blader/humanizer (MIT, 表述采用现行 v3.0 "five sections + 25 patterns", 禁用其新旧编号) / §19 Aboudjem/humanizer-skill (MIT), 完整 LICENSE 经 web fetch 粘贴; 顶部索引 + 核验状态 v5.0.2 子表; README 借鉴清单 16→19
+- AGENTS 新增 §33/§34/§35 (后置管线 / 权重阈值裁定 / 3 开关不进 hash 的理由)
+
+### 测试
+- 新增 `test_ai_score.py` (权重和=100 / 各维命中行为 / offenders 截断 / 幂等 / 空文本 / 界值); test_web_backend 补 strip 后置与空结果兜底 / revise 开关行为 / ai_score payload / 3 开关往返
+
+---
+
 ## v5.0.1 (2026-09-07) — 三份外部审计修复批 (8 critical + 4 notable 全清)
 
 **修订版**: 3 份审计报告 (基线 v4.4.2) 经独立核验 agent 逐条复现 (12 条受核 finding 零误报, 1 条已过时, 2 条降档) 后按当前 HEAD 修复。审报告全文见 `.workbuddy/research/audit-bugs-*.md`。

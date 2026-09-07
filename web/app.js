@@ -100,7 +100,7 @@ const App = {
     this.bindEvents();
     this.startEventLoop();
     this.setView('home');
-    this.appendLog('[就绪] v5.0.1 pywebview 前端已加载');
+    this.appendLog('[就绪] v5.0.2 pywebview 前端已加载');
     // v4.1.7: 加载风格 profile 列表 (异步, 不阻塞 init)
     this.loadStyleProfiles();
     // v4.1.9 (S2.3 个人原则): 恢复持久化主题 (auto/light/dark)
@@ -510,6 +510,17 @@ const App = {
       setCb('cfg-punct-repeat-compress', this.config.punct_repeat_compress, false);
       setCb('cfg-punct-dash-tilde', this.config.punct_dash_tilde, true);
     }
+    // v5.0.2: DeAI 后置三开关 (去AI味视图折叠参数区; 元素在 view-deai 不在设置页,
+    // 同步逻辑与 cfg-md-strip 同款 — 默认 True 字段缺失视为 true, 默认 False 视为 false)
+    {
+      const setDeaiCb = (id, val, dflt) => {
+        const cb = document.getElementById(id);
+        if (cb) cb.checked = val === undefined ? dflt : !!val;
+      };
+      setDeaiCb('deai-opt-strip', this.config.deai_strip_after, true);
+      setDeaiCb('deai-opt-score', this.config.deai_ai_score, true);
+      setDeaiCb('deai-opt-revise', this.config.deai_revise, false);
+    }
 
     // 初始 URL 校验
     this.validateApiBase();
@@ -663,6 +674,11 @@ const App = {
     if (step2) step2.addEventListener('click', () => this.deaiStep2());
     const step3 = document.getElementById('btn-deai-step3');
     if (step3) step3.addEventListener('click', () => this.deaiStep3());
+    // v5.0.2: DeAI 后置三开关 (去AI味视图, 不在 cfg-* 自动绑定的三个视图里, 单独绑)
+    for (const id of ['deai-opt-strip', 'deai-opt-score', 'deai-opt-revise']) {
+      const el = document.getElementById(id);
+      if (el) el.addEventListener('change', () => this.markConfigDirty());
+    }
 
     // v4.1.7: DeAI Step 0 风格 Profile 按钮
     const profileSel = document.getElementById('deai-style-profile');
@@ -1976,6 +1992,20 @@ const App = {
         const cb = document.getElementById('cfg-punct-dash-tilde');
         return cb ? cb.checked : (this.config.punct_dash_tilde !== false);
       })(),
+      // v5.0.2: DeAI 后置三开关 (checkbox 缺失时回退当前配置, 与 punct_fix 同款防御;
+      // 默认 True 字段缺失视为 true, 默认 False 字段缺失视为 false)
+      deai_strip_after: (() => {
+        const cb = document.getElementById('deai-opt-strip');
+        return cb ? cb.checked : (this.config.deai_strip_after !== false);
+      })(),
+      deai_ai_score: (() => {
+        const cb = document.getElementById('deai-opt-score');
+        return cb ? cb.checked : (this.config.deai_ai_score !== false);
+      })(),
+      deai_revise: (() => {
+        const cb = document.getElementById('deai-opt-revise');
+        return cb ? cb.checked : (this.config.deai_revise === true);
+      })(),
     };
   },
 
@@ -2184,6 +2214,11 @@ const App = {
     const text = getText();
     if (!text) { this.appendLog('[DeAI] 请先输入文本'); return; }
     if (!(await this._confirmLargeDeaiText(text))) return;
+    // v5.0.2: Step 2 重跑时清掉上一轮的本地评分显示 (评分在完成时由 payload 刷新)
+    if (step === 2) {
+      const scoreEl = document.getElementById('deai-ai-score-3');
+      if (scoreEl) { scoreEl.hidden = true; scoreEl.textContent = ''; }
+    }
     this.setDeaiStepUI(step, 'running', '调用 LLM 中...');
     this.deai['running' + step] = true;
     try {
@@ -2376,6 +2411,18 @@ const App = {
       this.deai.lastResult = data.result || '';
       this.setDeaiOutput(2, data.result || '');
       this.setDeaiStepUI(2, 'done', data.truncated ? `已完成 (完整 ${data.total_len} 字已存盘)` : '已完成');
+      // v5.0.2: 本地 AI 味评分 (payload 无 ai_score 字段则不显示; 无则不显示是约定)
+      const scoreEl = document.getElementById('deai-ai-score-3');
+      if (scoreEl) {
+        if (data.ai_score && typeof data.ai_score.score === 'number') {
+          scoreEl.textContent = `本地 AI 味评分：${data.ai_score.score}/100` +
+            ' (客户端规则, 信号非判定)';
+          scoreEl.hidden = false;
+        } else {
+          scoreEl.hidden = true;
+          scoreEl.textContent = '';
+        }
+      }
       const copyBtn = document.getElementById('btn-deai-copy-2');
       if (copyBtn) copyBtn.disabled = false;
       // 解锁 step 3

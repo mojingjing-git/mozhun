@@ -286,6 +286,11 @@ class ProjectConfig:
     punct_fullwidth_alnum: bool = True   # 全角字母/数字归一化 (ＡＢＣ１２３→ABC123; 指北 B4)
     punct_repeat_compress: bool = False  # 重复标点压缩 ！！！→！ (指北 B1, 默认关)
     punct_dash_tilde: bool = True        # 破折号——/波浪～ 补齐 (GB/T 15834)
+    # v5.0.2: DeAI rewrite 步后置三开关 — 只影响去 AI 味视图, **不进 compute_prompt_hash**
+    # (裁定见 AGENTS.md §35: DeAI 无断点缓存体系, 塞进校对断点指纹只会让校对断点无谓失效)
+    deai_strip_after: bool = True   # rewrite 完整输出后剥离 Markdown 标记 (app/md_strip.py, 空结果兜底)
+    deai_ai_score: bool = True      # rewrite 完成后跑客户端 0-100 AI 味评分 (app/ai_score_local.py, 零 LLM)
+    deai_revise: bool = False       # 评分 >= REVISE_THRESHOLD 时以出戏句反馈追加一轮改写 (额外 1 次 LLM, <=2 万字)
 
     def to_dict(self) -> dict:
         return {
@@ -312,6 +317,9 @@ class ProjectConfig:
             "punct_fullwidth_alnum": self.punct_fullwidth_alnum,
             "punct_repeat_compress": self.punct_repeat_compress,
             "punct_dash_tilde": self.punct_dash_tilde,
+            "deai_strip_after": self.deai_strip_after,
+            "deai_ai_score": self.deai_ai_score,
+            "deai_revise": self.deai_revise,
         }
 
     @classmethod
@@ -340,6 +348,9 @@ class ProjectConfig:
             punct_fullwidth_alnum=bool(d.get("punct_fullwidth_alnum", True)),
             punct_repeat_compress=bool(d.get("punct_repeat_compress", False)),
             punct_dash_tilde=bool(d.get("punct_dash_tilde", True)),
+            deai_strip_after=bool(d.get("deai_strip_after", True)),
+            deai_ai_score=bool(d.get("deai_ai_score", True)),
+            deai_revise=bool(d.get("deai_revise", False)),
         )
 
 

@@ -3029,6 +3029,193 @@ def test_v431_force_rerun_and_progress():
         tmp_e.unlink(missing_ok=True)
 
 
+def test_v502_deai_postprocess():
+    """v5.0.2: DeAI rewrite 步后置三件套 (strip 后置 / ai_score / revise).
+
+    verifier-plan-v5.0.1.md 裁定逐条核验:
+    - strip 后置: 完整输出拼装后剥 Markdown, 空结果兜底回退原文 (P2-16);
+      落盘/onDeaiComplete/收尾帧用剥后版本; diff 链路不动 (不推"原文 vs 剥后")
+    - ai_score: onDeaiComplete 附 ai_score payload (仅 rewrite), 不落盘不进缓存
+    - revise 内层循环: 仅 rewrite + 开关开 + 评分>=阈值 + <=2 万字; offenders
+      反馈并入 user_prompt; 取分低者; 跨步不做 (C.11)
+    """
+    print()
+    print("--- v5.0.2: DeAI 后置三件套 ---", flush=True)
+    import asyncio
+    from unittest.mock import patch, MagicMock, AsyncMock
+    from app.web_backend import Backend
+    from app.ai_score_local import REVISE_THRESHOLD
+
+    def make_backend():
+        b = Backend(window=None)
+        pushes = []
+        b._push = lambda name, data=None: pushes.append((name, data))
+        return b, pushes
+
+    def make_fake_llm(outputs):
+        """fake client: 第 n 次 create 返回 outputs[n-1] (50 字/片的流式输出)."""
+        calls = {"n": 0, "prompts": []}
+        client = MagicMock()
+
+        class _Stream2:
+            def __init__(self, text):
+                self._pieces = [text[i:i + 50] for i in range(0, len(text), 50)]
+                self._i = 0
+            def __aiter__(self):
+                return self
+            async def __anext__(self):
+                if self._i >= len(self._pieces):
+                    raise StopAsyncIteration
+                ev = MagicMock()
+                ev.choices = [MagicMock()]
+                ev.choices[0].delta.content = self._pieces[self._i]
+                self._i += 1
+                return ev
+
+        async def create(**kwargs):
+            calls["n"] += 1
+            calls["prompts"].append(kwargs["messages"][1]["content"])
+            return _Stream2(outputs[min(calls["n"], len(outputs)) - 1])
+
+        client.chat.completions.create = create
+        client.close = AsyncMock()
+        return MagicMock(return_value=client), calls
+
+    def patch_scores(seq):
+        """fake _ai_score_local: 依次返回 seq 中的分数; >= 阈值带 offenders."""
+        it = iter(seq)
+
+        def fake(text):
+            s = next(it)
+            return {
+                "score": s,
+                "dims": {"blacklist": {"score": 0, "weight": 28, "detail": "mock"}},
+                "offenders": ([{"text": "出戏句子", "reasons": ["mock:黑名单"]}]
+                              if s >= REVISE_THRESHOLD else []),
+            }
+        return patch("app.web_backend._ai_score_local", fake)
+
+    # --- 1) strip 后置: 默认开关下 rewrite 输出剥 Markdown ---
+    b, pushes = make_backend()
+    fake_ctor, calls = make_fake_llm(["# 标题\n\n**加粗**内容与正文。"])
+    with patch("app.web_backend.AsyncOpenAI", fake_ctor):
+        asyncio.run(b._deai_run("deai_s1", "rewrite", "原文输入。", "", "", ""))
+    comp = next(d for n, d in pushes if n == "onDeaiComplete")
+    check("strip 后置: 完成结果无 md 标记",
+          comp.get("result") == "标题\n\n加粗内容与正文。", repr(comp.get("result")))
+    last_stream = [d for n, d in pushes if n == "onDeaiStream"][-1]
+    check("strip 后置: 收尾帧也是剥后版本",
+          "#" not in last_stream.get("partial", ""), repr(last_stream.get("partial")))
+    check("strip 后置: diff 基线不动 (无 original 字段)", "original" not in comp)
+
+    # --- 2) 空结果兜底: 纯标记文本 strip 为空 → 回退原文 ---
+    b, pushes = make_backend()
+    fake_ctor, calls = make_fake_llm(["---\n***\n___"])
+    with patch("app.web_backend.AsyncOpenAI", fake_ctor):
+        asyncio.run(b._deai_run("deai_s2", "rewrite", "原文输入。", "", "", ""))
+    comp = next(d for n, d in pushes if n == "onDeaiComplete")
+    check("空结果兜底: strip 为空时保留原文",
+          comp.get("result") == "---\n***\n___", repr(comp.get("result")))
+    check("空结果兜底: 不推 onDeaiError",
+          "onDeaiError" not in [n for n, _ in pushes])
+
+    # --- 3) ai_score payload: rewrite 附分, detect 不附 ---
+    b, pushes = make_backend()
+    fake_ctor, calls = make_fake_llm(["改写完成。"])
+    with patch("app.web_backend.AsyncOpenAI", fake_ctor), patch_scores([42]):
+        asyncio.run(b._deai_run("deai_s3", "rewrite", "原文输入。", "", "", ""))
+    comp = next(d for n, d in pushes if n == "onDeaiComplete")
+    check("ai_score payload 存在且结构正确",
+          comp.get("ai_score") == {"score": 42,
+                                   "dims": {"blacklist": 0}}, str(comp.get("ai_score")))
+    b, pushes = make_backend()
+    fake_ctor, calls = make_fake_llm(["检测报告。"])
+    with patch("app.web_backend.AsyncOpenAI", fake_ctor), patch_scores([42]):
+        asyncio.run(b._deai_run("deai_s4", "detect", "原文输入。", "", "", ""))
+    comp = next(d for n, d in pushes if n == "onDeaiComplete")
+    check("detect 步不附 ai_score", "ai_score" not in comp)
+
+    # --- 4) revise 默认关: 评分超阈值也只跑一轮 ---
+    b, pushes = make_backend()
+    fake_ctor, calls = make_fake_llm(["第一轮输出。"])
+    with patch("app.web_backend.AsyncOpenAI", fake_ctor), patch_scores([95]):
+        asyncio.run(b._deai_run("deai_s5", "rewrite", "原文输入。", "", "", ""))
+    check("revise 默认关: 仅 1 次 LLM 调用", calls["n"] == 1, f"实际 {calls['n']}")
+
+    # --- 5) revise 开 + 第二轮分低 → 采用修订结果 (共 2 次调用, 反馈入 prompt) ---
+    b, pushes = make_backend()
+    b._config.deai_revise = True
+    fake_ctor, calls = make_fake_llm(["第一轮输出。", "修订后的输出。"])
+    with patch("app.web_backend.AsyncOpenAI", fake_ctor), patch_scores([80, 30]):
+        asyncio.run(b._deai_run("deai_s6", "rewrite", "原文输入。", "", "", ""))
+    check("revise 采纳: 共 2 次 LLM 调用", calls["n"] == 2, f"实际 {calls['n']}")
+    check("revise 反馈并入 user_prompt (offenders)",
+          len(calls["prompts"]) >= 2 and "出戏句子" in calls["prompts"][1]
+          and "出戏句反馈" in calls["prompts"][1], calls["prompts"][1][:120])
+    comp = next(d for n, d in pushes if n == "onDeaiComplete")
+    check("revise 采纳: 采用修订文本", comp.get("result") == "修订后的输出。",
+          repr(comp.get("result")))
+    check("revise 采纳: payload 更新为第二轮分数",
+          comp.get("ai_score", {}).get("score") == 30, str(comp.get("ai_score")))
+
+    # --- 6) revise 开 + 第二轮分高 → 保留第一轮 ---
+    b, pushes = make_backend()
+    b._config.deai_revise = True
+    fake_ctor, calls = make_fake_llm(["第一轮输出。", "更差的输出。"])
+    with patch("app.web_backend.AsyncOpenAI", fake_ctor), patch_scores([80, 90]):
+        asyncio.run(b._deai_run("deai_s7", "rewrite", "原文输入。", "", "", ""))
+    comp = next(d for n, d in pushes if n == "onDeaiComplete")
+    check("revise 取分低者: 第二轮更差则保留第一轮",
+          comp.get("result") == "第一轮输出。", repr(comp.get("result")))
+    check("revise 取分低者: payload 保留第一轮分数",
+          comp.get("ai_score", {}).get("score") == 80)
+
+    # --- 7) revise 开但评分关 → 跳过 (评分是 revise 的前置信号) ---
+    b, pushes = make_backend()
+    b._config.deai_revise = True
+    b._config.deai_ai_score = False
+    fake_ctor, calls = make_fake_llm(["第一轮输出。"])
+    with patch("app.web_backend.AsyncOpenAI", fake_ctor), patch_scores([80]):
+        asyncio.run(b._deai_run("deai_s8", "rewrite", "原文输入。", "", "", ""))
+    check("revise 需评分: ai_score 关时仅 1 次调用", calls["n"] == 1, f"实际 {calls['n']}")
+    comp = next(d for n, d in pushes if n == "onDeaiComplete")
+    check("revise 需评分: payload 为空则不附", "ai_score" not in comp)
+
+    # --- 8) 超 2 万字: revise 跳过 (整文单次调用超上下文风险) ---
+    b, pushes = make_backend()
+    b._config.deai_revise = True
+    big_out = "长" * 21000
+    fake_ctor, calls = make_fake_llm([big_out])
+    with patch("app.web_backend.AsyncOpenAI", fake_ctor), patch_scores([95, 10]):
+        asyncio.run(b._deai_run("deai_s9", "rewrite", "原文输入。", "", "", ""))
+    check("超 2 万字 revise 跳过: 仅 1 次调用", calls["n"] == 1, f"实际 {calls['n']}")
+
+
+def test_v502_deai_switches_roundtrip():
+    """v5.0.2: 3 开关 to_dict/from_dict 往返 + 默认值 + 不进 compute_prompt_hash (§35 裁定)."""
+    print()
+    print("--- v5.0.2: DeAI 3 开关配置往返 ---", flush=True)
+    from app.utils import ProjectConfig, compute_prompt_hash_for_config
+    cfg = ProjectConfig()
+    check("默认值 strip/score=True, revise=False",
+          cfg.deai_strip_after is True and cfg.deai_ai_score is True
+          and cfg.deai_revise is False)
+    d = cfg.to_dict()
+    check("to_dict 字段数 26", len(d) == 26, str(len(d)))
+    cfg2 = ProjectConfig.from_dict({**d, "deai_strip_after": False,
+                                    "deai_ai_score": False, "deai_revise": True})
+    check("from_dict 往返保留修改",
+          cfg2.deai_strip_after is False and cfg2.deai_ai_score is False
+          and cfg2.deai_revise is True)
+    cfg3 = ProjectConfig.from_dict({})
+    check("缺键回退默认", cfg3.deai_strip_after is True
+          and cfg3.deai_ai_score is True and cfg3.deai_revise is False)
+    # §35 裁定: 3 开关不进断点指纹 — 改 3 开关不影响 prompt hash
+    h1 = compute_prompt_hash_for_config(cfg)
+    h2 = compute_prompt_hash_for_config(cfg2)
+    check("3 开关改动不使校对断点指纹失效", h1 == h2, f"{h1} vs {h2}")
+
+
 def main():
     print("=" * 60, flush=True)
     print("  v4.0 Web Backend 测试 (Phase 1+2, flush=True)")
@@ -3158,6 +3345,9 @@ def main():
         test_v440_ink_skin_css,
         test_v442_md_local_ui,
         test_v500_deai_load_source,
+        # v5.0.2 新增 (DeAI 后置三件套: strip 后置 / ai_score / revise + 3 开关)
+        test_v502_deai_postprocess,
+        test_v502_deai_switches_roundtrip,
     ]
     for t in tests:
         try:

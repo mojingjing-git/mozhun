@@ -9,6 +9,7 @@
 - **v4.1.8**（Win11 重构）新增 2 个参考（§10–§11）
 - **v4.3.4**（标点修复 v2）新增 4 个上游项目 + 国家标准（§12–§15）
 - **v4.4.2**（Markdown 清洗）新增 1 个规范引用（§16）
+- **v5.0.2**（DeAI 后置三件套）补登记 3 个上游项目（§17–§19，其中 2 个自 v3.0/v4.1.7 起借鉴，本版补齐 LICENSE 副本）
 
 ---
 
@@ -685,6 +686,125 @@ SOFTWARE.
 - **借鉴方式**: 规范语义引用 (规则依据), 无代码复制
 - **落点**: app/md_strip.py 规则表
 
+## 17. harshaneel/humanize (v5.0.2 补登记, 自 v3.0 起借鉴)
+
+- **URL**: https://github.com/harshaneel/humanize
+- **License**: MIT License
+- **Copyright**: (c) 2026 Harshaneel Gokhale
+- **借鉴内容**: v3.0 起 — 4 pass 编辑法 (草稿/砍废话/打破对称/加毛边); v5.0.2 起 —
+  audit-revise 循环思路 (评分 → 出戏句反馈 → 再改写一轮, 对应 app/web_backend.py
+  `_deai_postprocess_rewrite` / `_deai_revise_round`)
+- **借鉴方式**: 思路借鉴（A 类），无代码复制
+- **落点**: app/templates.py (SYSTEM_PROMPT_DEAI 工作流节) + app/web_backend.py revise 内层循环
+
+### MIT License 全文
+
+```
+MIT License
+
+Copyright (c) 2026 Harshaneel Gokhale
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+> 来源：https://raw.githubusercontent.com/harshaneel/humanize/main/LICENSE
+
+## 18. blader/humanizer (v5.0.2 补登记, 自 v3.0 起借鉴)
+
+- **URL**: https://github.com/blader/humanizer
+- **License**: MIT License
+- **Copyright**: (c) 2025 Siqi Chen
+- **借鉴内容**: AI 写作痕迹分类语义 (源自 Wikipedia: Signs of AI writing)。
+  上游现行 v3.0 已把 35 patterns 合并为 **"five sections + 25 patterns"**
+  并按强度/频次重排编号 — 本项目从未沿用其编号体系, "7 大类"是项目自己的
+  归纳 (app/templates.py DETECT_V5 / app/ai_score_local.py 词表), 引用其分类
+  时一律以 "five sections + 25 patterns" 表述, 不使用其新旧编号
+- **借鉴方式**: 思路借鉴（A 类），无代码复制
+- **落点**: app/templates.py (7 大类黑名单文本) + app/ai_score_local.py 词表
+
+### MIT License 全文
+
+```
+MIT License
+
+Copyright (c) 2025 Siqi Chen
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+> 来源：https://raw.githubusercontent.com/blader/humanizer/main/LICENSE
+
+## 19. Aboudjem/humanizer-skill (v5.0.2 新增)
+
+- **URL**: https://github.com/Aboudjem/humanizer-skill
+- **License**: MIT License
+- **Copyright**: (c) 2026 Adam Boudjemaa
+- **借鉴内容**: 客户端 0-100 AI-tell 本地评分范式 ("a number is a stand-in, not a
+  verdict" — 分数是可复现的信号而非判定, 纯函数 + 0 依赖 + 0 网络), 对应
+  app/ai_score_local.py 六维加权评分引擎 (词表/正则/权重全部自写)
+- **借鉴方式**: 思路借鉴（A 类），无代码复制
+- **落点**: app/ai_score_local.py
+
+### MIT License 全文
+
+```
+MIT License
+
+Copyright (c) 2026 Adam Boudjemaa
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+> 来源：https://raw.githubusercontent.com/Aboudjem/humanizer-skill/main/LICENSE
+
 ## 借鉴来源文件头注释约定
 
 为满足 MIT / BSD 协议"在修改文件标注"要求，所有借鉴思路的源文件首部加注释：
@@ -768,8 +888,16 @@ Copyright (c) 2014-2024 Roman Yurchak
 |------|------|---------|---------|
 | commonmark/commonmark-spec | CC-BY-SA 4.0 (spec 文本) / BSD-2 (参考实现) | ✅ 已确认 | GitHub LICENSE 阅读 (§16; 仅规范语义引用, 无文本复制, 不触发 share-alike) |
 
+### v5.0.2 借鉴 (DeAI 后置三件套)
+
+| 上游 | 协议 | 核验状态 | 核验方式 |
+|------|------|---------|---------|
+| harshaneel/humanize | MIT | ✅ 已确认 | web fetch raw.githubusercontent.com/harshaneel/humanize/main/LICENSE 完整粘贴 (§17) |
+| blader/humanizer | MIT | ✅ 已确认 | web fetch raw.githubusercontent.com/blader/humanizer/main/LICENSE 完整粘贴 (§18; 分类表述采用其 v3.0 "five sections + 25 patterns", 不用编号) |
+| Aboudjem/humanizer-skill | MIT | ✅ 已确认 | web fetch raw.githubusercontent.com/Aboudjem/humanizer-skill/main/LICENSE 完整粘贴 (§19) |
+
 ---
 
 **最后更新**: 2026-09-07
-**覆盖版本**: v3.0 + v4.0 + v4.1.7 + v4.1.8 + v4.3.4 + v4.4.2
-**生成依据**: PLAN-chunking.md §4.2 + PLAN-pywebview.md §1.3 / §3.2 / §15 + PLAN-distill-style.md
+**覆盖版本**: v3.0 + v4.0 + v4.1.7 + v4.1.8 + v4.3.4 + v4.4.2 + v5.0.2
+**生成依据**: PLAN-chunking.md §4.2 + PLAN-pywebview.md §1.3 / §3.2 / §15 + PLAN-distill-style.md + verifier-plan-v5.0.1.md
