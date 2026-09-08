@@ -193,7 +193,7 @@ python main.py       # 或直接开发模式运行
 ├── check_exe.py            # 打包后 exe 资源完整性校验
 ├── test_*.py               # 8 套件 1165 项
 ├── run_all_tests.py        # 一键跑全部
-├── PLAN-*.md               # 各版本升级 plan（完成态存档）
+├── docs/archive/plans/     # 历史升级 plan 归档 (v3.0 — v4.1.7 完成态存档)
 ├── CHANGELOG.md            # 版本日志
 └── THIRD_PARTY_NOTICES.md  # 借鉴来源 + LICENSE
 ```

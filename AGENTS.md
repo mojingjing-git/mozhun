@@ -1,5 +1,7 @@
 # AGENTS.md — 项目约定
 
+> **历史升级 plan 归档于 [`docs/archive/plans/`](docs/archive/plans/README.md)** (v3.0 — v4.1.7 完成态存档,与当前 v5.1.0 架构脱节,仅追溯用)。
+
 ## 技术栈
 
 - **GUI**: pywebview 6.2.1+ + 原生 HTML/CSS/JS（**Fluent 2 风格**，设计令牌手写，无第三方 UI 库）
@@ -154,12 +156,9 @@ DeAI 后置层（3 项，v3.0/v4.1.7 起借鉴，v5.0.2 补登记 LICENSE）：
 ### 文档
 - `README.md` — 用户向文档（特性、快速开始、快捷键、配置、架构）
 - `AGENTS.md` — 本文件（开发约定）
-- `PLAN-chunking.md` — v3.0 升级 plan（已完成）
-- `PLAN-pywebview.md` — v4.0 升级 plan（已完成）
 - `CHANGELOG.md` — 版本日志
 - `THIRD_PARTY_NOTICES.md` — 借鉴来源 + LICENSE 全文 (§12-15: typeset/autocorrect/macro-correct/排版指北)
-- `PLAN-distill-style.md` — v4.1.7 蒸馏文风升级 plan
-- `PLAN-win11-redesign.md` / `PLAN-v4.1.5-ui-redesign.md` — 前端重构 plan（完成态存档）
+- `docs/archive/plans/` — 历史升级 plan 归档 (v3.0 — v4.1.7 完成态存档,见 `README.md`)
 
 ## import 顺序约定
 
