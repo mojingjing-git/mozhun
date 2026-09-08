@@ -3,7 +3,7 @@ pywebview>=6.2.1,<7.0
 # LLM
 openai>=1.0,<3.0
 # HTTP (fetch_models / test_connection)
-requests>=2.28
+requests>=2.34.2
 # v4.1.1 显式声明: pywebview 6.x edgechromium 后端依赖这三个调 Win32 .NET / COM
 # 之前只依赖 pywebview 自动拉, 实测 comtypes 没自动装上, 导致 webview.start() 挂
 pythonnet>=3.0
