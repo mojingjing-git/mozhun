@@ -8,4 +8,4 @@ requests>=2.28
 # 之前只依赖 pywebview 自动拉, 实测 comtypes 没自动装上, 导致 webview.start() 挂
 pythonnet>=3.0
 clr_loader>=0.2
-comtypes>=1.2
+comtypes>=1.4.16
