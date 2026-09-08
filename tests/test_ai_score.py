@@ -8,7 +8,7 @@ ai_score_local 是纯函数 (无 IO 无网络无随机), 无需 test_isolate 隔
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent.parent))  # v6.0: tests/ 的父目录 = 项目根
 import test_isolate  # noqa: F401  测试隔离, 防止污染真实 ~/.proofreader
 
 passed = 0

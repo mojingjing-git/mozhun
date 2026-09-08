@@ -22,7 +22,7 @@ if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent.parent))  # v6.0: tests/ 的父目录 = 项目根
 import test_isolate  # noqa: F401  测试隔离: 重定向 ~/.proofreader 到临时目录
 
 passed = 0
@@ -2065,7 +2065,7 @@ def test_v417_distill_concurrent_no_interference():
 # 借鉴方式: 思路借鉴,本测试仅静态读取 web/style.css 和 web/icons/*.svg 验证 token 体系落地
 
 # CSS / SVG 静态读取辅助
-_WEB_DIR = Path(__file__).parent / "web"
+_WEB_DIR = Path(__file__).parent.parent / "web"  # v6.0: 修正为项目根 (tests/ 的父目录)
 _STYLE_CSS = _WEB_DIR / "style.css"
 _ICONS_DIR = _WEB_DIR / "icons"
 

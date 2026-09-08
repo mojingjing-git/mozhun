@@ -157,7 +157,7 @@ DeAI 后置层（3 项，v3.0/v4.1.7 起借鉴，v5.0.2 补登记 LICENSE）：
 - `README.md` — 用户向文档（特性、快速开始、快捷键、配置、架构）
 - `AGENTS.md` — 本文件（开发约定）
 - `CHANGELOG.md` — 版本日志
-- `THIRD_PARTY_NOTICES.md` — 借鉴来源 + LICENSE 全文 (§12-15: typeset/autocorrect/macro-correct/排版指北)
+- `docs/THIRD_PARTY_NOTICES.md` — 借鉴来源 + LICENSE 全文 (§12-15: typeset/autocorrect/macro-correct/排版指北)
 - `docs/archive/plans/` — 历史升级 plan 归档 (v3.0 — v4.1.7 完成态存档,见 `README.md`)
 
 ## import 顺序约定
@@ -188,7 +188,7 @@ from openai import AsyncOpenAI  # LLM
 - 不要用 `asyncio.Event` 实现 pause/cancel（v4.0 改 `threading.Event`，跨线程安全）
 - 不要在 `web_backend.py` 直接 `import requests`（除非 webview 走 proxy，**目前不需要**）
 - 不要在 `app/style_profiles/` 硬编码具体真人作家名或 jianshuo 仓库真迹链接（抽象化预置 + 致谢在 THIRD_PARTY_NOTICES）
-- 不要从借鉴项目复制代码（仅借鉴思路，所有代码自写并加注释；完整 LICENSE 在 `THIRD_PARTY_NOTICES.md`）
+- 不要从借鉴项目复制代码（仅借鉴思路，所有代码自写并加注释；完整 LICENSE 在 `docs/THIRD_PARTY_NOTICES.md`）
 - 不要在 `.btn-*` / `.card` / `.deai-step` / `.nav-item` 等组件上硬编码颜色/间距/圆角/字号（v4.1.8 token 体系, 全部走 `--colorNeutral*` / `--colorBrand*` / `--space-*` / `--controlCornerRadius` / `--fontSize*` token, 改 token 即可全站调整）
 - 不要放宽 `punct_fix.py` 的四条红线（纯英文上下文不动 / 落单引号只报不改 / 分号不转换 / 幂等）——调研结论是我们比同类项目更保守才安全的，放宽会引入不可逆误伤
 

@@ -143,7 +143,7 @@ python main.py       # 或直接开发模式运行
 - **[jianshuo/claude-skills](https://github.com/jianshuo/claude-skills)** (MIT, v4.1.7+) — 9 轴风格指纹 + 事实骨架 + AI 6 处反制 + 8 轴自评
 - [Aboudjem/humanizer-skill](https://github.com/Aboudjem/humanizer-skill) (MIT) — ruthless editor 思路 + 0-100 AI-tell 本地评分范式 (v5.0.2)
 
-详见 `THIRD_PARTY_NOTICES.md`。
+详见 `docs/THIRD_PARTY_NOTICES.md`。
 
 ## 分块模式 (v3.0+)
 
@@ -193,9 +193,13 @@ python main.py       # 或直接开发模式运行
 ├── check_exe.py            # 打包后 exe 资源完整性校验
 ├── test_*.py               # 8 套件 1165 项
 ├── run_all_tests.py        # 一键跑全部
-├── docs/archive/plans/     # 历史升级 plan 归档 (v3.0 — v4.1.7 完成态存档)
+├── tests/                  # v6.0+ 测试套件
+├── docs/                   # 文档
+│   ├── archive/plans/      # 历史升级 plan 归档
+│   ├── THIRD_PARTY_NOTICES.md  # 借鉴来源 + LICENSE
+│   └── Windows11-设计原则.md   # v4.1.8 重构参考 (Microsoft Learn 本地副本)
 ├── CHANGELOG.md            # 版本日志
-└── THIRD_PARTY_NOTICES.md  # 借鉴来源 + LICENSE
+└── README.md               # 本文件
 ```
 
 ## 配置文件
@@ -251,7 +255,7 @@ v3.0 → v5.1.0 共借鉴 **20 个开源项目 / 文档**，全部思路借鉴�
 - **DeAI 后置三件套 (v5.0.2)**：[harshaneel/humanize](https://github.com/harshaneel/humanize) (MIT) — audit-revise 出戏句反馈循环 + 4 pass 法；[blader/humanizer](https://github.com/blader/humanizer) (MIT) — AI 痕迹分类语义（现行 v3.0 "five sections + 25 patterns"，本项目不用其编号）；[Aboudjem/humanizer-skill](https://github.com/Aboudjem/humanizer-skill) (MIT) — 0-100 AI-tell 本地评分范式（分数是信号不是判定）
 - **校对 harness (v5.1.0)**：[Claude Code Edit 工具](https://code.claude.com/docs/)（Anthropic 文档，致谢非协议）— old_text/new_text 精确匹配 + 唯一性要求 + 逐条状态回执的 Edit 工具设计范式
 
-完整 LICENSE 副本见 [`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md)。
+完整 LICENSE 副本见 [`docs/THIRD_PARTY_NOTICES.md`](./docs/THIRD_PARTY_NOTICES.md)。
 
 ## 许可证
 

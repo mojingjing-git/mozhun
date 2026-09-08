@@ -9,8 +9,9 @@ sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 # v4.1.8.2 (审计 K14): 自动发现 test_*.py — 旧版硬编码清单, 新增测试文件
 # 忘记登记时对门禁完全不存在 (静默盲区). test_isolate.py 是隔离样板无 main, 排除.
+# v6.0 (Phase C0): test_*.py 移到 tests/ 目录, glob 路径 + cwd 同步调整.
 tests = sorted(
-    p.name for p in Path(__file__).parent.glob("test_*.py")
+    p.name for p in Path(__file__).parent.glob("tests/test_*.py")
     if p.name != "test_isolate.py"
 )
 
@@ -21,8 +22,9 @@ results = []
 for t in tests:
     print(f"\n{'='*60}\n  {t}\n{'='*60}", flush=True)
     result = subprocess.run(
-        [sys.executable, t],
+        [sys.executable, 'tests/' + t],
         cwd=str(Path(__file__).parent),
+        env={**__import__('os').environ, 'PYTHONPATH': str(Path(__file__).parent)},
         capture_output=True,
         text=True,
         encoding="utf-8",

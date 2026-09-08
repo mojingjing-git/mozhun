@@ -14,7 +14,7 @@ if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent.parent))  # v6.0: tests/ 的父目录 = 项目根
 import test_isolate  # noqa: F401  测试隔离: 重定向 ~/.proofreader 到临时目录
 
 passed = 0
@@ -160,7 +160,7 @@ def test_bug11():
     None 保护写为 `if eng is None` (eng 默认取 self._engine).
     """
     # 1. 旧 PySide6 模块已删
-    src_path = Path(__file__).parent / "app" / "main_window.py"
+    src_path = Path(__file__).parent.parent / "app" / "main_window.py"
     check("Bug#11 v4.0+ main_window.py 已删 (Phase 3 完成)", not src_path.exists())
     # 2. 等价保护逻辑搬到 web_backend._collect_results (engine=None 时返回空 dict)
     from app.web_backend import Backend
@@ -181,10 +181,10 @@ def test_bug12():
     原 Bug#12 验证 InputPanel.clear 公开.
     现等价语义: 验证前端 app.js 有清空文件逻辑 (clearFiles) 且 input_panel.py 不存在.
     """
-    src_path = Path(__file__).parent / "app" / "input_panel.py"
+    src_path = Path(__file__).parent.parent / "app" / "input_panel.py"
     check("Bug#12 v4.0+ input_panel.py 已删 (Phase 3 完成)", not src_path.exists())
     # 前端 app.js 应有 clearFiles 方法
-    app_js = (Path(__file__).parent / "web" / "app.js").read_text(encoding="utf-8")
+    app_js = (Path(__file__).parent.parent / "web" / "app.js").read_text(encoding="utf-8")
     check("Bug#12 前端 app.js 有 clearFiles 公开方法", "clearFiles" in app_js and "async clearFiles" in app_js)
 
 def test_bug13():
@@ -193,7 +193,7 @@ def test_bug13():
     原 Bug#13 验证 _export_report try/except.
     现等价语义: 验证 web_backend.export_result() 有 try/except + main_window.py 不存在.
     """
-    src_path = Path(__file__).parent / "app" / "main_window.py"
+    src_path = Path(__file__).parent.parent / "app" / "main_window.py"
     check("Bug#13 v4.0+ main_window.py 已删 (Phase 3 完成)", not src_path.exists())
     from app.web_backend import Backend
     import inspect
