@@ -1,5 +1,9 @@
 # Changelog
 
+> **曾用名**: 新时代校对大师 (v3.0 — v4.4.2 期间, 2024 → 2026-09 改名为墨准)。历史 CHANGELOG 条目保留原名, 详见 README.md 与 AGENTS.md。
+>
+> 当前产品: **墨准 (MoZhun)** v5.1.0 — 本地标点修复 + LLM 批量校对 + 去 AI 味, 支持任意 OpenAI 兼容 API。
+
 ## v5.1.0 (2026-09-07) — 校对流程 harness 化: Edit 工具链 (function calling) + 改动清单审计
 
 **依据**: `final-report.md` §5.2 harness 改造方案 + `agent1-tech-feasibility.md` §3 (Edit 工具 schema + 12 条边界表 + 工具纪律 prompt)。LLM 不再整篇重输出，改为逐条返回编辑建议、客户端精确匹配应用 — 输出 token 大幅下降，且每条改动可审计。
