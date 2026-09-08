@@ -1,5 +1,7 @@
 # 新时代校对大师 v4.1.8 (pywebview + Win11 Fluent 2)
 
+![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg) ![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg) ![Platform: Windows](https://img.shields.io/badge/Platform-Windows-0078d4.svg) ![GUI: pywebview](https://img.shields.io/badge/GUI-pywebview-6DA55F.svg)
+
 基于 LLM 的批量文本校对工具。**pywebview 6.2.1** 前端 + 原生 Web 设计令牌 + **Win11 Fluent 2 完整重构 (v4.1.8)**, 支持流式输出与任意 OpenAI 兼容 API。
 
 ## 特性
