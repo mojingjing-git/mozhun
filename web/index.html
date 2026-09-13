@@ -48,6 +48,11 @@
         <span class="nav-icon" data-icon="document"></span>
         <span>风格库</span>
       </button>
+      <!-- v5.2b: 小说切分 (第 8 视图, 集成自姊妹项目「小说分析器」SplitterService) -->
+      <button class="nav-item" data-view="splitter" type="button">
+        <span class="nav-icon" data-icon="document-multiple"></span>
+        <span>小说切分</span>
+      </button>
       <div class="nav-group">设置</div>
       <button class="nav-item" data-view="api" type="button">
         <span class="nav-icon" data-icon="app"></span>
@@ -148,6 +153,65 @@
           <summary>改动清单 <span class="audit-summary-hint" id="audit-summary"></span></summary>
           <div id="audit-list" class="audit-list"></div>
         </details>
+      </section>
+    </main>
+
+    <!-- ========== 小说切分 (v5.2b+: 集成自姊妹项目「小说分析器」SplitterService) ========== -->
+    <main id="view-splitter" class="view">
+      <div class="page-header">
+        <h1>小说切分</h1>
+        <div class="actions">
+          <button id="btn-add-splitter-files" class="btn btn-standard btn-subtle" type="button">+ 添加小说</button>
+          <button id="btn-clear-splitter" class="btn btn-standard btn-subtle" type="button" disabled>清空</button>
+          <button id="btn-batch-splitter" class="btn btn-standard btn-accent" type="button" disabled>批量切分</button>
+        </div>
+      </div>
+      <div class="content-grid splitter-grid">
+        <section class="card splitter-files-card">
+          <h2>小说文件 (<span id="splitter-file-count">0</span>)</h2>
+          <ul id="splitter-file-list" class="file-list">
+            <li class="file-list-empty">尚未添加文件 (点 + 添加小说 或拖入)</li>
+          </ul>
+          <div class="list-hint stats-secondary">输出落盘: <code>~/.proofreader/novel_splits/{书名}/blocks/{0001}.txt</code> + chapters.json + metadata.json + split_report.txt</div>
+        </section>
+        <section class="card splitter-options-card">
+          <h2>切分选项</h2>
+          <div class="form-row checkbox-row">
+            <label class="checkbox-label">
+              <input type="checkbox" id="cfg-splitter-use-volume" checked>
+              <span>识别卷层级 (第一卷 / 卷一 / Part I / Book the First...)</span>
+            </label>
+          </div>
+          <div class="form-row checkbox-row">
+            <label class="checkbox-label">
+              <input type="checkbox" id="cfg-splitter-remove-ads">
+              <span>清理广告/水印 (公众号/书友群/月票 等)</span>
+            </label>
+          </div>
+          <div class="form-row checkbox-row">
+            <label class="checkbox-label">
+              <input type="checkbox" id="cfg-splitter-merge-tiny">
+              <span>合并短章 (与最小字数配合, 末尾短章并入上一章)</span>
+            </label>
+          </div>
+          <div class="form-row inline">
+            <label>最小字数</label>
+            <input id="cfg-splitter-min-words" type="number" min="0" step="100" value="0" title="章节字数低于此值会被过滤或合并。0 = 不过滤。建议网文 200-500">
+          </div>
+          <div class="form-row inline">
+            <label>最大字数</label>
+            <input id="cfg-splitter-max-words" type="number" min="0" step="1000" value="0" title="章节字数超过此值会自动拆分成 (1/N)(2/N)... 0 = 不拆">
+          </div>
+          <div class="form-hint">切分模式: auto (自动检测前 N 行主导格式) / custom (自定义正则, 留空 = auto)</div>
+        </section>
+      </div>
+      <div class="splitter-progress" id="splitter-progress" hidden>
+        <div class="progress-bar"><div id="splitter-progress-fill" class="progress-fill" style="width:0%"></div></div>
+        <div id="splitter-progress-stats" class="stats">就绪</div>
+      </div>
+      <section class="card splitter-preview-card" id="splitter-preview-card" hidden>
+        <h2>单本预览 <span id="splitter-preview-title" class="stats-secondary"></span></h2>
+        <pre id="splitter-preview-output" class="log"></pre>
       </section>
     </main>
 
@@ -274,10 +338,56 @@
         </section>
         <section class="card">
           <h2>长文本分块</h2>
+          <!-- v5.2c: 段控件 - 当前模式高亮, 另一档灰显 (只读, 改 prompt_mode 或 harness_enabled 切换) -->
           <div class="form-row">
-            <label>分块预设</label>
-            <select id="cfg-chunking-preset" title="单次发给 LLM 的文本块大小: fast(2000) / balanced(3000) / high_context(4000) / large(6000) / whole_file(整篇不分块)"></select>
+            <label>当前校对模式 (只读, 切换改 prompt_mode 或 harness_enabled)</label>
+            <div class="theme-switcher" id="cfg-mode-display" role="tablist" aria-disabled="true">
+              <button class="seg active" data-mode="harness" type="button" disabled
+                      title="Edit 工具链模式 (harness_enabled=True 且 prompt_mode ∈ {strict, polish})">
+                <span class="seg-icon" data-icon="check-list"></span> 校对 (Harness)
+              </button>
+              <button class="seg" data-mode="rewrite" type="button" disabled
+                      title="整篇重写模式 (harness_enabled=False 或 prompt_mode=custom)">
+                <span class="seg-icon" data-icon="document-edit"></span> 校对 (重写)
+              </button>
+            </div>
+            <div class="form-hint">改 <code>prompt_mode</code> (API 接口页) 或 <code>harness_enabled</code> (本节) 切换模式</div>
           </div>
+          <!-- v5.2c: harness 模式配置 (mode-dependent 灰显当前不活跃档) -->
+          <div class="form-row mode-dependent" data-mode="harness">
+            <label>Harness 分块预设</label>
+            <select id="cfg-chunking-preset-harness" title="Harness 模式专用分块档: large(6000) 推荐"></select>
+          </div>
+          <div class="form-row mode-dependent" data-mode="harness">
+            <label>Harness 请求超时 (秒)</label>
+            <input id="cfg-harness-request-timeout" type="number" min="60" max="600" step="10" value="180"
+                   title="Harness 模式专用 timeout. 模型响应慢 2-5x, 建议 ≥180s">
+          </div>
+          <!-- v5.2c: 重写模式配置 -->
+          <div class="form-row mode-dependent" data-mode="rewrite">
+            <label>重写分块预设</label>
+            <select id="cfg-chunking-preset-rewrite" title="整篇重写模式分块档: balanced(3000) 推荐"></select>
+          </div>
+          <div class="form-row mode-dependent" data-mode="rewrite">
+            <label>重写请求超时 (秒)</label>
+            <input id="cfg-rewrite-request-timeout" type="number" min="60" max="600" step="10" value="120"
+                   title="整篇重写 timeout. 沿用原 timeout 字段值">
+          </div>
+          <!-- v5.2c: 兼容字段 (老用户 + DeAI 视图专用) - C-3 修法: 保留控件, 不删 -->
+          <details class="compat-section">
+            <summary>DeAI 专用分块/超时 (折叠)</summary>
+            <div class="form-hint">这两个字段 DeAI 视图走, 校对视图不读。改这俩会同步到上面的 rewrite 字段, 但不影响 harness 字段。</div>
+            <div class="form-row">
+              <label>原 chunking_preset (DeAI)</label>
+              <select id="cfg-chunking-preset" data-scope="deai"
+                      title="DeAI 视图专用, 改时同步给 chunking_preset_rewrite"></select>
+            </div>
+            <div class="form-row">
+              <label>原 timeout (DeAI)</label>
+              <input id="cfg-timeout" type="number" min="10" max="300" step="10" data-scope="deai"
+                     title="DeAI 视图专用, 改时同步给 rewrite_request_timeout">
+            </div>
+          </details>
           <div class="form-row">
             <label>上下文最大字符数 (200-2000)</label>
             <input id="cfg-context-max-chars" type="number" min="200" max="2000">
@@ -526,5 +636,7 @@
   <script src="lib/diff-match-patch.js"></script>
   <!-- v4.1 (M6): marked.min.js 已无引用 (去 AI 味走 diff-match-patch 字符级 diff), 35KB 减重 -->
   <script src="app.js"></script>
+  <!-- v5.2b: 小说切分视图逻辑 (第 8 视图) -->
+  <script src="views/novel-splitter.js"></script>
 </body>
 </html>

@@ -98,6 +98,7 @@ const App = {
     this.renderHome();
     this.renderSettings();
     this.bindEvents();
+    this.bindCompatFields();  // v5.2c: 兼容字段同步 + 段控件重算事件
     this.startEventLoop();
     this.setView('home');
     this.appendLog('[就绪] v5.1.0 pywebview 前端已加载');
@@ -404,6 +405,23 @@ const App = {
     });
   },
 
+  // v5.2c: 兼容字段同步写 (M-3 修: DeAI 字段改时同步给 rewrite 字段, harness 字段不联动)
+  bindCompatFields() {
+    const sync = (fromId, toId) => {
+      const from = document.getElementById(fromId);
+      const to = document.getElementById(toId);
+      if (!from || !to) return;
+      from.addEventListener('change', () => { to.value = from.value; });
+    };
+    sync('cfg-chunking-preset', 'cfg-chunking-preset-rewrite');
+    sync('cfg-timeout', 'cfg-rewrite-request-timeout');
+    // v5.2c: prompt_mode / harness_enabled 变化 → 段控件重算
+    ['cfg-prompt-mode', 'cfg-harness-enabled'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.addEventListener('change', () => this._updateModeSegment());
+    });
+  },
+
   // ====== 主页渲染 ======
   renderHome() {
     // v4.1 (I5): chunking 预设下拉挪到设置页, 主页只显示只读 label
@@ -412,13 +430,37 @@ const App = {
   },
 
   // v4.1 (I5): 渲染主页只读 chunking 标签, 读 this.config.chunking_preset
+  // v5.2c (D 方案): 改读 effective preset (harness 模式走 chunking_preset_harness, 重写模式走 chunking_preset_rewrite)
   renderChunkingDisplay() {
     const el = document.getElementById('home-chunking-display');
     if (!el) return;
-    const preset = this.config.chunking_preset || 'balanced';
+    const preset = this._effectiveChunkPreset();
     const found = this.chunkingPresets.find(p => p.key === preset);
     const label = found ? found.label : preset;
     el.textContent = `分块: ${label}`;
+  },
+
+  // v5.2c: 段控件 active 重算 + mode-dependent 灰显 (M-2 修: 只读)
+  _updateModeSegment() {
+    const isHarness = this.config.harness_enabled !== false
+      && ['strict', 'polish'].includes(this.config.prompt_mode);
+    const activeMode = isHarness ? 'harness' : 'rewrite';
+    document.querySelectorAll('#cfg-mode-display .seg').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.mode === activeMode);
+    });
+    document.querySelectorAll('.mode-dependent').forEach(row => {
+      row.style.display = (row.dataset.mode === activeMode) ? '' : 'none';
+    });
+  },
+
+  // v5.2c: 派生实际生效的 chunking 档 (前端版, 与 processor.py:_effective_chunk_preset 同步)
+  _effectiveChunkPreset() {
+    const isHarness = this.config.harness_enabled !== false
+      && ['strict', 'polish'].includes(this.config.prompt_mode);
+    if (isHarness) {
+      return this.config.chunking_preset_harness || 'large';
+    }
+    return this.config.chunking_preset_rewrite || 'balanced';
   },
 
   // v4.3.1 (UX #15): 禁用按钮统一写 title 说明原因 — 用户不再猜"为什么是灰的".
@@ -478,6 +520,13 @@ const App = {
 
     // 填充 chunking 预设
     this.fillSelect('cfg-chunking-preset', this.chunkingPresets, this.config.chunking_preset);
+    // v5.2c (D 方案): harness / 重写 双轨配置 — 4 新控件
+    this.fillSelect('cfg-chunking-preset-harness', this.chunkingPresets, this.config.chunking_preset_harness);
+    this.fillSelect('cfg-chunking-preset-rewrite', this.chunkingPresets, this.config.chunking_preset_rewrite);
+    this.setVal('cfg-harness-request-timeout', this.config.harness_request_timeout);
+    this.setVal('cfg-rewrite-request-timeout', this.config.rewrite_request_timeout);
+    // v5.2c: 段控件 active 重算 + mode-dependent 灰显 (M-2 修: 只读)
+    this._updateModeSegment();
 
     // 填充字段
     this.setVal('cfg-api-base', this.config.api_base);
@@ -2051,6 +2100,11 @@ const App = {
       max_retries:        this._clampNum(this.getVal('cfg-max-retries'), 3, 0, 10, true),
       timeout:            this._clampNum(this.getVal('cfg-timeout'), 120, 10, 300, true),
       chunking_preset:    this.getVal('cfg-chunking-preset'),
+      // v5.2c (D 方案): harness / 重写 双轨配置 — 4 新字段 (M-5 修: 显式模板)
+      chunking_preset_harness: this.getVal('cfg-chunking-preset-harness') || 'large',
+      chunking_preset_rewrite:  this.getVal('cfg-chunking-preset-rewrite') || 'balanced',
+      harness_request_timeout:  this._clampNum(this.getVal('cfg-harness-request-timeout'), 180, 60, 600, true),
+      rewrite_request_timeout:  this._clampNum(this.getVal('cfg-rewrite-request-timeout'), 120, 60, 600, true),
       context_max_chars:  this._clampNum(this.getVal('cfg-context-max-chars'), 800, 200, 2000, true),
       context_max_chunks: this._clampNum(this.getVal('cfg-context-max-chunks'), 2, 1, 5, true),
       custom_prompt:      this.getVal('cfg-custom-prompt'),
