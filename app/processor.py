@@ -361,7 +361,7 @@ class ProcessingEngine:
             self._client = AsyncOpenAI(
                 base_url=self.config.api_base,
                 api_key=self.config.api_key,
-                timeout=self.config.timeout,
+                timeout=self._effective_timeout(),  # v5.2c: 双轨 timeout 派生
                 max_retries=0,
             )
 
@@ -471,8 +471,8 @@ class ProcessingEngine:
         prompt_hash = getattr(self, "_current_prompt_hash", "")
         self._log(f"[处理中] {task.file_path.name} ({len(text)} 字符)")
 
-        # 选 chunking 档位
-        preset = self.config.chunking_preset or DEFAULT_CHUNK_PRESET
+        # 选 chunking 档位 (v5.2c: 双轨派生 — harness 模式走大块, 重写模式走原档)
+        preset = self._effective_chunk_preset()
         if preset not in _CHUNK_PRESETS:
             preset = DEFAULT_CHUNK_PRESET
         max_chars = _CHUNK_PRESETS[preset]["max_chars"]
@@ -815,6 +815,30 @@ class ProcessingEngine:
             and self.config.prompt_mode in ("strict", "polish")
         )
 
+    def _effective_chunk_preset(self) -> str:
+        """v5.2c (D 方案): 派生实际生效的 chunking 档.
+
+        - harness 模式 → chunking_preset_harness (默认 "large")
+        - 重写模式 → chunking_preset_rewrite (默认 "balanced")
+        字段缺失时走 getattr 兜底, 不抛异常.
+        调用方 (L475 + L1021) 共用本 helper, 确保两处派生结果一致.
+        """
+        if self._harness_active():
+            return getattr(self.config, "chunking_preset_harness", "large")
+        return getattr(self.config, "chunking_preset_rewrite", "balanced")
+
+    def _effective_timeout(self) -> int:
+        """v5.2c (D 方案): 派生实际生效的 request timeout (秒).
+
+        - harness 模式 → harness_request_timeout (默认 180, 3 分钟)
+        - 重写模式 → rewrite_request_timeout (默认 120, 2 分钟)
+        字段缺失时走 getattr 兜底, 不抛异常.
+        调用方 (L364) 共用本 helper, 与 _effective_chunk_preset 配套.
+        """
+        if self._harness_active():
+            return int(getattr(self.config, "harness_request_timeout", 180))
+        return int(getattr(self.config, "rewrite_request_timeout", 120))
+
     async def _harness_call(
         self,
         task_key: str,
@@ -1017,8 +1041,8 @@ class ProcessingEngine:
             self._log("[清洗] Markdown 清洗完成 (整文件, 未调用 LLM)")
             return cleaned, 0, [FileResult(original=text, corrected=cleaned)]
 
-        # Phase 1: 按 chunking 预设决定 max_chars
-        preset = self.config.chunking_preset or DEFAULT_CHUNK_PRESET
+        # Phase 1: 按 chunking 预设决定 max_chars (v5.2c: 双轨派生 — 与 _stream_single L475 同源)
+        preset = self._effective_chunk_preset()
         if preset not in _CHUNK_PRESETS:
             preset = DEFAULT_CHUNK_PRESET
         max_chars = _CHUNK_PRESETS[preset]["max_chars"]

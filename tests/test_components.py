@@ -60,7 +60,7 @@ def test_utils():
     d = c.to_dict()
     c2 = ProjectConfig.from_dict(d)
     check("ProjectConfig 往返完整", c == c2)
-    check("ProjectConfig 包含所有字段", len(d) == 27)  # ...v4.4.2: + md_strip_before_llm; v5.0.2: + deai_strip_after/deai_ai_score/deai_revise; v5.1.0: + harness_enabled
+    check("ProjectConfig 包含所有字段", len(d) == 31)  # v5.1.0: + harness_enabled; v5.2c (D 方案): + chunking_preset_harness/rewrite + harness/rewrite_request_timeout (4 字段)
 
     # ProjectConfig 边界值
     c_empty = ProjectConfig()

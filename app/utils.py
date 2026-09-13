@@ -84,6 +84,10 @@ def compute_prompt_hash(
     punct_dash_tilde: bool = True,
     md_strip: bool = False,
     harness_enabled: bool = True,
+    chunking_preset_harness: str = "large",
+    chunking_preset_rewrite: str = "balanced",
+    harness_request_timeout: int = 180,
+    rewrite_request_timeout: int = 120,
 ) -> str:
     """计算 prompt/生成配置指纹 — 断点缓存随配置变化而失效。
 
@@ -97,6 +101,9 @@ def compute_prompt_hash(
 
     v5.1.0: 补纳 harness_enabled — harness 开关改变 LLM 的输出形态
     (整篇全文 vs edit_text 工具调用), 开关切换后旧断点必须失效。
+
+    v5.2c (D 方案): 补纳 4 字段 — chunking_preset_harness/rewrite + harness/rewrite_request_timeout.
+    字段集与 ProjectConfig 严格同步, 切换会使旧断点一次性失效 (与 |he= 同质).
     """
     raw = (
         f"{prompt_mode}|{model}|{custom_prompt}"
@@ -110,6 +117,9 @@ def compute_prompt_hash(
         f"|ms={md_strip}"
         # v5.1.0: harness 开关纳入 (输出形态改变; 与 md_strip 同失效语义)
         f"|he={harness_enabled}"
+        # v5.2c (D 方案): 双轨配置纳入 — 字段集与 ProjectConfig 严格同步
+        f"|hchunk={chunking_preset_harness}|wchunk={chunking_preset_rewrite}"
+        f"|hto={harness_request_timeout}|wto={rewrite_request_timeout}"
     ).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()[:16]
 
@@ -119,7 +129,10 @@ def compute_prompt_hash_for_config(cfg: "ProjectConfig") -> str:
 
     生产调用方 (processor) 与测试统一走这里 — 字段集与 compute_prompt_hash
     严格同步且相邻可见, 杜绝"部分传参靠默认值碰巧匹配"的缓存屏障虚标
-    (旧 3 处测试只传 8/14 字段, 任何默认值漂移都会静默破坏屏障)."""
+    (旧 3 处测试只传 8/14 字段, 任何默认值漂移都会静默破坏屏障).
+
+    v5.2c (D 方案): 4 新字段 chunking_preset_harness/rewrite + harness/rewrite_request_timeout
+    一并传入, 与 compute_prompt_hash 严格同步."""
     return compute_prompt_hash(
         cfg.prompt_mode, cfg.model, cfg.custom_prompt,
         chunking_preset=cfg.chunking_preset,
@@ -134,6 +147,10 @@ def compute_prompt_hash_for_config(cfg: "ProjectConfig") -> str:
         punct_dash_tilde=cfg.punct_dash_tilde,
         md_strip=cfg.md_strip_before_llm,
         harness_enabled=cfg.harness_enabled,
+        chunking_preset_harness=cfg.chunking_preset_harness,
+        chunking_preset_rewrite=cfg.chunking_preset_rewrite,
+        harness_request_timeout=cfg.harness_request_timeout,
+        rewrite_request_timeout=cfg.rewrite_request_timeout,
     )
 
 
@@ -308,6 +325,13 @@ class ProjectConfig:
     # True 时 strict/polish 走 Edit 工具链 (LLM 返回编辑建议, 客户端 apply),
     # 纳入 compute_prompt_hash (|he=) — 切换开关会使旧断点一次性失效。
     harness_enabled: bool = True
+    # v5.2c: harness / 重写 双轨配置 (D 方案) — 解决 harness 模式 APITimeoutError
+    # 反复触发整文件重试链的问题. harness 模式慢 2-5x 故 chunk 大 + timeout 长;
+    # 整篇重写走用户原配置. 字段数 27→31. 与 v5.1.0 |he= 同质, 老断点一次性失效.
+    chunking_preset_harness: str = "large"        # harness 模式专用分块档 (默认 6000)
+    chunking_preset_rewrite: str = "balanced"     # 整篇重写模式分块档 (默认 3000, 含原 chunking_preset 兼容迁移)
+    harness_request_timeout: int = 180            # harness 模式 timeout (秒, 3 分钟)
+    rewrite_request_timeout: int = 120            # 整篇重写 timeout (秒, 沿用原 timeout)
 
     def to_dict(self) -> dict:
         return {
@@ -338,6 +362,11 @@ class ProjectConfig:
             "deai_ai_score": self.deai_ai_score,
             "deai_revise": self.deai_revise,
             "harness_enabled": self.harness_enabled,
+            # v5.2c: harness / 重写 双轨配置 (D 方案) — 4 新字段
+            "chunking_preset_harness": self.chunking_preset_harness,
+            "chunking_preset_rewrite": self.chunking_preset_rewrite,
+            "harness_request_timeout": self.harness_request_timeout,
+            "rewrite_request_timeout": self.rewrite_request_timeout,
         }
 
     @classmethod
@@ -370,6 +399,12 @@ class ProjectConfig:
             deai_ai_score=bool(d.get("deai_ai_score", True)),
             deai_revise=bool(d.get("deai_revise", False)),
             harness_enabled=bool(d.get("harness_enabled", True)),
+            # v5.2c: harness / 重写 双轨配置 (D 方案) — 4 新字段
+            # 老字段 chunking_preset / timeout 保留为兜底来源 (C-3 修法: DeAI 视图不失效)
+            chunking_preset_harness=d.get("chunking_preset_harness", "large"),
+            chunking_preset_rewrite=d.get("chunking_preset_rewrite") or d.get("chunking_preset") or "balanced",
+            harness_request_timeout=int(d.get("harness_request_timeout", 180)),
+            rewrite_request_timeout=int(d.get("rewrite_request_timeout") or d.get("timeout") or 120),
         )
 
 

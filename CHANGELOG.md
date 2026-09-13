@@ -46,6 +46,65 @@
 
 ---
 
+## v5.2c (2026-09-13) — 校对流程 harness / 重写 双轨配置 (D 方案)
+
+**依据**: `.workbuddy/plan-v5.2c-harness-split.md` v2 (Critical 修复版, 经独立 verifier 审核 5 Critical + 5 Major + 7 Minor + 7 Missing 全部消化) + 用户反馈 "CHANGELOG.md 校对 harness 模式 APITimeoutError 反复触发整文件重试链"。
+
+**核心**: 解决 harness 模式慢 2-5x 导致 APITimeoutError 反复触发整文件重试链的问题。harness 模式走更大 chunk (`large=6000`) + 更长 timeout (180s/3 分钟), 整篇重写走原配置 (`balanced=3000` + 120s)。
+
+### Phase A: 后端核心 (字段 + 引擎 + hash)
+
+- **ProjectConfig 字段 27→31** (`app/utils.py:310-315` 加 4 字段, `to_dict` / `from_dict` 同步):
+  - `chunking_preset_harness: str = "large"` (harness 模式专用分块档, 默认 6000)
+  - `chunking_preset_rewrite: str = "balanced"` (整篇重写分块档, 默认 3000, 含原 `chunking_preset` 兼容迁移值)
+  - `harness_request_timeout: int = 180` (harness 模式 timeout, 3 分钟)
+  - `rewrite_request_timeout: int = 120` (整篇重写 timeout, 沿用原 `timeout` 字段值)
+- **兼容保留**: 老 `chunking_preset` / `timeout` 字段保留, `from_dict` 时作为新字段兜底来源 (老 `chunking_preset="fast"` → `chunking_preset_rewrite="fast"`, harness 字段走默认不被覆盖), `to_dict` 全部 31 字段都写
+- **引擎 helper** (`app/processor.py:818-843`): 2 个新方法 `_effective_chunk_preset` + `_effective_timeout`, 派生实际生效值 (harness 模式走新字段, 重写模式走新字段, 字段缺失时走 `getattr` 兜底)
+- **引擎 3 处改用 helper** (v1 漏改 L1021, 修法=helper 抽象, 两处共用):
+  - L364: `timeout=self.config.timeout` → `timeout=self._effective_timeout()`
+  - L475 (`_stream_single`): `preset = self.config.chunking_preset` → `preset = self._effective_chunk_preset()`
+  - L1021 (`_call_api_stream`): 同 L475
+- **compute_prompt_hash 4 字段** (`app/utils.py:101-110`): 加 `|hchunk= |wchunk= |hto= |wto=`, `compute_prompt_hash_for_config` 同步加 4 字段, 老断点一次性失效 (与 v5.1.0 `|he=` 同质, **属预期**)
+- **web_backend.py:set_config** (X-4 修): 老字段写时自动同步给新字段 (`chunking_preset` → `chunking_preset_rewrite`, `timeout` → `rewrite_request_timeout`), 老 API 客户端兼容
+
+### Phase B: 前端 (段控件 + 双轨配置 UI)
+
+- **index.html 校对参数页** "长文本分块" 卡片 (L340-353 改): 段控件 (复用现有 `.theme-switcher` 类, 只读 disabled, 改 prompt_mode / harness_enabled 切换) + 4 个新控件 (`cfg-chunking-preset-harness` / `cfg-chunking-preset-rewrite` / `cfg-harness-request-timeout` / `cfg-rewrite-request-timeout`) + 兼容字段 `<details>` 折叠 (`cfg-chunking-preset` / `cfg-timeout` 标 `data-scope="deai"`, DeAI 视图专用)
+- **app.js `renderSettings`** (L480 后加): 4 个新控件填充 + `_updateModeSegment()` 调用
+- **app.js `_updateModeSegment`** (新方法): 段控件 active 重算 + `.mode-dependent` 灰显, 监听 `cfg-prompt-mode` / `cfg-harness-enabled` 变化
+- **app.js `_effectiveChunkPreset`** (新方法): 派生实际生效 chunking 档 (前端版, 与 engine `_effective_chunk_preset` 同步)
+- **app.js `bindCompatFields`** (新方法): DeAI 字段改时同步给 rewrite 字段 (M-3 修法)
+- **app.js `renderChunkingDisplay`** (L414 改): 主页 chunking 显示读 `_effectiveChunkPreset()` (避免 UI 与引擎不一致)
+- **app.js `_collectAllConfig`** (L2053 后加): 4 新字段写 (M-5 修: 显式模板, `_clampNum(..., 60, 600, true)` 钳制 timeout 60-600s)
+- **app.js `init()`** (L101 加): `this.bindCompatFields()` 调用
+- **token 复用**: 段控件 + 4 控件 + 兼容字段折叠全部走现有 `--colorNeutral*` / `--space-*` / `--controlCornerRadius` token, 0 新增硬编码
+
+### 配置与缓存 (字段数 27→31)
+
+- 字段总数 27→31: `chunking_preset_harness` / `chunking_preset_rewrite` + `harness_request_timeout` / `rewrite_request_timeout`
+- 老字段 `chunking_preset` / `timeout` 保留 (DeAI 视图走), UI 仍暴露但打 `data-scope="deai"` 标记, 改时同步给新字段
+- `to_dict` 全部 31 字段都写, `from_dict` 老配置自动迁移, `schema_version=3` 不变
+- **升级提示**: 升级到 v5.2c 后首次启动会重跑所有文件 (compute_prompt_hash 加 4 字段, 老断点按设计预期失效, 与 v5.1.0 `|he=` 引入时一次性失效同质)
+
+### 借鉴合规
+
+- 0 新增借鉴 (字段 + UI 改造, 无新依赖)
+- AGENTS §36 harness 决策保持 + §37 新增双轨决策 (本次 17 → §37 改为 §37, 新加 §38 在 v5.2c 段后, 见 commit 2 文档)
+- 段控件复用现有 `.theme-switcher` CSS 类 (style.css:1158-1183, 3 态主题切换同源)
+- 0 字段 + 2 timeout 是 ProjectConfig 内部扩展, 不涉及第三方
+
+### 测试
+
+- 新增 `tests/test_harness_split.py` (25 项): 字段默认值 (3) / from_dict 老配置迁移 (2) / from_dict 新配置 (1) / to_dict 31 字段 (1) / compute_prompt_hash 4 字段 (5) / 引擎 helper `_effective_chunk_preset` (2) / `_effective_timeout` (2) / `_harness_active` (5) / 字段缺失兜底 (2) / 跨模式 hash 变化 (2)
+- `tests/test_components.py:63` 字段计数 27→31 (1 处)
+- `tests/test_web_backend_deai.py:1173` 字段计数 27→31 (1 处)
+- `tests/test_harness.py:519` 修 1 处: `chunking_preset="fast"` → `chunking_preset_harness="fast"` (测试目的是 harness 模式多 chunk, 必须用新字段)
+- **全量基线 17 套件全绿, 0 失败** (基线 1335 → 实际 ~1409+)
+- 立即可解决 CHANGELOG.md 校对失败: harness 模式自动用 large(6000) + 180s timeout, 22 块 → 11 块, timeout 触发概率减半, **重启主程序即可**
+
+---
+
 ## v5.0.2 (2026-09-07) — DeAI 后置三件套: strip 后置 + 本地评分 + revise
 
 **依据**: `.workbuddy/research/verifier-plan-v5.0.1.md` 独立审核报告的最终裁定 (§8 P0/P1 经 parent 复核修正后实施)。全部为去 AI 味 rewrite 步的**后置处理**, 校对链路 0 改动。

@@ -516,7 +516,9 @@ def test_engine_harness_chunked_audit_merge():
         ]),
     ])
     cfg = ProjectConfig(api_base="http://x", api_key="k", model="m",
-                        prompt_mode="strict", chunking_preset="fast", max_retries=0)
+                        prompt_mode="strict",
+                        chunking_preset_harness="fast",  # v5.2c (D 方案): 测试目的是 harness 模式多 chunk, 用 chunking_preset_harness 派生
+                        max_retries=0)
     engine, done, key = _run_engine(cfg, text, client)
     task = engine.tasks[key]
     check("完成", task.status == TaskStatus.COMPLETED, str(task.status))
