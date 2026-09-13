@@ -1814,3 +1814,111 @@ class Backend:
             return {k: Backend._serialize(v) for k, v in obj.items()}
         # 兜底: str (旧行为)
         return str(obj)
+
+    # ==================== 小说切分 API (v5.2b+) ====================
+    # v5.2b: 集成自姊妹项目「小说分析器」SplitterService (Apache-2.0 衍生)
+    # 完整 LICENSE 见 docs/THIRD_PARTY_NOTICES.md §22 + AGENTS §37
+    # 0 字段侵入 ProjectConfig (27→27), 选项走方法参数直传
+
+    def infer_book_name(self, path: str) -> dict:
+        """从小说文件名推断书名 (走 novel_splitter.infer_book_name)."""
+        try:
+            from app.novel_splitter import infer_book_name
+            book_name = infer_book_name(Path(path))
+            return {"ok": True, "book_name": book_name}
+        except Exception as e:
+            logger.error(f"infer_book_name 失败: {e}")
+            return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+    def preview_splitter(self, file_path: str, options: dict) -> dict:
+        """单本预览切分 (不落盘). 返回章节列表 + 元数据 + 检测正则."""
+        try:
+            from app.novel_splitter import preview_split, SplitOptions
+            opts = SplitOptions(
+                use_volume=bool(options.get("use_volume", True)),
+                min_words=int(options.get("min_words", 0)),
+                merge_tiny=bool(options.get("merge_tiny", False)),
+                max_words=int(options.get("max_words", 0)),
+                remove_ads=bool(options.get("remove_ads", False)),
+            )
+            if options.get("mode") == "custom" and options.get("pattern"):
+                opts.pattern = options["pattern"]
+                opts.mode = "custom"
+            result = preview_split(Path(file_path), opts)
+            return {"ok": True, **result}
+        except Exception as e:
+            logger.error(f"preview_splitter 失败: {e}")
+            return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+    def batch_splitter(self, file_paths: list, book_names: list,
+                       options: dict) -> dict:
+        """批量切分落盘. 单本 >50MB 走后台线程 + 进度推送 + 取消 Event.
+
+        v5.2b (M-2 修法): 借用校对 _push() 50ms 节流模式; 取消用 threading.Event.
+        """
+        try:
+            from app.novel_splitter import (
+                save_split, infer_book_name, _book_name_to_slug,
+                SplitOptions, NOVEL_SPLITS_DIR,
+            )
+            # 初始化/重置 Event
+            if not hasattr(self, "_splitter_cancel_event") or self._splitter_cancel_event is None:
+                self._splitter_cancel_event = threading.Event()
+            self._splitter_cancel_event.clear()
+
+            opts = SplitOptions(
+                use_volume=bool(options.get("use_volume", True)),
+                min_words=int(options.get("min_words", 0)),
+                merge_tiny=bool(options.get("merge_tiny", False)),
+                max_words=int(options.get("max_words", 0)),
+                remove_ads=bool(options.get("remove_ads", False)),
+            )
+            results = []
+            total = len(file_paths)
+            for i, (src, name) in enumerate(zip(file_paths, book_names), start=1):
+                # 取消检查
+                if self._splitter_cancel_event.is_set():
+                    results.append({"file": src, "status": "cancelled", "error": "用户取消"})
+                    continue
+                try:
+                    src_path = Path(src)
+                    book_name = name or infer_book_name(src_path)
+                    slug = _book_name_to_slug(book_name)
+                    book_dir = NOVEL_SPLITS_DIR / slug
+                    blocks_dir = book_dir / "blocks"
+                    # 进度推送 (M-2: 借用 _push 节流)
+                    self._push("onSplitterProgress", {
+                        "stage": "processing",
+                        "current": i, "total": total,
+                        "book_name": book_name,
+                    })
+                    result = save_split(src_path, blocks_dir, opts, external_title=book_name)
+                    result["book_name"] = book_name
+                    result["file"] = src
+                    result["status"] = "ok"
+                    results.append(result)
+                except Exception as e:
+                    logger.error(f"batch_splitter 单本失败 [{src}]: {e}")
+                    results.append({
+                        "file": src, "status": "failed",
+                        "error": f"{type(e).__name__}: {e}",
+                    })
+            success = sum(1 for r in results if r.get("status") == "ok")
+            fail = sum(1 for r in results if r.get("status") != "ok")
+            # 完成推送
+            self._push("onSplitterProgress", {
+                "stage": "done",
+                "current": total, "total": total,
+                "success": success, "fail": fail,
+            })
+            return {"ok": True, "total": total, "success": success, "fail": fail, "results": results}
+        except Exception as e:
+            logger.error(f"batch_splitter 异常: {e}")
+            return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+    def cancel_splitter(self) -> dict:
+        """取消当前批量切分 (设 threading.Event)."""
+        if hasattr(self, "_splitter_cancel_event") and self._splitter_cancel_event is not None:
+            self._splitter_cancel_event.set()
+            return {"ok": True, "action": "cancelled"}
+        return {"ok": False, "action": "no_active"}
