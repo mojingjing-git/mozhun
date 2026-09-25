@@ -2,7 +2,46 @@
 
 > **曾用名**: 新时代校对大师 (v3.0 — v4.4.2 期间, 2024 → 2026-09 改名为墨准)。历史 CHANGELOG 条目保留原名, 详见 README.md 与 AGENTS.md。
 >
-> 当前产品: **墨准 (MoZhun)** v5.2c — 本地标点修复 + LLM 批量校对 + 去 AI 味 + 小说切分, 支持任意 OpenAI 兼容 API。
+> 当前产品: **墨准 (MoZhun)** v5.3 — 本地标点修复 + LLM 批量校对 + 去 AI 味 + 小说切分, 支持任意 OpenAI 兼容 API。
+
+## v5.3.0 (2026-09-26) — 工作流双入口: 逐条校对 / 整篇校对
+
+**依据**: `docs/PLAN-workflow-split-v5.3.md`（含一轮独立审核的 6 个阻塞项 B1-B6 修订与 §12 执行记录）。
+
+### 侧边栏三分组 + 双入口
+- 侧边栏改为 **工作区 / 工具 / 设置** 三组：工作区 = 逐条校对 + 整篇校对 + 重写 › 去 AI 味（父子项）；工具 = 风格库 + 小说切分；设置 = API 接口 + 校对参数 + 外观与关于
+- 「逐条校对 / 整篇校对」共用 `view-home`，靠 `data-workflow` 区分运行轨；激活态改用唯一 `data-nav-key`（旧的 `[data-view="home"]` 只会命中第一个）
+- 「重写」父项本身可点击进入去 AI 味，展开箭头是**独立 button**（不嵌套），`aria-expanded` 双向维护；`Ctrl+.` 进 DeAI 时父项自动展开
+- 7 个视图 id 与顺序零改动；校对参数页的「启用 Edit 工具链」复选框移除，改由入口决定；段控件改为「当前入口」只读显示
+- 启动按 `config.workflow_mode` 恢复入口（老配置为空 → 按 v5.2c 旧逻辑派生，行为不变）
+
+### 引擎与配置
+- `ProjectConfig.workflow_mode: str = ""`（字段数 31→32；**空 = 未显式指定**，按 `harness_enabled 且 prompt_mode ∈ {strict, polish}` 派生）；派生单点 = `app/utils.py:effective_workflow()`，引擎 / payload / 导出名 / 断点指纹全部共用
+- `compute_prompt_hash` 加 `|wm=`（传 effective 值，显式与派生等价）；切入口 → 另一轨断点不命中 → 重跑覆盖（单结果槽已知取舍，双结果槽列 Phase 2）
+- `set_config` 单向兼容镜像：写 `workflow_mode` → 同步 `harness_enabled`；写 `harness_enabled`（老客户端）→ 推出 workflow；反向不回写；非法值返回 `{ok:false}`；两个 timeout 补后端钳制 60-600
+- 逐条入口下 prompt 模式下拉按白名单过滤；历史配置若停在白名单外（tech_doc / custom），引擎按整篇行为执行并在页头明示——不静默降级、也不改写用户的 prompt 模式
+
+### `extra_large = 50000`（逐条校对专属）
+- 新增第 6 档分块预设 `extra_large`（50000 字符），`tracks=["harness"]`；`get_chunking_presets(track)` 按轨过滤，只有逐条入口的下拉能看到它
+- 取档单点 helper `resolve_chunk_preset(cfg, workflow)`：越轨 / 未知档回退 `large` 并记日志；引擎、DeAI、风格蒸馏全部改走它（含两个新 timeout 的 `resolve_request_timeout`）
+- **依据**: 用户烟测确认 harness 单块 **50000 字符可用**、**10 万档才出现失误** → 50000 定为设计上限正式档。烟测的模型与耗时未逐项留档，日后补到数据再回填本节
+
+### 数据安全与告警
+- **断点保护 (D9)**: `save_checkpoint(_async)` 新增 `preserve_done`，失败 / 取消收尾不再覆盖磁盘上已完成的结果；副作用（普通「开始」会命中断点秒完成）由既有的**强制重跑出口**兜住——右键「重新校对（忽略缓存）」+ 结果来源提示条按钮，均传 `force_rerun=True`
+- **截断检测 (D8)**: 捕获 `finish_reason == "length"` → 结果带截断告警（不再静默当完整结果）
+- **整文件告警阈值 20000**: 「整篇校对」入口 + 整文件档 + 单文件超 20000 字时先弹确认（与去 AI 味的整文件兜底阈值一致）；字数走新增只读接口 `get_file_char_counts`（只回长度不回正文）。逐条轨不查该阈值——它有 50000 正式档
+
+### 结果来源可追溯（单结果槽的诚实告知）
+- payload（`_file_done_payload` / `_collect_results`）带 `workflow`；前端 `t.workflow` **只在成功完成时写入**，失败 / 取消保留上一轨好结果的来源
+- 文件行「逐条 / 整篇」来源徽标（来源不等于当前入口时标黄）+ 结果区提示条「此结果来自 X，当前入口是 Y」+ 一键强制重跑
+- 覆盖前确认：批量开始与右键单文件重跑两条路径都会提示「本次将覆盖 N 个文件在另一入口的结果」
+- 缓存命中提示分两种口径（本轨命中 / 命中的是另一轨遗留结果）；导出默认名带 `-逐条` / `-整篇`，避免两个入口同秒撞名
+- 去 AI 味联动（`→ 去AI味`）在页内标注来源入口，`_deaiChunkEstimate` 改读 rewrite 轨
+
+### 测试与工具
+- 全量回归 **1446 通过 / 0 失败**（基线 1343 → 新增 workflow 派生 / 按轨取档 / 断点保护 / 截断 / 导航静态断言等）
+- 新增 `tools/smoke_ui.py`：Playwright 三视口（1440×900 / 1280×720 / 1000×760）UI 冒烟——静态托管 `web/` + 桩注入 `window.pywebview.api`，断言侧边栏 200px 不被挤压、导航项单行不重叠、工作区两栏不重叠、双入口标题与父项展开正确，并输出截图到 `.local/smoke-ui-v5.3/`（70 项断言全绿）
+- 该冒烟在实机截图里抓到并修掉一个真实缺陷：`.provenance-bar{display:flex}` 会盖掉 UA 的 `[hidden]{display:none}`，导致空提示条占位
 
 ## v5.2 UI 收口 (2026-09-26) — 校对与结果对比合并为单页
 

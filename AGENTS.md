@@ -15,15 +15,16 @@
 ```
 main.py (webview.start)
 ├── webview.create_window(js_api=Backend)
-│   └── 加载 web/index.html (7 视图 SPA: 校对与对比/去AI味/风格库/小说切分/API接口/校对参数/外观关于)
-│       ├── 校对与对比  (文件列表 / 进度 / 原文 / diff / 流式)
-│       ├── 去AI味/风格库  (3 步工作流 + Step 0 Profile 管理)
-│       └── API接口/校对参数/外观关于  (.content-narrow 窄栏设置组)
+│   └── 加载 web/index.html (7 视图 SPA; v5.3.0 三维导航: 工作区/工具/设置)
+│       ├── 工作区 逐条校对 / 整篇校对 (共用 view-home: 文件列表 / 进度 / 原文 / diff / 流式 / 结果对比)
+│       ├── 工作区 重写 › 去AI味 (父子项, 3 步工作流 + Step 0 Profile 管理)
+│       ├── 工具 风格库 / 小说切分
+│       └── 设置 API接口/校对参数/外观关于  (.content-narrow 窄栏设置组)
 └── Backend (app/web_backend.py)
     ├── window.pywebview.api.xxx ← JS 调用入口
     ├── 校对任务: threading.Thread + asyncio.new_event_loop
     │   ├── ProcessingEngine.run_async() (v3.0 保留)
-    │   ├── Chunker (5 档分块)
+    │   ├── Chunker (6 档分块; v5.3.0 起 extra_large=50000 仅逐条轨)
     │   ├── ContextBuilder (跨段 prefix 注入)
     │   └── _stream_single() × N chunks (串行)
     ├── DeAI 3 步工作流 (Phase 3): 独立 AsyncOpenAI + 流式推送
@@ -104,8 +105,25 @@ main.py (webview.start)
 ### v5.2c 新增（校对流程 harness / 重写 双轨配置: D 方案）
 37. **harness / 重写 双轨配置设计** (v5.2c+): 解决 harness 模式 APITimeoutError 反复触发整文件重试链的问题。**字段数 27→31** (ProjectConfig 加 4 字段: `chunking_preset_harness` / `chunking_preset_rewrite` / `harness_request_timeout` / `rewrite_request_timeout`)。`harness` 模式慢 2-5x 故 chunk 大 (默认 `large=6000`) + timeout 长 (默认 180s/3 分钟); `重写`模式走用户原配置 (默认 `balanced=3000` + 120s)。**引擎派生 2 helper 共用** (`processor.py` `_effective_chunk_preset` / `_effective_timeout`, 在 `_stream_single` L475 + `_call_api_stream` L1021 **两处共用** helper, 避免派生不一致, 与 v1 漏改 L1021 教训一致)。**前端段控件** (复用现有 `.theme-switcher` 类, 3 态主题切换同源) 只读, active 高亮 + 另一档灰显, 监听 `cfg-prompt-mode` / `cfg-harness-enabled` 变化重算。**兼容字段保留**: 老 `chunking_preset` / `timeout` 字段保留为 DeAI 视图专用 (DeAI 视图走 `web_backend.py:937` 读 `self._config.chunking_preset`), 改时同步给新字段 (M-3 修法); from_dict 时作为新字段兜底来源 (老 `chunking_preset="fast"` → `chunking_preset_rewrite="fast"`, harness 字段走默认不被覆盖)。**compute_prompt_hash 纳 4 字段** `|hchunk= |wchunk= |hto= |wto=`, 老断点一次性失效 (与 v5.1.0 `|he=` 同质, **属预期**)。**前端 `home-chunking-display`** 反映实际生效值 (避免 UI 与引擎不一致)。`web_backend.py:set_config` 老字段写时自动同步给新字段 (X-4 修: 老 API 客户端兼容)。0 字段 + 2 timeout 是 ProjectConfig 内部扩展, 不涉及第三方借鉴。
 
+> **v5.3.0 更正 — §37 末尾两处表述作废**:
+> ① `web_backend.py:set_config` **没有**"老字段写时自动同步给新字段" — 老 `chunking_preset` / `timeout` → 新 rewrite 字段的同步只发生在前端 `App.bindCompatFields()` (change 事件写同值), 后端仅在 `from_dict` 时把老字段当兜底来源。
+> ② 段控件不再是 `cfg-prompt-mode` / `cfg-harness-enabled` 的派生结果 — `cfg-harness-enabled` 复选框已随 v5.3.0 移除, 段控件与两轨配置行的显隐改由**入口** (`App.workspaceTrack`) 单点决定, 详见 §39 / §45。
+
 ### v5.2 UI 收口新增（校对与结果对比单页）
 38. **校对与结果对比合并** (v5.2 UI 收口+): 删除独立 `view-results` 与侧栏「结果对比」项; `view-home` 改为左侧 `workspace-column` (文件 + 运行状态) + 右侧常驻 `compare-card` (原文 / 校对结果 / 改动清单)。点击文件只调用 `selectFile()` 切换右侧结果, 不再 `setView('results')`; 既有 `compare-original` / `compare-revised` / `result-file-select` / 复制导出按钮等 ID 不变, JS 绑定与后端 Bridge 零改动。窄于 1100px 时单列纵向滚动, 避免对比栏过窄。
+
+### v5.3.0 新增（工作流双入口 + 50K 档位 + 断点保护）
+39. **工作流 (workflow) 一等身份** (v5.3.0+): 侧边栏「工作区」拆出两个共用 `view-home` 的入口 —— **逐条校对** (`data-workflow=harness`, 走 Edit 工具链) 与 **整篇校对** (`data-workflow=rewrite`, 模型重写全文); 「重写 › 去 AI 味」为父子项 (父项可点击进入, 展开箭头是**独立 button**, 不嵌套); 风格库/小说切分移入新的 **工具** 组。7 个视图 id (`home/deai/styles/splitter/api/params/appearance`) 与顺序零改动。
+   - **唯一真值**: `ProjectConfig.workflow_mode: str = ""` (字段数 31→32, **空 = 未显式指定**, 按 v5.2c 旧逻辑派生 `harness_enabled 且 prompt_mode ∈ {strict, polish}`)。派生只允许走 `app/utils.py:effective_workflow()` 这一个入口 (引擎 / payload / 导出名 / hash 全用它); `derive_workflow()` 是它内部的兼容分支。
+   - **激活态必须用唯一 `data-nav-key`**: 两个入口共用 `data-view=home`, 旧的 `[data-view="home"]` querySelector 只会命中第一个; 切换入口经 `App.setWorkspaceTrack()` 落盘 `workflow_mode`。
+   - **`compute_prompt_hash` 加 `|wm=`**, 传 **effective 值** (显式 harness 与派生 harness 等价, 避免无谓失效); 切入口 → 另一轨断点不命中 → 重跑覆盖 (单结果槽已知取舍, 双结果槽延后到 Phase 2)。
+40. **`extra_large = 50000` 逐条轨专属档**: `CHUNKING_PRESETS` 每档带 `tracks` 元数据, `extra_large` 标 `["harness"]`。取档单点 helper = `resolve_chunk_preset(cfg, workflow)` (配套 `resolve_request_timeout`), 越轨/未知档回退 `large` 并记日志 — 引擎、DeAI、蒸馏全部走它, **禁止**再写第二套派生。依据: 用户烟测确认 harness 单块 50000 字符可用、10 万档才失误 (模型/耗时未逐项留档)。
+41. **结果来源可追溯**: `_file_done_payload` / `_collect_results` 带 `workflow`; 前端 `t.workflow` **只在 `status === 'completed'` 时写入** (失败/取消保留上一轨好结果的来源); 文件行徽标、结果区提示条、导出默认名 (`-逐条` / `-整篇`) 全部取**结果自带**的来源, 不取当前导航状态。来源不一致时给提示条 + 「忽略缓存重跑」按钮。
+42. **断点保护 (D9) + 强制重跑出口**: `save_checkpoint(_async)` 新增 `preserve_done`; 失败/取消收尾传 `True` (不覆盖磁盘上已完成的结果), 成功写点仍可覆盖。副作用: 普通「开始」会命中断点秒完成 — 必须保留 `force_rerun=True` 出口 (右键「重新校对（忽略缓存）」+ 结果来源提示条按钮走 `_rerunSingleFile`, 且 `_rerunSingleFile` 的 `confirmOverride: false` 只跳过二次确认, 不跳过强制重跑)。
+43. **截断检测 (D8)**: `_stream_single` 捕获 `finish_reason == "length"` → 记入 `engine.truncated_keys` → 成功路径把 `FileResult.warnings` 置 True, 前端显示「完成（部分建议未采纳）」同款告警位。
+44. **整文件告警阈值 20000**: 仅「整篇校对」入口 + `whole_file` 档 + 单文件 > 20000 字时先弹确认 (与 `_DEAI_WHOLE_FILE_LIMIT` 对齐); 字数走 `web_backend.get_file_char_counts()` 只回长度不回正文。逐条轨**不查**该阈值 —— 它有 `extra_large=50000` 正式档, 用 20000 告警会自相矛盾。
+45. **`set_config` 单向兼容镜像**: 写 `workflow_mode` → 同步 `harness_enabled` (仅供展示/老客户端读); 写 `harness_enabled` (老 API 客户端) → 推出 `workflow_mode`; **反向不回写**。前端 `_collectAllConfig` 已移除 `harness_enabled` 字段 (否则每次保存都会把轨道翻回去)。非法 `workflow_mode` 返回 `{ok:false}`。
+46. **UI 冒烟入库**: `tools/smoke_ui.py` (Playwright, 三视口 1440/1280/1000) 静态托管 `web/` + 桩注入 `window.pywebview.api`, 断言侧边栏 200px 不被挤压、导航项单行不重叠、工作区两栏不重叠、双入口标题/高亮/父项展开正确, 并输出截图到 `.local/smoke-ui-v5.3/`。改侧边栏/布局后必须重跑。
 
 ## 文件命名
 
@@ -124,7 +142,9 @@ main.py (webview.start)
   - v4.4.2+ 测试: `test_md_strip.py`（Markdown 清洗全规则回归，含幂等双跑/围栏保护/引擎 md_local 分支端到端/空结果兜底）
   - v5.0.2+ 测试: `test_ai_score.py`（客户端 AI 味评分回归，含权重和=100/各维命中/幂等/offenders 截断/空文本）
   - v5.1.0+ 测试: `test_harness.py`（harness Edit 工具链回归，含 12 边界逐条/\r\n 归一/≤50 cap/引擎端到端 strict/polish/custom/harness_enabled=False/全失败 FAILED/warnings 置位/多 chunk audit 合并）
+- v5.3.0+ 测试: `tests/test_harness_split.py`（workflow 派生/矩阵/按轨取档/字段数 32）+ `tests/test_web_backend_deai.py` 的 `test_v530_workflow_nav` / `test_v530_provenance_static`（导航 DOM + 来源标注静态断言）+ `tests/test_web_backend_files.py::test_v530_get_file_char_counts`
 - 一键跑: `run_all_tests.py`
+- UI 冒烟: `tools/smoke_ui.py`（v5.3.0+, Playwright 三视口; 改侧边栏/布局后必跑, 截图落 `.local/smoke-ui-v5.3/`）
 - 无 pytest 依赖，纯脚本运行
 
 ### 借鉴来源（v3.0+ 业务层 + v4.0+ 前端层）
@@ -164,6 +184,9 @@ DeAI 后置层（3 项，v3.0/v4.1.7 起借鉴，v5.0.2 补登记 LICENSE）：
 - `AGENTS.md` — 本文件（开发约定）
 - `CHANGELOG.md` — 版本日志
 - `docs/THIRD_PARTY_NOTICES.md` — 借鉴来源 + LICENSE 全文 (§12-15: typeset/autocorrect/macro-correct/排版指北)
+- `docs/ROADMAP.md` — 路线图与跨会话待办
+- `docs/PLAN-workflow-split-v5.3.md` — v5.3.0 工作流双入口实施计划 (§12 为执行记录表, 每个 session 完成回填)
+- `docs/PLAN-splitter-v5.2b.md` — v5.2b 小说切分计划
 - `docs/archive/plans/` — 历史升级 plan 归档 (v3.0 — v4.1.7 完成态存档,见 `README.md`)
 
 ## import 顺序约定
@@ -196,6 +219,10 @@ from openai import AsyncOpenAI  # LLM
 - 不要在 `app/style_profiles/` 硬编码具体真人作家名或 jianshuo 仓库真迹链接（抽象化预置 + 致谢在 THIRD_PARTY_NOTICES）
 - 不要从借鉴项目复制代码（仅借鉴思路，所有代码自写并加注释；完整 LICENSE 在 `docs/THIRD_PARTY_NOTICES.md`）
 - 不要在 `.btn-*` / `.card` / `.deai-step` / `.nav-item` 等组件上硬编码颜色/间距/圆角/字号（v4.1.8 token 体系, 全部走 `--colorNeutral*` / `--colorBrand*` / `--space-*` / `--controlCornerRadius` / `--fontSize*` token, 改 token 即可全站调整）
+- 不要用 `[data-view="home"]` 定位导航激活项（v5.3.0 起两个校对入口共用 `data-view=home`, 必须用唯一 `data-nav-key`）
+- 不要在 `_collectAllConfig()` 里写 `harness_enabled` / `workflow_mode`（入口由 `App.setWorkspaceTrack()` 单独落盘; 混进全量保存会把轨道翻回去, 见 §45）
+- 不要为 `extra_large(50000)` 在 `resolve_chunk_preset` 之外另写第二套档位派生（越轨回退 `large` 的规则必须单点）
+- 不要在给 `.provenance-bar` 这类自带 `display` 的类上加 `hidden` 而不配套 `[hidden]{display:none}`（author 样式会盖掉 UA 规则, 空条会占位）
 - 不要放宽 `punct_fix.py` 的四条红线（纯英文上下文不动 / 落单引号只报不改 / 分号不转换 / 幂等）——调研结论是我们比同类项目更保守才安全的，放宽会引入不可逆误伤
 
 ## 借鉴合规要求（MIT / BSD / Apache-2.0 协议）

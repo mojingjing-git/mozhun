@@ -31,6 +31,8 @@ const App = {
   // v5.3.0: 当前工作区入口轨 (harness=逐条校对 / rewrite=整篇校对)
   // 与 config.workflow_mode 单向同步; 空 config 值按后端同款规则派生 (app/utils.py:derive_workflow)
   workspaceTrack: 'harness',
+  // v5.3.0: 来源提示条的上次渲染键 ('' = 当前无提示) — 避免流式期间每帧重建 DOM
+  _provenanceKey: '',
   // 500ms 防抖保存 config
   configSaveTimer: null,
   configDirty: false,
@@ -1815,7 +1817,13 @@ const App = {
     if (!bar) return;
     const t = fileKey ? this.tasks.find(x => x.path === fileKey) : null;
     const cur = this._currentTrack();
-    if (!t || t.status !== 'completed' || !t.workflow || t.workflow === cur) {
+    const mismatch = !!(t && t.status === 'completed' && t.workflow && t.workflow !== cur);
+    // 流式期间 renderCompare 每帧都会调到这里 — 内容没变就不动 DOM
+    // (否则每帧重建 innerHTML + 重绑按钮监听, 30 FPS 下纯浪费)
+    const key = mismatch ? `${t.workflow}|${cur}` : '';
+    if (key === this._provenanceKey) return;
+    this._provenanceKey = key;
+    if (!mismatch) {
       bar.hidden = true;
       bar.innerHTML = '';
       return;

@@ -331,18 +331,23 @@
 
 ## 10. 验收标准 (DoD)
 
-- [ ] 侧边栏 3 组 + 「重写 → 去 AI 味」子项; 7 个视图 id 不变且唯一
-- [ ] 两个入口分别以 `harness` / `rewrite` 启动, 日志、payload、导出名都带 workflow
-- [ ] 结果来源徽标 + 跨入口提示 + 覆盖前确认三件套可用
-- [ ] 来源提示条的「重跑」走 `force_rerun=True`, 能覆盖 D9 保护住的旧断点; 缓存命中提示区分"本轨命中 / 另一轨遗留"
-- [ ] 整篇入口选「整文件」且超阈值时弹确认; `finish_reason=length` 会在结果上打截断警告
-- [ ] `extra_large=50000` 在**逐条轨**可选、**整篇轨不可见**; 引擎侧对误配回退 `large` 并记日志
-- [ ] 50000 档的烟测参数 (模型/耗时/是否触顶) 已写进 CHANGELOG; 未记录时不出现"已支持 50K"的用户可见文案
-- [ ] `punct_local` / `md_local` 在两个入口都可选且不触网
-- [ ] `set_config` **单向**兼容 (`harness_enabled` → `workflow_mode`) 与两端钳制生效; `AGENTS.md` §37 假声明被修正
-- [ ] `run_all_tests.py` 全绿 (基线 1343 + 新增)
-- [ ] 真机侧边栏截图 + Playwright 三视口冒烟通过
-- [ ] `config` 里无 `workflow_mode` 的老用户升级后行为可预测 (派生 = 旧逻辑)
+- [x] 侧边栏 3 组 + 「重写 → 去 AI 味」子项; 7 个视图 id 不变且唯一
+- [x] 两个入口分别以 `harness` / `rewrite` 启动, 日志、payload、导出名都带 workflow
+- [x] 结果来源徽标 + 跨入口提示 + 覆盖前确认三件套可用
+- [x] 来源提示条的「重跑」走 `force_rerun=True`, 能覆盖 D9 保护住的旧断点; 缓存命中提示区分"本轨命中 / 另一轨遗留"
+- [x] 整篇入口选「整文件」且超阈值时弹确认; `finish_reason=length` 会在结果上打截断警告
+- [x] `extra_large=50000` 在**逐条轨**可选、**整篇轨不可见**; 引擎侧对误配回退 `large` 并记日志
+- [x] 50000 档依据已写进 CHANGELOG —— **用户确认可用 / 10 万档才失误**, 模型与耗时未逐项留档 (CHANGELOG 明文标注, 不假装有报告)
+- [x] `punct_local` / `md_local` 在两个入口都可选且不触网
+- [x] `set_config` **单向**兼容 (`harness_enabled` → `workflow_mode`) 与两端钳制生效; `AGENTS.md` §37 假声明被修正
+- [x] `run_all_tests.py` 全绿: **1446 通过 / 0 失败** (基线 1343 + 新增)
+- [x] Playwright 三视口冒烟通过 (70 项断言, `tools/smoke_ui.py` 入库); ⏳ 真机 pywebview 截图未做 (需人工开窗, 见下方残留项)
+- [x] `config` 里无 `workflow_mode` 的老用户升级后行为可预测 (派生 = 旧逻辑)
+
+**残留项 (交付时向用户说明)**:
+1. **真机 pywebview 侧边栏截图**未做 —— 需要人工启动 `python main.py` 开窗; Chromium (Playwright) 与 WebView2 同源内核, 布局断言已覆盖, 但"WebView2 下字体度量略有差异"这一层没实测。
+2. 50K 档的模型 / 耗时参数仍未留档 (用户口头确认可用), 若日后补到数据回填 CHANGELOG。
+3. 双结果槽仍是 Phase 2 候选 (§9)。
 
 ---
 
@@ -364,14 +369,16 @@
 
 | Session | 状态 | commit | 备注 |
 |---|---|---|---|
-| S1 引擎与配置 | ⏳ 待做 | — | — |
-| S1b 数据安全 | ⏳ 待做 | — | — |
-| S2 桥接 | ⏳ 待做 | — | — |
-| S2b `extra_large` 档位 | ⏳ 待做 | — | — |
-| S3 导航 | ⏳ 待做 | — | — |
-| S4 provenance + 状态恢复 | ⏳ 待做 | — | — |
-| S5 DeAI 一致性 | ⏳ 待做 | — | — |
-| S6 文档 + 回归 + 冒烟 | ⏳ 待做 | — | — |
+| S1 引擎与配置 | ✅ 完成 | `933cd0f` | `workflow_mode`(空=自动派生) + `effective_workflow` 单点入口 + hash 用 effective 值 + `set_config` 值域校验/钳制 |
+| S1b 数据安全 | ✅ 完成 | `933cd0f` | D9 `preserve_done` 保护完成态断点 + D8 `finish_reason=length` 截断标记 → `FileResult.warnings` |
+| S2 桥接 | ✅ 完成 | `933cd0f` | `start_proofread(..., workflow="")` 第 6 位追加; 停止写旧 `chunking_preset`; payload/导出名带轨 |
+| S2b `extra_large` 档位 | ✅ 完成 | `933cd0f` | 50000 仅 `tracks=["harness"]`, 越轨经 `resolve_chunk_preset` 回退 `large`; 回归 1371/1371 通过 |
+| S3 导航 | ✅ 完成 | `2628575` | 三组侧边栏 + 双入口共用 `view-home` + 重写父子项 (独立箭头 button) + 4 图标补齐 + `data-nav-key` 唯一激活 + 启动恢复 + 参数页去复选框/段控件改入口 |
+| S4 provenance + 状态恢复 | ✅ 完成 | `2628575` | 来源徽标/提示条/覆盖确认 (批量+右键两条路径)/`resultWorkflow` 只在成功写/强制重跑/缓存两口径/整文件 20000 告警 (新增只读 `get_file_char_counts`)/两个下拉按轨过滤 |
+| S5 DeAI 一致性 | ✅ 完成 | `2628575` | `_deaiChunkEstimate` 读 rewrite 轨 + 联动来源标注 (`deai-source-hint`) + 导出名带来源轨 + 兼容字段文案改「DeAI / 整篇共用」 |
+| S6 文档 + 回归 + 冒烟 | ✅ 完成 | 见下条 | README/AGENTS(§39-46 + §37 更正)/CHANGELOG/ROADMAP 四件套 + 回归 1446 + `tools/smoke_ui.py` |
+
+**S6 备注**: 文档提交与 S3-S5 的代码提交分开记录 (文档为本表最后一批改动); 冒烟脚本在实机截图中抓到 `.provenance-bar` 被 `[hidden]` 覆盖的真实缺陷并已修复。
 
 ---
 

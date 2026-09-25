@@ -249,6 +249,69 @@ def _run_viewport(page, page_url: str, w: int, h: int, out: Path) -> None:
     page.click('.nav-item[data-nav-key="harness"]')
 
 
+def _check_provenance(page, out: Path) -> None:
+    """端到端: 逐条结果出现在整篇入口 → 来源提示条 + 强制重跑参数 (§4-1/§4-10)。"""
+    print("\n--- 跨入口结果来源 + 强制重跑 ---", flush=True)
+    page.set_viewport_size({"width": 1440, "height": 900})
+
+    # 造一条"逐条校对已完成"的结果 (真实跑需要 API key, 这里只验 UI 契约)
+    page.evaluate("""() => {
+      App.workspaceTrack = 'harness';
+      App.tasks = [{path: '/tmp/墨准冒烟.txt', status: 'completed', original: '原文一行',
+                    corrected: '改后一行', error: '', workflow: 'harness', warnings: false}];
+      App.selectedFileKey = null;
+      App.renderFileList();
+      App.setView('home');
+      App.selectFile('/tmp/墨准冒烟.txt');
+    }""")
+    check("本轨结果不弹来源提示条",
+          page.evaluate("() => document.getElementById('result-provenance').hidden"))
+    check("本轨徽标不高亮",
+          page.evaluate("""() => {
+            const el = document.querySelector('.file-track');
+            return !!el && el.textContent.trim() === '逐条'
+                   && !el.classList.contains('is-other');
+          }"""))
+
+    # 切到整篇入口: 结果仍是逐条产的 → 提示条 + 徽标标黄
+    page.click('.nav-item[data-nav-key="rewrite"]')
+    check("跨入口时提示条出现",
+          page.evaluate("() => !document.getElementById('result-provenance').hidden"))
+    check("提示条说清两个入口",
+          page.evaluate("""() => {
+            const txt = document.getElementById('result-provenance').textContent;
+            return txt.includes('逐条校对') && txt.includes('整篇校对');
+          }"""))
+    check("徽标标黄提示来源不一致",
+          page.evaluate("""() => {
+            const el = document.querySelector('.file-track');
+            return !!el && el.classList.contains('is-other') && el.textContent.trim() === '逐条';
+          }"""))
+    check("文件行仍显示另一轨的结果", page.evaluate(
+        "() => App.tasks[0].status === 'completed' && App.tasks[0].corrected === '改后一行'"))
+    page.screenshot(path=str(out / "1440x900-4-provenance.png"))
+
+    # 点「用整篇校对重跑（忽略缓存）」→ 必须走 force_rerun + 当前入口轨
+    page.evaluate("""() => {
+      for (const [id, val] of [['cfg-api-base', 'http://smoke.local/v1/'],
+                               ['cfg-api-key', 'sk-smoke'],
+                               ['cfg-model', 'smoke-model']]) {
+        const el = document.getElementById(id);
+        if (el) el.value = val;
+      }
+      window.__startArgs = null;
+      window.pywebview.api.start_proofread = async (...a) => {
+        window.__startArgs = a;
+        return {ok: true, task_id: 'smoke-task', total_files: 1, cached_files: []};
+      };
+    }""")
+    page.click("#btn-provenance-rerun")
+    page.wait_for_function("() => window.__startArgs !== null", timeout=5000)
+    args = page.evaluate("() => window.__startArgs")
+    check("重跑带 force_rerun=True", len(args) >= 5 and args[4] is True, str(args))
+    check("重跑带当前入口轨 workflow", len(args) >= 6 and args[5] == "rewrite", str(args))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="墨准 v5.3 前端三视口冒烟")
     parser.add_argument("--out", default=str(ROOT / ".local" / "smoke-ui-v5.3"),
@@ -283,6 +346,7 @@ def main() -> int:
                 page.on("pageerror", lambda e: errs.append(str(e)))
                 for w, h in VIEWPORTS:
                     _run_viewport(page, url, w, h, out)
+                _check_provenance(page, out)
                 check("页面无 JS 异常", not errs, str(errs[:3]))
             finally:
                 browser.close()
