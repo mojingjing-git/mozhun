@@ -101,7 +101,7 @@ const App = {
     this.bindCompatFields();  // v5.2c: 兼容字段同步 + 段控件重算事件
     this.startEventLoop();
     this.setView('home');
-    this.appendLog('[就绪] v5.1.0 pywebview 前端已加载');
+    this.appendLog('[就绪] v5.2c pywebview 前端已加载');
     // v4.1.7: 加载风格 profile 列表 (异步, 不阻塞 init)
     this.loadStyleProfiles();
     // v4.1.9 (S2.3 个人原则): 恢复持久化主题 (auto/light/dark)
@@ -671,7 +671,7 @@ const App = {
       btn.addEventListener('click', () => this.setView(btn.dataset.nav));
     });
 
-    // v4.2.0: 结果对比页文件下拉
+    // 对比区文件下拉
     const resultSel = document.getElementById('result-file-select');
     if (resultSel) {
       resultSel.addEventListener('change', () => {
@@ -1002,13 +1002,9 @@ const App = {
       li.addEventListener('click', (e) => {
         if (e.target.classList.contains('file-remove') || e.target.classList.contains('file-deai')) return;
         this.selectFile(t.path);
-        // v4.3.1 (UX #6): 只有完成/失败才跳结果对比页 (看成品/看错误);
-        // 待处理/处理中/暂停/已取消仅选中不跳转 — 留在校对页看进度, 保持安静不弹 toast
-        if (t.status === 'completed' || t.status === 'failed') {
-          this.setView('results');
-        }
+        // 校对与对比已合并为同一页, 点击文件只切换右侧结果, 不再跳页
       });
-      // v4.3.1 (UX #5): 失败文件悬停即见人话原因 (不必先跳结果页)
+      // v4.3.1 (UX #5): 失败文件悬停即见人话原因 (不必先跳对比区)
       if (t.status === 'failed' && t.error) {
         li.title = this._humanizeError(t.error);
       }
@@ -1029,11 +1025,11 @@ const App = {
       });
     });
     this.updateFileCount();
-    // v4.2.0: 同步结果对比页的文件下拉
+    // 同步对比区文件下拉
     this.renderResultFileSelect();
   },
 
-  // v4.2.0: 结果对比页的文件下拉 (与文件列表同一数据源)
+  // 对比区文件下拉 (与文件列表同一数据源)
   renderResultFileSelect() {
     const sel = document.getElementById('result-file-select');
     if (!sel) return;
@@ -1080,7 +1076,7 @@ const App = {
     this.selectedFileKey = path;
     this.renderFileList();
     this.renderCompare(path);
-    // v4.2.0: 同步结果对比页下拉
+    // 同步对比区下拉
     const sel = document.getElementById('result-file-select');
     if (sel && sel.value !== path) sel.value = path;
     // v4.1.5 (修复 8): 复制/导出按钮仅在"校对完成 + 非处理中"时 enabled.
@@ -1517,15 +1513,15 @@ const App = {
           if (info.audit !== undefined) t.audit = info.audit;
           t.warnings = !!info.result.warnings;
           // v4.3.1 (UX #5): 无条件回写 error — 旧版只在有值时覆盖, 重跑成功后
-          // 上一轮旧 error 残留, 结果页永远显示 error-mark
+          // 上一轮旧 error 残留, 对比区永远显示 error-mark
           t.error = info.result.error || '';
         }
       }
       this.appendLog(`完成：成功 ${okCount} / 失败 ${failCount} / 取消 ${cancelCount}`);
-      // toast: 有失败优先报失败 (引导去结果对比页看原因); 全成功报成功;
+      // toast: 有失败优先报失败 (引导去右侧对比区看原因); 全成功报成功;
       // 全取消不算成功也不算失败, info 提示
       if (failCount > 0) {
-        this.showToast(`校对完成：失败 ${failCount} 个，详情见结果对比页`, 'error');
+        this.showToast(`校对完成：失败 ${failCount} 个，详情见右侧对比区`, 'error');
       } else if (okCount > 0) {
         this.showToast(`校对完成：成功 ${okCount} 个`, 'success');
       } else if (cancelCount > 0) {
@@ -1944,7 +1940,7 @@ const App = {
         const r = await window.pywebview.api.copy_to_clipboard(text);
         if (r && r.ok) {
           this.appendLog(`[复制] 已复制到剪贴板 (${r.length} 字符)`);
-          // v4.3.1 (UX #2): 复制成功 toast (结果对比页无日志区)
+          // v4.3.1 (UX #2): 复制成功 toast (对比区无日志区)
           this.showToast('已复制到剪贴板', 'success');
           return;
         }

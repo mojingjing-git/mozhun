@@ -15,8 +15,8 @@
 ```
 main.py (webview.start)
 ├── webview.create_window(js_api=Backend)
-│   └── 加载 web/index.html (7 视图 SPA: 校对/结果对比/去AI味/风格库/API接口/校对参数/外观关于)
-│       ├── 校对/结果对比  (文件列表 / 进度 / diff / 流式)
+│   └── 加载 web/index.html (7 视图 SPA: 校对与对比/去AI味/风格库/小说切分/API接口/校对参数/外观关于)
+│       ├── 校对与对比  (文件列表 / 进度 / 原文 / diff / 流式)
 │       ├── 去AI味/风格库  (3 步工作流 + Step 0 Profile 管理)
 │       └── API接口/校对参数/外观关于  (.content-narrow 窄栏设置组)
 └── Backend (app/web_backend.py)
@@ -103,6 +103,9 @@ main.py (webview.start)
 
 ### v5.2c 新增（校对流程 harness / 重写 双轨配置: D 方案）
 37. **harness / 重写 双轨配置设计** (v5.2c+): 解决 harness 模式 APITimeoutError 反复触发整文件重试链的问题。**字段数 27→31** (ProjectConfig 加 4 字段: `chunking_preset_harness` / `chunking_preset_rewrite` / `harness_request_timeout` / `rewrite_request_timeout`)。`harness` 模式慢 2-5x 故 chunk 大 (默认 `large=6000`) + timeout 长 (默认 180s/3 分钟); `重写`模式走用户原配置 (默认 `balanced=3000` + 120s)。**引擎派生 2 helper 共用** (`processor.py` `_effective_chunk_preset` / `_effective_timeout`, 在 `_stream_single` L475 + `_call_api_stream` L1021 **两处共用** helper, 避免派生不一致, 与 v1 漏改 L1021 教训一致)。**前端段控件** (复用现有 `.theme-switcher` 类, 3 态主题切换同源) 只读, active 高亮 + 另一档灰显, 监听 `cfg-prompt-mode` / `cfg-harness-enabled` 变化重算。**兼容字段保留**: 老 `chunking_preset` / `timeout` 字段保留为 DeAI 视图专用 (DeAI 视图走 `web_backend.py:937` 读 `self._config.chunking_preset`), 改时同步给新字段 (M-3 修法); from_dict 时作为新字段兜底来源 (老 `chunking_preset="fast"` → `chunking_preset_rewrite="fast"`, harness 字段走默认不被覆盖)。**compute_prompt_hash 纳 4 字段** `|hchunk= |wchunk= |hto= |wto=`, 老断点一次性失效 (与 v5.1.0 `|he=` 同质, **属预期**)。**前端 `home-chunking-display`** 反映实际生效值 (避免 UI 与引擎不一致)。`web_backend.py:set_config` 老字段写时自动同步给新字段 (X-4 修: 老 API 客户端兼容)。0 字段 + 2 timeout 是 ProjectConfig 内部扩展, 不涉及第三方借鉴。
+
+### v5.2 UI 收口新增（校对与结果对比单页）
+38. **校对与结果对比合并** (v5.2 UI 收口+): 删除独立 `view-results` 与侧栏「结果对比」项; `view-home` 改为左侧 `workspace-column` (文件 + 运行状态) + 右侧常驻 `compare-card` (原文 / 校对结果 / 改动清单)。点击文件只调用 `selectFile()` 切换右侧结果, 不再 `setView('results')`; 既有 `compare-original` / `compare-revised` / `result-file-select` / 复制导出按钮等 ID 不变, JS 绑定与后端 Bridge 零改动。窄于 1100px 时单列纵向滚动, 避免对比栏过窄。
 
 ## 文件命名
 

@@ -2,7 +2,16 @@
 
 > **曾用名**: 新时代校对大师 (v3.0 — v4.4.2 期间, 2024 → 2026-09 改名为墨准)。历史 CHANGELOG 条目保留原名, 详见 README.md 与 AGENTS.md。
 >
-> 当前产品: **墨准 (MoZhun)** v5.1.0 — 本地标点修复 + LLM 批量校对 + 去 AI 味, 支持任意 OpenAI 兼容 API。
+> 当前产品: **墨准 (MoZhun)** v5.2c — 本地标点修复 + LLM 批量校对 + 去 AI 味 + 小说切分, 支持任意 OpenAI 兼容 API。
+
+## v5.2 UI 收口 (2026-09-26) — 校对与结果对比合并为单页
+
+- `view-results` 独立视图与侧栏「结果对比」入口移除，工作区从 8 页收敛为 7 页
+- `view-home` 改为左侧 `workspace-column`（文件 + 运行状态）和右侧常驻 `compare-card`（原文 / 校对结果 / 改动清单）
+- 点击文件只调用 `selectFile()` 切换右侧内容，不再跨页跳转
+- 保留 `compare-original` / `compare-revised` / `result-file-select` / 复制 / 导出 / diff 模式等既有 ID，Bridge 与流式事件协议不变
+- 窄于 1100px 时切换为单列纵向滚动，避免对比双栏过窄
+- 更新静态导航测试、README、AGENTS 和路线图说明
 
 ## v5.1.0 (2026-09-07) — 校对流程 harness 化: Edit 工具链 (function calling) + 改动清单审计
 

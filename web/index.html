@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!--
-  墨准 v5.1.0 前端 (Win11 Fluent 2 完整重构, PLAN-win11-redesign.md)
+  墨准 v5.2c 前端 (Win11 Fluent 2 完整重构, PLAN-win11-redesign.md)
 
   借鉴自 https://learn.microsoft.com/zh-cn/windows/apps/design/ (Microsoft Terms of Use, 文档非版权材料) - 5 设计原则 + 7 签名体验
   借鉴自 https://fluent2.microsoft.design/ (MIT) 的设计令牌命名
@@ -22,7 +22,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>墨准 v5.1.0</title>
+  <title>墨准 v5.2c</title>
   <link rel="stylesheet" href="style.css">
   <link rel="icon" type="image/svg+xml" href="icons/app.svg">
 </head>
@@ -34,11 +34,7 @@
       <div class="nav-group">工作区</div>
       <button class="nav-item active" data-view="home" type="button">
         <span class="nav-icon" data-icon="home"></span>
-        <span>校对</span>
-      </button>
-      <button class="nav-item" data-view="results" type="button">
-        <span class="nav-icon" data-icon="check"></span>
-        <span>结果对比</span>
+        <span>校对与对比</span>
       </button>
       <button class="nav-item" data-view="deai" type="button">
         <span class="nav-icon" data-icon="sparkle"></span>
@@ -48,7 +44,7 @@
         <span class="nav-icon" data-icon="document"></span>
         <span>风格库</span>
       </button>
-      <!-- v5.2b: 小说切分 (第 8 视图, 集成自姊妹项目「小说分析器」SplitterService) -->
+      <!-- v5.2b: 小说切分独立视图 (集成自姊妹项目「小说分析器」SplitterService) -->
       <button class="nav-item" data-view="splitter" type="button">
         <span class="nav-icon" data-icon="document-multiple"></span>
         <span>小说切分</span>
@@ -66,13 +62,13 @@
         <span class="nav-icon" data-icon="info"></span>
         <span>外观与关于</span>
       </button>
-      <div class="sidebar-footer">v5.1.0</div>
+      <div class="sidebar-footer">v5.2c</div>
     </nav>
 
-    <!-- ========== 校对 (v4.2.0: 一屏一件事 - 只管文件与任务) ========== -->
+    <!-- ========== 校对与对比 (结果对比合并回主页) ========== -->
     <main id="view-home" class="view active">
       <div class="page-header">
-        <h1>校对</h1>
+        <h1>校对与对比</h1>
         <div class="actions">
           <button id="btn-add-files" class="btn btn-standard btn-subtle" type="button">
             <span class="nav-icon" data-icon="add" style="width:16px;height:16px;"></span>
@@ -91,69 +87,69 @@
       </div>
 
       <div class="content-grid home-grid">
-        <!-- 左: 文件列表 + 拖拽区 -->
-        <section class="card file-list-card">
-          <h2>文件 (<span id="file-count">0</span>)</h2>
-          <div id="drop-zone" class="drop-zone">
-            <span class="nav-icon" data-icon="add" style="width:32px;height:32px;opacity:0.4;"></span>
-            <p>拖拽文件到此处<br><small>或点击"添加文件"</small></p>
-          </div>
-          <ul id="file-list" class="file-list">
-            <li class="file-list-empty">尚未添加文件</li>
-          </ul>
-          <div class="list-hint stats-secondary">点击已完成/失败的文件查看结果对比 · 右键文件可复制路径/重新校对/移除</div>
-        </section>
+        <div class="workspace-column">
+          <!-- 左上: 文件列表 + 拖拽区 -->
+          <section class="card file-list-card">
+            <h2>文件 (<span id="file-count">0</span>)</h2>
+            <div id="drop-zone" class="drop-zone">
+              <span class="nav-icon" data-icon="add" style="width:32px;height:32px;opacity:0.4;"></span>
+              <p>拖拽文件到此处<br><small>或点击"添加文件"</small></p>
+            </div>
+            <ul id="file-list" class="file-list">
+              <li class="file-list-empty">尚未添加文件</li>
+            </ul>
+            <div class="list-hint stats-secondary">点击已完成/失败的文件查看右侧结果 · 右键文件可复制路径/重新校对/移除</div>
+          </section>
 
-        <!-- 右: 运行状态 (进度 + 日志, v4.2.0 从原进度子面板独立成卡) -->
-        <section class="card run-card">
-          <h2>运行状态</h2>
-          <div class="progress-subpanel">
-            <div class="form-row inline">
-              <!-- chunking 预设挪到校对参数页, 校对页只显示只读 label
-                   v4.3.1 (UX #21): 标签可点 → 跳「校对参数」页修改 (.link-chip) -->
-              <label>分块</label>
-              <button id="home-chunking-display" class="link-chip" type="button" title="点击前往「校对参数」页修改">分块: 均衡 (3000 字)</button>
+          <!-- 左下: 运行状态 (进度 + 日志) -->
+          <section class="card run-card">
+            <h2>运行状态</h2>
+            <div class="progress-subpanel">
+              <div class="form-row inline">
+                <!-- chunking 预设挪到校对参数页, 校对页只显示只读 label
+                     v4.3.1 (UX #21): 标签可点 → 跳「校对参数」页修改 (.link-chip) -->
+                <label>分块</label>
+                <button id="home-chunking-display" class="link-chip" type="button" title="点击前往「校对参数」页修改">分块: 均衡 (3000 字)</button>
+              </div>
+              <div class="progress-bar">
+                <div id="progress-fill" class="progress-fill" style="width:0%"></div>
+              </div>
+              <div id="progress-stats" class="stats">就绪</div>
+              <div id="progress-eta" class="stats-secondary"></div>
+              <!-- v4.3.1 (UX #18): 块级进度行 (多块文件每块完成时显示, 单块/收尾时 hidden) -->
+              <div id="chunk-progress" class="stats-secondary" hidden></div>
+              <pre id="log-output" class="log"></pre>
             </div>
-            <div class="progress-bar">
-              <div id="progress-fill" class="progress-fill" style="width:0%"></div>
+          </section>
+        </div>
+
+        <!-- 右: 结果对比 (原文 + 校对结果, 常驻) -->
+        <section class="card compare-card">
+          <div class="compare-header">
+            <h2>结果对比</h2>
+            <div class="actions compare-actions">
+              <select id="result-file-select" class="result-select" title="选择要查看对比结果的文件"></select>
+              <!-- v4.3.1 (UX #15): 禁用按钮带 title 说明原因, JS 侧同步维护 -->
+              <button id="btn-toggle-diff-mode" class="btn btn-standard btn-subtle" type="button" disabled title="该文件还没有校对结果">查看增删标记</button>
+              <button id="btn-copy-result" class="btn btn-standard btn-subtle" type="button" disabled title="校对完成后可用">复制</button>
+              <button id="btn-export-result" class="btn btn-standard btn-subtle" type="button" disabled title="校对完成后可用">导出</button>
             </div>
-            <div id="progress-stats" class="stats">就绪</div>
-            <div id="progress-eta" class="stats-secondary"></div>
-            <!-- v4.3.1 (UX #18): 块级进度行 (多块文件每块完成时显示, 单块/收尾时 hidden) -->
-            <div id="chunk-progress" class="stats-secondary" hidden></div>
-            <pre id="log-output" class="log"></pre>
           </div>
+          <div class="compare-grid">
+            <div class="compare-original" id="compare-original">
+              <div class="type-emptystate">选择文件查看原文<br>(添加并运行校对后即可查看)</div>
+            </div>
+            <div class="compare-revised" id="compare-revised">
+              <div class="type-emptystate">校对输出将在这里实时显示</div>
+            </div>
+          </div>
+          <!-- v5.1.0: harness 改动清单 (default 收起; 仅 harness 模式且模型提交了编辑时显示) -->
+          <details id="audit-panel" class="audit-panel" hidden>
+            <summary>改动清单 <span class="audit-summary-hint" id="audit-summary"></span></summary>
+            <div id="audit-list" class="audit-list"></div>
+          </details>
         </section>
       </div>
-    </main>
-
-    <!-- ========== 结果对比 (v4.2.0: 从主页拆出, 点文件自动跳转到这里) ========== -->
-    <main id="view-results" class="view">
-      <div class="page-header">
-        <h1>结果对比</h1>
-        <div class="actions">
-          <select id="result-file-select" class="result-select" title="选择要查看对比结果的文件"></select>
-          <!-- v4.3.1 (UX #15): 禁用按钮带 title 说明原因, JS 侧同步维护 -->
-          <button id="btn-toggle-diff-mode" class="btn btn-standard btn-subtle" type="button" disabled title="该文件还没有校对结果">查看增删标记</button>
-          <button id="btn-copy-result" class="btn btn-standard btn-subtle" type="button" disabled title="校对完成后可用">复制</button>
-          <button id="btn-export-result" class="btn btn-standard btn-subtle" type="button" disabled title="校对完成后可用">导出</button>
-        </div>
-      </div>
-      <section class="card compare-card">
-        <div class="compare-grid">
-          <div class="compare-original" id="compare-original">
-            <div class="type-emptystate">选择文件查看原文<br>(到「校对」页添加并运行, 或点击上方下拉选择)</div>
-          </div>
-          <div class="compare-revised" id="compare-revised">
-            <div class="type-emptystate">校对输出将在这里实时显示</div>
-          </div>
-        </div>
-        <!-- v5.1.0: harness 改动清单 (default 收起; 仅 harness 模式且模型提交了编辑时显示) -->
-        <details id="audit-panel" class="audit-panel" hidden>
-          <summary>改动清单 <span class="audit-summary-hint" id="audit-summary"></span></summary>
-          <div id="audit-list" class="audit-list"></div>
-        </details>
-      </section>
     </main>
 
     <!-- ========== 小说切分 (v5.2b+: 集成自姊妹项目「小说分析器」SplitterService) ========== -->
@@ -287,7 +283,7 @@
               <input type="checkbox" id="cfg-harness-enabled">
               <span>启用 Edit 工具链 (harness 模式)</span>
             </label>
-            <span class="form-hint">仅「严格校对」与「纠错+轻润色」模式生效: 模型返回逐条编辑建议 (改哪/改成什么/为什么), 客户端精确应用, 输出 token 大幅下降。结果对比页底部显示「改动清单」。关闭后回退为模型整篇重输出</span>
+            <span class="form-hint">仅「严格校对」与「纠错+轻润色」模式生效: 模型返回逐条编辑建议 (改哪/改成什么/为什么), 客户端精确应用, 输出 token 大幅下降。右侧对比区底部显示「改动清单」。关闭后回退为模型整篇重输出</span>
           </div>
           <div class="form-row checkbox-row">
             <label class="checkbox-label">
@@ -434,7 +430,7 @@
         </section>
         <section class="card">
           <h2>关于</h2>
-          <div class="about-row"><span class="about-label">版本</span><span>v5.1.0 (pywebview)</span></div>
+          <div class="about-row"><span class="about-label">版本</span><span>v5.2c (pywebview)</span></div>
           <div class="about-row"><span class="about-label">定位</span><span>本地标点修复 + LLM 批量校对 + 去 AI 味, 支持任意 OpenAI 兼容 API</span></div>
           <div class="about-row"><span class="about-label">运行日志</span><span class="font-mono">~/.proofreader/app.log</span></div>
           <div class="about-row"><span class="about-label">快捷键</span><span>Ctrl+O 添加文件 · Ctrl+Enter 开始校对 · Ctrl+, API 接口 · Ctrl+. 去 AI 味</span></div>
@@ -636,7 +632,7 @@
   <script src="lib/diff-match-patch.js"></script>
   <!-- v4.1 (M6): marked.min.js 已无引用 (去 AI 味走 diff-match-patch 字符级 diff), 35KB 减重 -->
   <script src="app.js"></script>
-  <!-- v5.2b: 小说切分视图逻辑 (第 8 视图) -->
+  <!-- v5.2b: 小说切分视图逻辑 -->
   <script src="views/novel-splitter.js"></script>
 </body>
 </html>

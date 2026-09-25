@@ -583,24 +583,30 @@ def test_v500_deai_load_source():
 
 # === test_v420_nav_split ===
 def test_v420_nav_split():
-    """v4.2.0: 3 视图 -> 7 视图拆分 (Win11 设置应用式分组导航).
+    """v4.2.0 分组导航 + v5.2 校对/对比单页合并.
 
-    核验: 7 个视图 id 齐全 / 分组导航 / 关键元素 id 单一存在 (JS 绑定不变) /
-    结果页文件下拉 / cfg 字段分布两页后防抖选择器覆盖 / CSS 新组件。
+    核验: 7 个视图 id 齐全 / 校对与对比不再各占一页 / 分组导航 /
+    关键元素 id 单一存在 (JS 绑定不变) / cfg 字段分布两页后防抖选择器覆盖 /
+    CSS 新组件。
     """
     print()
-    print("--- v4.2.0: 7 视图导航拆分 ---", flush=True)
+    print("--- v4.2.0 分组导航 + v5.2 校对/对比合并 ---", flush=True)
     html = (_WEB_DIR / "index.html").read_text(encoding="utf-8")
     js = _read_app_js()
     css = _read_style_css()
 
     # 7 视图齐全
-    for vid in ("view-home", "view-results", "view-deai", "view-styles",
+    for vid in ("view-home", "view-deai", "view-styles", "view-splitter",
                 "view-api", "view-params", "view-appearance"):
         check(f"视图 {vid} 存在", f'id="{vid}"' in html)
+    check("结果对比不再是独立视图", 'id="view-results"' not in html)
+    check("结果对比元素在主页内",
+          html.find('id="view-home"') < html.find('id="compare-original"')
+          < html.find('id="view-deai"'))
     # 分组导航
-    for dv in ("home", "results", "deai", "styles", "api", "params", "appearance"):
+    for dv in ("home", "deai", "styles", "splitter", "api", "params", "appearance"):
         check(f"导航项 data-view={dv}", f'data-view="{dv}"' in html)
+    check("已移除结果对比导航项", 'data-view="results"' not in html)
     check("导航分组「工作区」", ">工作区</div>" in html)
     check("导航分组「设置」", ">设置</div>" in html)
     # 关键元素 id 全局唯一 (拆分最容易引入重复 id)
@@ -617,8 +623,8 @@ def test_v420_nav_split():
     for cid in cfg_ids:
         check(f"配置项存在: {cid}", f'id="{cid}"' in html)
     # JS 适配
-    check("结果页下拉渲染函数", "renderResultFileSelect" in js)
-    check("点击文件跳转结果页", "this.setView('results')" in js)
+    check("对比区下拉渲染函数", "renderResultFileSelect" in js)
+    check("点击文件不再跳转旧结果页", "this.setView('results')" not in js)
     check("防抖选择器覆盖 view-api/params/appearance",
           "#view-api input" in js and "#view-params input" in js)
     check("Ctrl+, 指向 API 接口页", "this.setView('api')" in js)
@@ -627,8 +633,18 @@ def test_v420_nav_split():
     for cls in (".nav-group {", ".sidebar-footer {", ".content-narrow {",
                 ".result-select {", ".about-row {"):
         check(f"CSS 组件 {cls.strip()} ", cls in css)
-    check("home-grid 两列等宽", "grid-template-columns: 1fr 1fr;" in css)
-    check("运行状态卡日志撑满", ".run-card .log { max-height: none; }" in css)
+    check("home-grid 左侧任务流 + 右侧对比",
+          "minmax(300px, 0.85fr) minmax(0, 1.45fr)" in css)
+    check("工作区左栏纵向排列", ".workspace-column {" in css)
+    check("运行状态卡日志撑满", ".run-card .log {" in css and "flex: 1;" in css)
+    check("窄窗口降级为纵向布局", "@media (max-width: 1100px)" in css)
+    # v5.2 UI 收口: 窄屏单列下网格须按内容撑开, 否则卡片 min-height 会撑破
+    # 行轨道互相覆盖 (由 Playwright 冒烟实测发现)
+    narrow = css.split("@media (max-width: 1100px)", 1)[1].split("\n}\n", 1)[0]
+    check("窄屏网格按内容撑开", "flex: 0 0 auto;" in narrow)
+    check("窄屏对比卡 min-height 覆盖 .card 归零",
+          ".content-grid.home-grid .compare-card" in narrow
+          and "min-height: 480px;" in narrow)
     # 页面转换动画对 7 视图统一生效 (v4.1.9 的 .view.active 规则)
     check("页面转换仍作用于全部视图", "pageTransitionIn var(--durationFast)" in css)
 
