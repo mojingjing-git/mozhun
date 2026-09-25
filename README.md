@@ -1,4 +1,4 @@
-# 墨准 (MoZhun) v5.3 (pywebview + 水墨宣纸 / Win11 Fluent)
+# 墨准 (MoZhun) v5.3.1 (pywebview + 水墨宣纸 / Win11 Fluent)
 
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg) ![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg) ![Platform: Windows](https://img.shields.io/badge/Platform-Windows-0078d4.svg) ![GUI: pywebview](https://img.shields.io/badge/GUI-pywebview-6DA55F.svg)
 
@@ -24,7 +24,7 @@
 - **断点续传** — 段级 schema v2，已完成文件自动跳过；支持**强制重跑**（v4.3.1）；CANCELLED 状态强制重跑
 - **字符级 diff (v4.0+)** — `diff-match-patch` (Apache-2.0) 高亮修改处
 - **暂停/恢复/取消 (v4.0+)** — `threading.Event` 跨线程安全
-- **10 服务商 API 预设 (v4.3.2)** — LM Studio / OpenCodeGo / OpenRouter / MiniMax / 阿里百炼 / 智谱清言 / 火山引擎 / 硅基流动 / DeepSeek / 自定义；Model 单输入框 + datalist 补全
+- **10 服务商 API 预设 (v4.3.2 / v5.3.1)** — LM Studio / OpenCodeGo / OpenRouter / MiniMax / 阿里百炼 / 智谱清言 / 火山引擎 / 硅基流动 / DeepSeek / 自定义；预设只填 API 地址（**不含模型示例**），Model 由你手填或点 ⟳ 从服务端拉取后从 datalist 选
 
 ### 主题使用建议 (v4.1.8)
 
@@ -263,7 +263,7 @@ python tests/test_web_backend_proofread.py
 python tools/smoke_ui.py
 ```
 
-当前状态：`run_all_tests.py` 自动发现 18 个套件，v5.3 报告 **1448 通过 / 0 失败**（另有 `tools/smoke_ui.py` 三视口 + 跨入口 + 阈值弹窗 84 项断言全绿）。
+当前状态：`run_all_tests.py` 自动发现 18 个套件，v5.3.1 报告 **1463 通过 / 0 失败**（另有 `tools/smoke_ui.py` 三视口 + 跨入口 + 阈值弹窗 + API 面板 91 项断言全绿）。
 
 ## 打包
 

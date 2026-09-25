@@ -109,7 +109,7 @@ const App = {
     this.bindCompatFields();  // v5.2c: 兼容字段同步 + 段控件重算事件
     this.startEventLoop();
     this.setView('home');
-    this.appendLog('[就绪] v5.3 pywebview 前端已加载 (入口: ' + this._trackLabel(this._currentTrack()) + ')');
+    this.appendLog('[就绪] v5.3.1 pywebview 前端已加载 (入口: ' + this._trackLabel(this._currentTrack()) + ')');
     // v4.1.7: 加载风格 profile 列表 (异步, 不阻塞 init)
     this.loadStyleProfiles();
     // v4.1.9 (S2.3 个人原则): 恢复持久化主题 (auto/light/dark)
@@ -650,8 +650,9 @@ const App = {
       for (const t of this.apiTemplates) {
         const opt = document.createElement('option');
         opt.value = t.name;
-        // v4.3.2: 模型名留空的预设显示"拉取模型"提示, 并把 description 作为悬浮说明
-        opt.textContent = t.name + ' (' + (t.model || '拉取模型') + ')';
+        // v5.3.1: 预设不再带模型示例 — 下拉只显示服务商名, 不再拼 "(模型名)"
+        // (description 仍作为悬浮说明, 里面写清了"模型名点 ⟳ 拉取")
+        opt.textContent = t.model ? `${t.name} (${t.model})` : t.name;
         if (t.description) opt.title = t.description;
         tplSel.appendChild(opt);
       }
@@ -2585,7 +2586,11 @@ const App = {
     const tpl = this.apiTemplates.find(t => t.name === name);
     if (!tpl) return;
     this.setVal('cfg-api-base', tpl.api_base);
-    this.setVal('cfg-model', tpl.model);
+    // v5.3.1: 预设模板不再带模型示例 — 模板不写 Model 框, 免得清掉用户自己填的/
+    // 刚 ⟳ 拉取选好的模型名。模型名一律由用户填或拉取 (空值不覆盖)。
+    if (tpl.model) {
+      this.setVal('cfg-model', tpl.model);
+    }
     // v4.1.8.2 (审计 F18): 输入框已有 key 时不覆盖 — 所有模板都定义了占位
     // api_key (sk-/EMPTY/ollama), 旧版选模板即把用户真实 key 静默替换并自动落盘
     const currentKey = this.getVal('cfg-api-key');

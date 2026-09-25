@@ -1360,6 +1360,33 @@ def test_v530_provenance_static():
           "export_result(this.selectedFileKey, text, 'txt',\n                                                         t.workflow || '')" in js)
 
 
+# === test_v531_api_panel_no_model_examples ===
+def test_v531_api_panel_no_model_examples():
+    """v5.3.1: API 面板里不再出现任何写死的模型示例 (预设模板只给 endpoint)。
+
+    行为契约: ① 预设下拉只显示服务商名, 不再拼 "(模型名)";
+    ② 选模板不再覆盖 Model 框里用户自己填的/刚 ⟳ 拉取选好的模型名。
+    """
+    print()
+    print("--- v5.3.1: API 面板无模型示例 ---", flush=True)
+    from app.templates import API_TEMPLATES
+    html = (_WEB_DIR / "index.html").read_text(encoding="utf-8")
+    js = _read_app_js()
+
+    check("_stub 前置: 预设集合非空", len(API_TEMPLATES) > 0)
+    check("预设 model 一律留空",
+          all(t.get("model") == "" for t in API_TEMPLATES))
+    for banned in ("MiniMax-M2", "qwen-plus", "glm-4-flash", "DeepSeek-V3",
+                   "deepseek-chat", "deepseek-reasoner", "openrouter/auto"):
+        check(f"面板 HTML 不含模型示例 {banned}", banned not in html)
+    check("Model datalist 初始为空 (只有 ⟳ 拉取才填)",
+          '<datalist id="model-datalist"></datalist>' in html)
+    check("预设下拉只显示服务商名",
+          "opt.textContent = t.model ? `${t.name} (${t.model})` : t.name;" in js)
+    check("选模板不再清掉已填模型名",
+          "if (tpl.model) {\n      this.setVal('cfg-model', tpl.model);\n    }" in js)
+
+
 # ==================== 模块级常量 (v6.0 C1: 跨章节共享) ====================
 
 passed = 0

@@ -161,6 +161,10 @@ def test_get_api_templates():
     for t in templates:
         check(f"模板 {t.get('name', '?')} 有 api_base", "api_base" in t)
         check(f"模板 {t.get('name', '?')} 有 model", "model" in t)
+    # v5.3.1: 预设不再带模型示例 (model 字段保留但一律为空)
+    check("b 端预设全无模型示例",
+          all(t.get("model") == "" for t in templates),
+          str([t.get("name") for t in templates if t.get("model")]))
     # v4.3.2: 用户指定预设清单 (顺序即下拉顺序, 自定义收尾)
     expected_names = ["LM Studio", "OpenCodeGo", "OpenRouter", "MiniMax", "阿里百炼",
                       "智谱清言", "火山引擎", "硅基流动", "DeepSeek", "自定义"]

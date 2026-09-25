@@ -3,6 +3,9 @@ API_TEMPLATES = [
     # 阿里百炼/智谱清言/火山引擎/硅基流动/DeepSeek/自定义), 替换旧 7 项。
     # 语义约定: model 留空 = 服务端模型名不确定/动态, 提示用户用 ⟳ 拉取列表填写;
     # api_key 留空 = 必须用户自填 (不预填占位, 避免误跑); 本地服务预填免 Key 值。
+    # v5.3.1: **全部预设不再带模型示例** —— 原先 OpenRouter/MiniMax/阿里百炼/智谱清言/
+    # 硅基流动/DeepSeek 各写死一个模型名, 既显示在下拉里也会自动填进 Model 框。
+    # 现在模型名一律由用户自己填或点 ⟳ 从服务端拉取, description 里也不再举例具体模型。
     {
         "name": "LM Studio",
         "api_base": "http://localhost:1234/v1",
@@ -20,30 +23,30 @@ API_TEMPLATES = [
     {
         "name": "OpenRouter",
         "api_base": "https://openrouter.ai/api/v1",
-        "model": "openrouter/auto",
+        "model": "",
         "api_key": "",
-        "description": "OpenRouter 聚合网关（模型名形如 vendor/model, 也可用 openrouter/auto）",
+        "description": "OpenRouter 聚合网关（模型名形如 vendor/model, 点 ⟳ 拉取）",
     },
     {
         "name": "MiniMax",
         "api_base": "https://api.minimax.cn/v1",
-        "model": "MiniMax-M2",
+        "model": "",
         "api_key": "",
         "description": "MiniMax 国内站（国际站密钥请把地址改为 api.minimax.io/v1）",
     },
     {
         "name": "阿里百炼",
         "api_base": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        "model": "qwen-plus",
+        "model": "",
         "api_key": "",
-        "description": "阿里云百炼 DashScope OpenAI 兼容模式（qwen 系列）",
+        "description": "阿里云百炼 DashScope OpenAI 兼容模式（模型名点 ⟳ 拉取）",
     },
     {
         "name": "智谱清言",
         "api_base": "https://open.bigmodel.cn/api/paas/v4",
-        "model": "glm-4-flash",
+        "model": "",
         "api_key": "",
-        "description": "智谱 BigModel 开放平台（GLM 系列, glm-4-flash 免费）",
+        "description": "智谱 BigModel 开放平台（模型名点 ⟳ 拉取）",
     },
     {
         "name": "火山引擎",
@@ -55,16 +58,16 @@ API_TEMPLATES = [
     {
         "name": "硅基流动",
         "api_base": "https://api.siliconflow.cn/v1",
-        "model": "deepseek-ai/DeepSeek-V3",
+        "model": "",
         "api_key": "",
         "description": "SiliconFlow 聚合平台（模型名形如 vendor/model, 可点 ⟳ 拉取）",
     },
     {
         "name": "DeepSeek",
         "api_base": "https://api.deepseek.com/v1",
-        "model": "deepseek-chat",
+        "model": "",
         "api_key": "",
-        "description": "DeepSeek 官方 API（deepseek-chat / deepseek-reasoner）",
+        "description": "DeepSeek 官方 API（模型名点 ⟳ 拉取）",
     },
     {
         "name": "自定义",

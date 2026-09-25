@@ -150,6 +150,18 @@ def test_templates():
     check("API_TEMPLATES 非空", len(API_TEMPLATES) > 0)
     for t in API_TEMPLATES:
         check(f"模板 {t['name']} 有必需字段", all(k in t for k in ["name", "api_base", "model", "api_key"]))
+    # v5.3.1: 预设不再带模型示例 — API 面板里不许出现任何写死的模型名
+    check("预设均无模型示例 (model 一律留空)",
+          all(t.get("model") == "" for t in API_TEMPLATES),
+          str([t["name"] for t in API_TEMPLATES if t.get("model")]))
+    _banned_models = ["MiniMax-M2", "qwen-plus", "glm-4-flash", "DeepSeek-V3",
+                      "deepseek-chat", "deepseek-reasoner", "openrouter/auto"]
+    _tpl_text = " ".join(
+        f"{t.get('name', '')} {t.get('model', '')} {t.get('description', '')}"
+        for t in API_TEMPLATES
+    )
+    _leaked = [m for m in _banned_models if m in _tpl_text]
+    check("预设字段/说明里无写死模型名", not _leaked, str(_leaked))
 
     check("PROMPT_MODES 非空", len(PROMPT_MODES) > 0)
     # v4.3.3: punct_local / v4.4.2: md_local 是本地脚本模式, system 永不发送

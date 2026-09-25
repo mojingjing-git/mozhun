@@ -69,11 +69,12 @@ def _serve(directory: Path):
 
 def _stub_payload() -> dict:
     """桩数据直接取后端定义, 避免与 app/utils.py 的档位/模式漂移。"""
-    from app.templates import PROMPT_MODES
+    from app.templates import API_TEMPLATES, PROMPT_MODES
     from app.utils import CHUNKING_PRESETS, ProjectConfig
 
     return {
         "config": ProjectConfig().to_dict(),
+        "api_templates": [dict(t) for t in API_TEMPLATES],
         "prompt_modes": [
             {"key": k, "label": v["label"]}
             for k, v in PROMPT_MODES.items() if k != "deai"
@@ -89,7 +90,7 @@ def _init_script(payload: dict) -> str:
   const base = {
     get_config: async () => DATA.config,
     get_prompt_modes: async () => DATA.prompt_modes,
-    get_api_templates: async () => [],
+    get_api_templates: async () => DATA.api_templates,
     get_chunking_presets: async (track) => {
       const all = DATA.chunking_presets;
       if (!track) return all;
@@ -362,6 +363,42 @@ def _check_whole_file_warning(page, out: Path) -> None:
         "() => document.getElementById('dialog-root').hidden"))
 
 
+def _check_api_panel(page, out: Path) -> None:
+    """v5.3.1: API 面板不含模型示例, 选预设不覆盖用户已填的模型名。"""
+    print("\n--- API 面板无模型示例 ---", flush=True)
+    page.click('.nav-item[data-nav-key="api"]')
+    page.wait_for_timeout(200)
+
+    opts = page.evaluate("""() => [...document.querySelectorAll('#cfg-template option')]
+        .map(o => ({value: o.value, text: o.textContent.trim()}))""")
+    real = [o for o in opts if o["value"]]
+    check("预设下拉有服务商项", len(real) >= 3, str(len(real)))
+    check("下拉只显示服务商名 (无 (模型名) 后缀)",
+          all("(" not in o["text"] and "（" not in o["text"] for o in real),
+          str([o["text"] for o in real]))
+    banned = ("MiniMax-M2", "qwen-plus", "glm-4-flash", "DeepSeek-V3",
+              "deepseek-chat", "deepseek-reasoner", "openrouter/auto")
+    check("下拉不含已知模型示例", not any(
+        b in o["text"] for b in banned for o in real), str([o["text"] for o in real]))
+    check("Model datalist 初始为空",
+          page.evaluate("() => document.querySelectorAll('#model-datalist option').length") == 0)
+
+    # 选预设只填 API 地址, 不动 Model / 不清空已填模型名
+    before = page.evaluate("""() => {
+      document.getElementById('cfg-model').value = 'my-own-model';
+      return true;
+    }""")
+    check("预置一个模型名用于对照", before is True)
+    target = real[1]["value"] if len(real) > 1 else real[0]["value"]
+    page.select_option("#cfg-template", target)
+    page.wait_for_timeout(200)
+    check("选预设后模型名保持不变", page.input_value("#cfg-model") == "my-own-model",
+          page.input_value("#cfg-model"))
+    check("选预设确实填了 API 地址",
+          page.evaluate("() => (document.getElementById('cfg-api-base').value || '').length > 0"))
+    page.screenshot(path=str(out / "1280x760-6-api-panel.png"))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="墨准 v5.3 前端三视口冒烟")
     parser.add_argument("--out", default=str(ROOT / ".local" / "smoke-ui-v5.3"),
@@ -398,6 +435,7 @@ def main() -> int:
                     _run_viewport(page, url, w, h, out)
                 _check_provenance(page, out)
                 _check_whole_file_warning(page, out)
+                _check_api_panel(page, out)
                 check("页面无 JS 异常", not errs, str(errs[:3]))
             finally:
                 browser.close()
