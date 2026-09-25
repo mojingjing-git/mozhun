@@ -363,6 +363,69 @@ def _check_whole_file_warning(page, out: Path) -> None:
         "() => document.getElementById('dialog-root').hidden"))
 
 
+def _check_think_strip_stream(page, out: Path) -> None:
+    """v5.4 (PLAN §5-10 / 审计 B5-i): 流式预览不含思维链 + 前端前缀单调渲染。
+
+    前端本身没有过滤逻辑 (N5), 所以用真实 app.think_strip 预生成剥后 partial 序列
+    再推给 App.handleEventBatch — 若只推含 <think> 的原文, 这里是假 E2E。
+    """
+    print("\n--- v5.4: 流式预览无思维链 ---", flush=True)
+    from app.think_strip import ThinkFilter
+
+    raw_parts = ["<think>这一段是", "模型的推理过程</think>", "\n\n正文开始。", "正文继续。"]
+    flt = ThinkFilter()
+    frames = []
+    for part in raw_parts:
+        flt.feed(part)
+        frames.append(flt.take())
+    frames.append(flt.flush())
+    visible = "".join(frames)
+    prefixes = []
+    acc = ""
+    for f in frames:
+        acc += f
+        prefixes.append(acc)
+    check("预生成: 剥后文本不含思维链",
+          "<think>" not in visible and "推理过程" not in visible, repr(visible))
+    check("预生成: 前缀序列单调", all(
+        prefixes[i + 1].startswith(prefixes[i]) for i in range(len(prefixes) - 1)),
+        str(prefixes))
+
+    page.click('.nav-item[data-nav-key="rewrite"]')
+    page.evaluate("""(frames) => {
+      window.__rendered = [];
+      App.workspaceTrack = 'rewrite';
+      App.tasks = [{path: '/tmp/思维链冒烟.txt', status: 'running',
+                    original: '原文一行', corrected: '', error: ''}];
+      App.selectedFileKey = null;
+      App.renderFileList();
+      App.setView('home');
+      App.selectFile('/tmp/思维链冒烟.txt');
+      // 渲染走 RAF (scheduleRender), 每帧后等一帧再读 DOM
+      window.__rendered = [];
+      return frames.reduce((chain, p) => chain.then(() => {
+        App.handleEvent('onStream', {file_key: '/tmp/思维链冒烟.txt', partial: p});
+        return new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => {
+          const el = document.getElementById('compare-revised');
+          window.__rendered.push(el ? (el.textContent || '') : '');
+          r();
+        })));
+      }), Promise.resolve());
+    }""", prefixes)
+    rendered = page.evaluate("() => window.__rendered")
+    check("前端渲染不含思维链",
+          all("<think>" not in r and "推理过程" not in r for r in rendered),
+          str(rendered)[:200])
+    check("前端最终文本 = 剥后结果",
+          rendered and "正文开始。" in rendered[-1] and "正文继续。" in rendered[-1],
+          str(rendered[-1])[:200] if rendered else "(空)")
+    check("前端渲染单调 (不回缩)",
+          bool(rendered) and all(len(rendered[i + 1]) >= len(rendered[i])
+                                 for i in range(len(rendered) - 1)),
+          str([len(r) for r in rendered]))
+    page.screenshot(path=str(out / "1440x900-7-think-strip.png"))
+
+
 def _check_api_panel(page, out: Path) -> None:
     """v5.3.1: API 面板不含模型示例, 选预设不覆盖用户已填的模型名。"""
     print("\n--- API 面板无模型示例 ---", flush=True)
@@ -435,6 +498,7 @@ def main() -> int:
                     _run_viewport(page, url, w, h, out)
                 _check_provenance(page, out)
                 _check_whole_file_warning(page, out)
+                _check_think_strip_stream(page, out)
                 _check_api_panel(page, out)
                 check("页面无 JS 异常", not errs, str(errs[:3]))
             finally:

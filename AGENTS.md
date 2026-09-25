@@ -125,6 +125,17 @@ main.py (webview.start)
 45. **`set_config` 单向兼容镜像**: 写 `workflow_mode` → 同步 `harness_enabled` (仅供展示/老客户端读); 写 `harness_enabled` (老 API 客户端) → 推出 `workflow_mode`; **反向不回写**。前端 `_collectAllConfig` 已移除 `harness_enabled` 字段 (否则每次保存都会把轨道翻回去)。非法 `workflow_mode` 返回 `{ok:false}`。
 46. **UI 冒烟入库**: `tools/smoke_ui.py` (Playwright, 三视口 1440/1280/1000) 静态托管 `web/` + 桩注入 `window.pywebview.api`, 断言侧边栏 200px 不被挤压、导航项单行不重叠、工作区两栏不重叠、双入口标题/高亮/父项展开正确, 并输出截图到 `.local/smoke-ui-v5.3/`。改侧边栏/布局后必须重跑。
 
+### v5.4.0 新增（思维链剥离: 产出侧单点）
+47. **思维链剥离单点 `app/think_strip.py`** (v5.4.0+): 与 `md_strip` / `punct_fix` 同层同纪律 (零 LLM 纯函数 + 流式增量过滤器 `ThinkFilter`)。**只剥行首块** —— 开标签必须位于行首 (`<` 之前同一行内只有空白, 允许缩进) 且围栏外; **行首 = 已剥离可见文本坐标** (已剥除区段视为不存在, 头部连排块同口径递归)。这条坐标定义是流式"已 emit 文本永远是最终结果前缀"不变式的地基 —— 剥离判定与过滤器悬置判定 (H2/H3) **必须同坐标**, 混用会把"前缀回缩"破例带回来 (复审 V1 已复现)。
+    - **白名单** `think` / `thinking` / `reasoning` / `thought` (大小写不敏感、允许属性、同名嵌套深度配对; 属性值内的 `>` 与 `</tag>` 字样不算边界)。`<analysis>` 移出 (前端教程里是合法自定义元素, 误删面更大)。
+    - **不剥**: 行内提及、同行中间的块、代码围栏 (``` / ~~~) 内一切 (围栏行判定走可见文本坐标 + `rstrip("\r")`, 否则 CRLF 文本围栏永不闭合 → 之后整段漏剥, 复审 V2)。
+    - 未闭合块 → 从开标签起整段丢弃 (头部块连块前空白一并丢); 裸半截标签 `<thi` 按字面保留 (不静默删内容); 围栏豁免优先于未闭合丢弃。
+48. **流式契约 (写进模块 docstring, 测试逐条锁死)**: `feed()` 只追加, `take()` 在节流点求值并返回新增可显示文本, `flush()` 收尾且幂等; ① 累计 take 单调前缀延长; ② `join(take) + flush() == strip_thinking(raw)`; ③ 结果与切分方式无关 (全切点 property 测试)。悬置点三类: H1 头部未定 / H2 未闭合块 / H3 行首半截标签。
+49. **接线 4 处 + DeAI 消费点不变式**: 整篇校对流式 (`processor.py`) / DeAI 分块流 (detect+rewrite+score 共用循环) / revise 轮 / 风格蒸馏。DeAI 写死不变式"**只保留剥后累积器, raw 仅存在于 ThinkFilter 内部**" —— 只改 push 点不够, 块间衔接 prompt / 错误 payload / 取消 payload / 超限落盘 / `ai_score_local` 输入 / style-card 落盘 6 组消费点会继续带思维链 (一审计 B3)。蒸馏照剥 (style-card 是长期风格样本) 且空卡不落盘。
+50. **独立字段显式不读**: `reasoning_content` / `reasoning` / `reasoning_details` 一律不进 corrected / 前端 / 落盘, 只在 debug 日志记帧数 (`count_reasoning_fields`, 只看真假不保存内容; 对 MagicMock 桩记 0 以免既有测试被误计数)。
+51. **旧断点定向失效 (不动 hash/schema)**: 命中缓存时 `has_think_residue(result)` = `strip_thinking(corrected_full) != corrected_full and strip_thinking(original) == original` —— 单点口径直接复用 `strip_thinking` (不另写第二套"行首"实现)。真 → 忽略缓存强制重跑 + 日志; **原文自带行首块的语料不触发** (否则 harness 轨 `corrected=原文` 会永久打不中缓存)。不加 `|ts=1` 全量失效 (token 代价不可接受)。
+52. **剥后为空 → 复用既有空输出语义**: 整篇轨 / DeAI 分块 / revise 判据改"剥后为空"; 蒸馏是**新增**判据 (原路径无空判据, 纯思维链卡会直接落盘)。截断标记 (`finish_reason=length`) 先记录再走 raise。
+
 ## 文件命名
 
 ### 主代码
@@ -142,7 +153,8 @@ main.py (webview.start)
   - v4.4.2+ 测试: `test_md_strip.py`（Markdown 清洗全规则回归，含幂等双跑/围栏保护/引擎 md_local 分支端到端/空结果兜底）
   - v5.0.2+ 测试: `test_ai_score.py`（客户端 AI 味评分回归，含权重和=100/各维命中/幂等/offenders 截断/空文本）
   - v5.1.0+ 测试: `test_harness.py`（harness Edit 工具链回归，含 12 边界逐条/\r\n 归一/≤50 cap/引擎端到端 strict/polish/custom/harness_enabled=False/全失败 FAILED/warnings 置位/多 chunk audit 合并）
-- v5.3.0+ 测试: `tests/test_harness_split.py`（workflow 派生/矩阵/按轨取档/字段数 32）+ `tests/test_web_backend_deai.py` 的 `test_v530_workflow_nav` / `test_v530_provenance_static`（导航 DOM + 来源标注静态断言）+ `tests/test_web_backend_files.py::test_v530_get_file_char_counts`
+  - v5.3.0+ 测试: `tests/test_harness_split.py`（workflow 派生/矩阵/按轨取档/字段数 32）+ `tests/test_web_backend_deai.py` 的 `test_v530_workflow_nav` / `test_v530_provenance_static`（导航 DOM + 来源标注静态断言）+ `tests/test_web_backend_files.py::test_v530_get_file_char_counts`
+  - v5.4.0+ 测试: `tests/test_think_strip.py`（思维链剥离全表 T1-T28 + 全切点/纯正文 property + 惰性/幂等/性能 + D9）+ `test_components.py` 流式剥离 + `test_chunk_lifecycle.py::test_m6_think_only_output_failed` + `tests/test_web_backend_deai.py::test_v540_deai_think_strip` + `tests/test_web_backend_proofread.py::test_v540_think_residue_cache`
 - 一键跑: `run_all_tests.py`
 - UI 冒烟: `tools/smoke_ui.py`（v5.3.0+, Playwright 三视口; 改侧边栏/布局后必跑, 截图落 `.local/smoke-ui-v5.3/`）
 - 无 pytest 依赖，纯脚本运行
@@ -186,7 +198,7 @@ DeAI 后置层（3 项，v3.0/v4.1.7 起借鉴，v5.0.2 补登记 LICENSE）：
 - `docs/THIRD_PARTY_NOTICES.md` — 借鉴来源 + LICENSE 全文 (§12-15: typeset/autocorrect/macro-correct/排版指北)
 - `docs/ROADMAP.md` — 路线图与跨会话待办
 - `docs/PLAN-workflow-split-v5.3.md` — v5.3.0 工作流双入口实施计划 (§12 为执行记录表, 每个 session 完成回填)
-- `docs/PLAN-think-strip-v5.4.md` — v5.4 思维链剥离实施计划 (§12 为执行记录表; v2 已审计·并入 B1-B5, 待开工)
+- `docs/PLAN-think-strip-v5.4.md` — v5.4 思维链剥离实施计划 (§12 为执行记录表; v2.1 两轮审计·并入 B1-B5+V1/V2, 已开工)
 - `docs/PLAN-splitter-v5.2b.md` — v5.2b 小说切分计划
 - `docs/archive/plans/` — 历史升级 plan 归档 (v3.0 — v4.1.7 完成态存档,见 `README.md`)
 
@@ -224,6 +236,9 @@ from openai import AsyncOpenAI  # LLM
 - 不要在 `_collectAllConfig()` 里写 `harness_enabled` / `workflow_mode`（入口由 `App.setWorkspaceTrack()` 单独落盘; 混进全量保存会把轨道翻回去, 见 §45）
 - 不要为 `extra_large(50000)` 在 `resolve_chunk_preset` 之外另写第二套档位派生（越轨回退 `large` 的规则必须单点）
 - 不要在给 `.provenance-bar` 这类自带 `display` 的类上加 `hidden` 而不配套 `[hidden]{display:none}`（author 样式会盖掉 UA 规则, 空条会占位）
+- 不要写第二套"行首"判定（剥离 / 过滤器悬置 / 断点残留扫描三处必须共用 `strip_thinking` 的同一坐标定义）
+- 不要让 delta 的 `reasoning_content` / `reasoning` / `reasoning_details` 进入 corrected / 前端 / 落盘（v5.4 §50）
+- 不要只在 DeAI 的 push 点过滤思维链（累积器必须是剥后文本, 否则 6 组消费点继续带污染, §49）
 - 不要放宽 `punct_fix.py` 的四条红线（纯英文上下文不动 / 落单引号只报不改 / 分号不转换 / 幂等）——调研结论是我们比同类项目更保守才安全的，放宽会引入不可逆误伤
 
 ## 借鉴合规要求（MIT / BSD / Apache-2.0 协议）

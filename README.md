@@ -1,4 +1,4 @@
-# 墨准 (MoZhun) v5.3.1 (pywebview + 水墨宣纸 / Win11 Fluent)
+# 墨准 (MoZhun) v5.4.0 (pywebview + 水墨宣纸 / Win11 Fluent)
 
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg) ![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg) ![Platform: Windows](https://img.shields.io/badge/Platform-Windows-0078d4.svg) ![GUI: pywebview](https://img.shields.io/badge/GUI-pywebview-6DA55F.svg)
 
@@ -15,7 +15,19 @@
 - **本地标点修复 (v4.3.3 / v4.3.4)** — 纯规则脚本，**不调用 LLM、零成本、零 API 延迟**：中文引号自动配对（弯/直角两种风格）、省略号/破折号/波浪号归一、全角字母数字折叠、引号不平衡行号报告
 - **Markdown 清洗 (v4.4.2)** — AI 产出的 .md / md 格式 txt 直接丢进来，产出一篇无标记、适宜人类阅读的文章（本地规则引擎 `md_strip`，零成本零延迟）；可选「送 LLM 前剥离 Markdown」让校对/去AI味不再读标记
 - **Edit 工具链 harness (v5.1.0)** — 「严格校对 / 纠错+轻润色」模式默认改走 function calling：模型逐条返回编辑建议（改哪 / 改成什么 / 为什么），客户端精确匹配应用，**输出 token 大幅下降**；右侧对比区「改动清单」逐条审计（已应用 / 未找到原文 / 匹配多处 / 级联失效），部分未采纳时文件标「完成（部分建议未采纳）」
+
+### 思维链剥离 (v5.4)
+
+部分端点会把模型的推理过程内联进正文（` <think>…</think>`），它会整段进入校对结果、diff、导出、断点、去 AI 味的改写与风格样本。v5.4 起**一律丢弃**：
+
+- **只剥行首块**（`<` 之前同一行内只有空白，允许缩进），行内提及（如 `` `<think>` ``）属合法内容受保护；代码围栏 (``` / ~~~) 内不剥
+- **白名单标签**: `think` / `thinking` / `reasoning` / `thought`（大小写不敏感、允许属性、同名嵌套按深度配对）
+- **流式预览不闪现**：三次流式链路（整篇校对 / 去 AI 味分块+revise / 风格蒸馏）共用同一个过滤器，预览与最终结果严格一致
+- **独立字段**（`reasoning_content` / `reasoning`）**永不读取**，只在日志记帧数
+- **旧断点自动兜底**：命中缓存时若发现结果仍含残留（而原文本身不含），自动忽略缓存强制重跑一次，日志写明原因
+- **边界**：同一行内出现的块不剥（肉眼可见，可强制重跑）；输出**只有**思维链时按空输出处理，走既有重试链 → 耗尽后标 FAILED
 - **双轨分块/超时配置 (v5.2c / v5.3)** — 逐条校对默认 `large=6000` + 180s，整篇校对默认 `balanced=3000` + 120s，两条轨各自的配置只在对应入口生效，降低慢模型触发超时重试的概率
+- **思维链剥离 (v5.4)** — 模型把推理过程内联进正文的 `<think>…` 块一律丢弃：整篇校对、去 AI 味（检测/改写/评分/revise）、风格蒸馏全覆盖，流式预览不闪现；旧断点若含残留会自动强制重跑一次
 - **小说切分 (v5.2b)** — 独立视图，支持中英文章节/卷/特章识别、广告清理、相邻去重、超大章拆分、Gutenberg 头截断和批量落盘
 - **流式输出** — 边生成边显示，实时预览校对结果
 - **后台线程 + asyncio (v4.0+)** — 主线程跑 pywebview 事件循环，桥接 `window.pywebview.api.xxx`
@@ -221,6 +233,7 @@ v5.2c 起，校对参数页把两条轨的 chunking 与 timeout 分开保存：�
 │   ├── ai_score_local.py   # v5.0.2+ 本地 AI 味评分
 │   ├── harness.py          # v5.1.0+ Edit 工具链
 │   ├── novel_splitter.py   # v5.2b+ 小说切分
+│   ├── think_strip.py      # v5.4+ 思维链剥离 (纯函数 + 流式增量过滤器)
 │   ├── context_builder.py  # v3.0+ 跨段 prefix
 │   ├── templates.py        # API 模板 (10 预设) + Prompt (6 模式 + deai)
 │   ├── utils.py            # 数据模型 + 配置持久化 + 断点
@@ -229,7 +242,7 @@ v5.2c 起，校对参数页把两条轨的 chunking 与 timeout 分开保存：�
 ├── check_exe.py            # 打包后 exe 资源完整性校验
 ├── run_all_tests.py        # 自动发现并一键跑全部测试
 ├── tools/smoke_ui.py       # v5.3+ Playwright 三视口 UI 冒烟（布局 + 截图）
-├── tests/                  # 18 个测试套件
+├── tests/                  # 19 个测试套件
 ├── docs/                   # 文档
 │   ├── archive/plans/      # 历史升级 plan 归档
 │   ├── ROADMAP.md          # 当前路线图与跨会话待办
@@ -263,7 +276,7 @@ python tests/test_web_backend_proofread.py
 python tools/smoke_ui.py
 ```
 
-当前状态：`run_all_tests.py` 自动发现 18 个套件，v5.3.1 报告 **1463 通过 / 0 失败**（另有 `tools/smoke_ui.py` 三视口 + 跨入口 + 阈值弹窗 + API 面板 91 项断言全绿）。
+当前状态：`run_all_tests.py` 自动发现 19 个套件，v5.4.0 报告 **1550 通过 / 0 失败**（另有 `tools/smoke_ui.py` 三视口 + 跨入口 + 阈值弹窗 + 思维链流式预览 + API 面板 96 项断言全绿）。
 
 ## 打包
 
