@@ -7,6 +7,17 @@
 
 ---
 
+## ⏳ 待评审: v5.3 工作流双入口 (未开工)
+
+计划文件: [`PLAN-workflow-split-v5.3.md`](PLAN-workflow-split-v5.3.md)
+
+- 目标: 侧边栏拆出「逐条校对 / 整篇校对」两个入口, 「重写 → 去 AI 味」父子项, 新增「工具」组
+- 前置事实: 模式目前是 `harness_enabled` + `prompt_mode` 白名单派生 (`app/processor.py:805-816`), 无 workflow 一等身份
+- 关键取舍: 共享队列 + 单结果槽 + 强来源标注 (双结果槽列为 Phase 2, 需用户拍板)
+- 等待中: 命名 (逐条/整篇 vs 校对/重写)、是否要求两轨结果并存、是否排在 v6.0 C2 之前
+
+---
+
 ## ✅ 已完成 (历史)
 
 - v5.1.0 (2026-09-07) — 校对流程 harness 化: Edit 工具链 (function calling) + 改动清单审计
