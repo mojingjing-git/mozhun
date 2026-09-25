@@ -7,16 +7,16 @@
 
 ---
 
-## 🚧 已审计 · 待批准开工: v5.4 思维链剥离 (2026-09-26 用户拍板"直接丢")
+## 🚧 两轮审计完成 · 待开工: v5.4 思维链剥离 (2026-09-26 用户拍板"直接丢")
 
-计划文件: [`PLAN-think-strip-v5.4.md`](PLAN-think-strip-v5.4.md) (v2, 已并入审计阻塞项 B1-B5)
-审核报告: `.workbuddy/reviews/review-think-strip-v5.4-plan.md` (本地, 不入库) — 裁决「需修订后开工」, 修订已完成
+计划文件: [`PLAN-think-strip-v5.4.md`](PLAN-think-strip-v5.4.md) (v2.1, 已并入两轮审计阻塞项 B1-B5 + V1/V2)
+审核报告 (本地, 不入库): `.workbuddy/reviews/review-think-strip-v5.4-plan.md` / `review2-think-strip-v5.4-plan.md`
 
 - 现状: 代码目录**零**思维链处理 —— harness 不读 content、流式三处只取 `delta.content`, 靠"厂商把思维链放独立字段"侥幸不漏
 - 漏点 (按路径限定): 内联式 `<think>…` 只污染**整篇校对轨 + DeAI** (harness 轨 content 不参与结果) —— diff / 复制 / 导出 / 断点 / 评分全链路
-- 方案 v2: 新增 `app/think_strip.py` (纯函数 + 惰性增量过滤器: 行首规则 + 围栏豁免 + 三悬置安全前缀), 4 个点接线; 独立字段显式不读 (帧计数 debug 日志); 旧断点定向失效 (扫到残留强制重跑); 不动断点 hash
-- 审计改判: 取消行内反引号豁免 (跨 delta 配对可翻转, 已复现反例) → 只剥**行首**(允许前导空白)的块; harness `WARN_EDIT_IN_CONTENT` 移出本版 (Phase 2)
-- 状态: **待批准开工** (S1 内核 4h / S2 引擎 3-4h / S3 DeAI 3-4h / S4 冒烟+文档 2-3h)
+- 方案 v2.1: 新增 `app/think_strip.py` (纯函数 + 惰性增量过滤器: 行首规则 + 围栏豁免 + 三悬置安全前缀), 4 个点接线; 独立字段显式不读 (帧计数 debug 日志); 旧断点定向失效 (扫到残留强制重跑); 不动断点 hash
+- 审计改判: 取消行内反引号豁免 (跨 delta 配对可翻转, 已复现反例) → 只剥**行首**(允许前导空白)的块; 行首口径钉死为**可见文本坐标** (复审 V1); 围栏行判定 `rstrip("\r")` 修 CRLF 漏剥 (复审 V2); harness `WARN_EDIT_IN_CONTENT` 移出本版 (Phase 2)
+- 状态: **待开工** (用户已批"复审没问题就执行"; S1 内核 4h / S2 引擎 3-4h / S3 DeAI 3-4h / S4 冒烟+文档 2-3h)
 
 ---
 
