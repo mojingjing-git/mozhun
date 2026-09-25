@@ -263,7 +263,7 @@ python tests/test_web_backend_proofread.py
 python tools/smoke_ui.py
 ```
 
-当前状态：`run_all_tests.py` 自动发现 18 个套件，v5.3 报告 **1446 通过 / 0 失败**（另有 `tools/smoke_ui.py` 三视口 70 项布局断言全绿）。
+当前状态：`run_all_tests.py` 自动发现 18 个套件，v5.3 报告 **1448 通过 / 0 失败**（另有 `tools/smoke_ui.py` 三视口 + 跨入口 78 项断言全绿）。
 
 ## 打包
 

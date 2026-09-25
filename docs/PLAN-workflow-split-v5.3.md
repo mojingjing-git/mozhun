@@ -340,8 +340,8 @@
 - [x] 50000 档依据已写进 CHANGELOG —— **用户确认可用 / 10 万档才失误**, 模型与耗时未逐项留档 (CHANGELOG 明文标注, 不假装有报告)
 - [x] `punct_local` / `md_local` 在两个入口都可选且不触网
 - [x] `set_config` **单向**兼容 (`harness_enabled` → `workflow_mode`) 与两端钳制生效; `AGENTS.md` §37 假声明被修正
-- [x] `run_all_tests.py` 全绿: **1446 通过 / 0 失败** (基线 1343 + 新增)
-- [x] Playwright 三视口冒烟通过 (70 项断言, `tools/smoke_ui.py` 入库); ⏳ 真机 pywebview 截图未做 (需人工开窗, 见下方残留项)
+- [x] `run_all_tests.py` 全绿: **1448 通过 / 0 失败** (基线 1343 + 新增)
+- [x] Playwright 三视口冒烟通过 (78 项断言, 含跨入口来源 + `force_rerun` 端到端, `tools/smoke_ui.py` 入库); ⏳ 真机 pywebview 截图未做 (需人工开窗, 见下方残留项)
 - [x] `config` 里无 `workflow_mode` 的老用户升级后行为可预测 (派生 = 旧逻辑)
 
 **残留项 (交付时向用户说明)**:
@@ -378,7 +378,7 @@
 | S5 DeAI 一致性 | ✅ 完成 | `2628575` | `_deaiChunkEstimate` 读 rewrite 轨 + 联动来源标注 (`deai-source-hint`) + 导出名带来源轨 + 兼容字段文案改「DeAI / 整篇共用」 |
 | S6 文档 + 回归 + 冒烟 | ✅ 完成 | 见下条 | README/AGENTS(§39-46 + §37 更正)/CHANGELOG/ROADMAP 四件套 + 回归 1446 + `tools/smoke_ui.py` |
 
-**S6 备注**: 文档提交与 S3-S5 的代码提交分开记录 (文档为本表最后一批改动); 冒烟脚本在实机截图中抓到 `.provenance-bar` 被 `[hidden]` 覆盖的真实缺陷并已修复。
+**S6 备注**: 文档提交与 S3-S5 的代码提交分开记录 (文档为本表最后一批改动); 冒烟脚本在实机截图中抓到 `.provenance-bar` 被 `[hidden]` 覆盖的真实缺陷并已修复; §6.1 里"引擎级强制重跑仍能覆盖被保护断点"一条补落在 `tests/test_chunk_lifecycle.py::test_v530_preserve_done_and_force_rerun`。
 
 ---
 

@@ -580,6 +580,81 @@ def test_m5_backoff_cancel_interrupts():
     check("M5 取消完整收尾", task.result is not None)
 
 
+def test_v530_preserve_done_and_force_rerun():
+    """v5.3.0 (PLAN §2 D9 / §6.1): 引擎收尾的断点保护 + 强制重跑出口。
+
+    单结果槽 + 双入口的核心护栏:
+      - 另一条轨失败/取消收尾 **不覆盖** 磁盘上已完成的结果 (回原轨仍能命中断点)
+      - 强制重跑 (force_rerun → 重新执行 → 成功写点) **仍然能覆盖** 被保护的结果
+    """
+    print("\n--- v5.3.0: 断点保护 + 强制重跑出口 ---")
+    import asyncio
+    from app.utils import compute_prompt_hash_for_config
+
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False,
+                                     encoding='utf-8') as f:
+        f.write("原文内容。" * 40)
+        tmp = Path(f.name)
+
+    # 逐条轨跑完 → 磁盘上是"逐条结果"
+    cfg_harness = ProjectConfig(api_base="http://x", model="m", max_retries=0,
+                                concurrency=1, chunking_preset_harness="large",
+                                workflow_mode="harness")
+    h_harness = compute_prompt_hash_for_config(cfg_harness)
+    save_checkpoint(tmp, FileTask(
+        file_path=tmp, status=TaskStatus.COMPLETED, original_text="原文内容。" * 40,
+        result=FileResult(original="原文内容。" * 40, corrected="逐条结果",
+                          prompt_hash=h_harness),
+    ))
+
+    async def run_fail_then_rerun():
+        # 整篇轨尝试 → 失败收尾 (preserve_done=True)
+        cfg_rewrite = ProjectConfig(api_base="http://x", model="m", max_retries=0,
+                                    concurrency=1, chunking_preset_rewrite="balanced",
+                                    workflow_mode="rewrite")
+        eng = ProcessingEngine(cfg_rewrite)
+        eng._loop = asyncio.get_running_loop()
+        eng._pause_event = threading.Event()
+        eng._pause_event.set()
+        key = str(tmp)
+        task = FileTask(file_path=tmp, original_text="原文内容。" * 40)
+        eng.tasks[key] = task
+        eng._current_prompt_hash = compute_prompt_hash_for_config(cfg_rewrite)
+        await eng._finalize_failed(key, task, time.time(), "BadRequest",
+                                   "模拟整篇轨失败")
+
+        # 回到逐条轨: 旧结果仍在, 且仍能命中该轨断点
+        cached = load_checkpoint(tmp, expected_hash=h_harness)
+        kept = (cached is not None and cached.status == TaskStatus.COMPLETED
+                and cached.result is not None
+                and cached.result.corrected == "逐条结果")
+
+        # 强制重跑: 重新执行 + 成功写点 (默认 preserve_done=False) → 覆盖
+        async def fake_stream(self, task_key, text):
+            return text.replace("内容", "正文"), 10, [
+                FileResult(original=text, corrected=text.replace("内容", "正文"))
+            ]
+
+        eng2 = ProcessingEngine(cfg_harness)
+        eng2._loop = asyncio.get_running_loop()
+        eng2._pause_event = threading.Event()
+        eng2._pause_event.set()
+        eng2._current_prompt_hash = h_harness
+        task2 = FileTask(file_path=tmp, original_text="原文内容。" * 40)
+        eng2.tasks[key] = task2
+        with patch.object(ProcessingEngine, '_call_api_stream', fake_stream):
+            await eng2._process_file_async(key, task2)
+        after = load_checkpoint(tmp, expected_hash=h_harness)
+        overwritten = (after is not None and after.result is not None
+                       and after.result.corrected == "原文正文。" * 40)
+        return kept, overwritten
+
+    kept, overwritten = asyncio.run(run_fail_then_rerun())
+    tmp.unlink(missing_ok=True)
+    check("另一条轨失败不覆盖已完成结果", kept)
+    check("强制重跑仍能覆盖 (出口没被堵死)", overwritten)
+
+
 def main():
     print("=" * 60)
     print("  chunk 级别 lifecycle 测试")
@@ -599,6 +674,7 @@ def main():
         test_custom_prompt_only_when_mode_custom,   # v4.1.8.1 H12
         test_m4_stream_monotonic_fulltext,          # v4.1.8.1 M4
         test_m5_backoff_cancel_interrupts,          # v4.1.8.1 M5
+        test_v530_preserve_done_and_force_rerun,    # v5.3.0 D9 + 强制重跑出口
     ]
     for t in tests:
         try:
