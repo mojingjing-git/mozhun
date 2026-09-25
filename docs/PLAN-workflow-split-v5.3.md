@@ -4,6 +4,7 @@
 **基线**: `master @ 3c41f8c` (校对与对比单页已合并)
 **状态**: ⏳ 待用户批准 — **尚未开工**
 **审核**: ✅ 已过一轮独立审核 (2026-09-26, 只读 verifier)。裁决"需修订后开工", 6 个阻塞项 (B1-B6) 已全部并入本版: 见 §2 D4/D9/D10、§3.4、§3.5、§4-7、§5 #4/#7/#15/#19/#20、§6.0。审核报告原件: `.workbuddy/reviews/review-v5.3-workflow-split-plan.md`
+**用户决策**: ✅ `extra_large=50000` 定性为**逐条校对专属设置** (D7); ✅ 断点保护副作用接受, 并要求保留"忽略旧结果强制重跑"出口 (D9 / §4-10)。其余待定项见 §11
 **总工时**: 23-33h (3-4 人天, 8 个 session)
 **最后更新**: 2026-09-26
 **调研方式**: 3 个并行只读 agent (数据层 / 前端 IA / 引擎语义) + 主会话逐条复核
@@ -77,9 +78,9 @@
 | **D4** | 模式是否升为一等字段 | **是**, 但用 `workflow_mode: str = ""` (**空 = 自动派生**) + 单一 `effective_workflow` 派生函数; 显式值域 `{harness, rewrite}` | 直接给硬默认值会与 `ProjectConfig(prompt_mode="custom")` 这类**直接构造**冲突 (测试大量这么写)。空值派生同时满足: 老配置无字段 → 按旧逻辑 `harness_enabled and prompt_mode ∈ {strict,polish}` 推出结果; 显式值 → 以它为准。**引擎侧白名单仍是权威** (`custom`/`tech_doc` 永远不走工具链, 守 AGENTS §36), 冲突由 UI 层过滤消除, 见 §3.4 |
 | **D5** | 入口状态是否持久化 | **持久化**, 导航入口即"当前工作流" | 只做一次性运行参数会导致: 入口显示的和 `校对参数` 页存的不是一回事, 反而更难懂 |
 | **D6** | 版本与排期 | 独立 **v5.3.0**, 排在 v6.0 清理 C2 (`app.js` 拆 ES module) **之前** | C2 要在 12 个模块里重新分布导航与 track 状态; 应在 IA 稳定后再拆 |
-| **D7** | `extra_large=50000` 给哪条轨 | **只给逐条校对 (harness)**; 整篇校对轨不可选; 标签标为**实验档** | 整篇校对是流式**整篇重输出**: 50K 字符输入 = 模型要重吐 ~50K 字。全仓无 `max_tokens`, 也无长度校验 (`app/processor.py:795-800` 只判空) → 端点默认输出上限会**静默截断**。同源先例: DeAI 的 `_DEAI_WHOLE_FILE_LIMIT = 20000` (`app/web_backend.py:66-68`)。另: 50000 档是**单响应**协议 (`_harness_call` 只调一次) 且单块编辑上限 50 条 (`app/harness.py:27-31`), 烟测若只验了"能返回"未验错误密集文本, 就不该当成常规档 |
-| **D8** | 整篇轨 `whole_file` 现无尺寸兜底, 管不管 | 本版**加告警 + 加事后检测, 但不强制降级** | proofread 的 `whole_file` 无条件返回 `[text]` (`app/utils.py:600-601`), 与 DeAI 的 20000 兜底待遇不一致。强制降级会悄悄改掉用户的显式选择 (留 Phase 2)。**告警必须放 `_runProofread`** (共享入口), 否则右键「强制重跑」(`web/app.js:1262-1273`) 会绕过; 同时捕获 `finish_reason == "length"` + 输出/输入长度比, 走既有 `warnings` 通道标记"疑似截断" |
-| **D9** | 单结果槽下, 失败/取消会不会冲掉另一轨的好结果 | **必须修**: 失败/取消收尾时, 若磁盘已有 `is_done` 断点则**不覆盖** | 现状 `_finalize_cancelled` (`app/processor.py:637`) 与 `_finalize_failed` (`app/processor.py:671`) 都无条件 `save_checkpoint_async`, 而断点文件只按路径命名 (`app/utils.py:572-582`)。后果: 逐条轨跑完 → 整篇轨启动后立刻取消 → 逐条成果被空 corrected 的 CANCELLED 断点覆盖。**不修这条, §1-3 的"不会被静默覆盖"就是假的**。副作用: 失败重跑不再清掉磁盘上旧的成功结果 (想真丢弃 → 用「清空文件」或强制重跑); 该副作用在 §11-6 明示 |
+| **D7** | `extra_large=50000` 给哪条轨 | **逐条校对 (harness) 专属** (用户 2026-09-26 确认): 整篇校对 / DeAI / 蒸馏 / 兼容下拉一律不出现; 标签标为**实验档** | 整篇校对是流式**整篇重输出**: 50K 字符输入 = 模型要重吐 ~50K 字。全仓无 `max_tokens`, 也无长度校验 (`app/processor.py:795-800` 只判空) → 端点默认输出上限会**静默截断**。同源先例: DeAI 的 `_DEAI_WHOLE_FILE_LIMIT = 20000` (`app/web_backend.py:66-68`)。另: 50000 档是**单响应**协议 (`_harness_call` 只调一次) 且单块编辑上限 50 条 (`app/harness.py:27-31`), 烟测若只验了"能返回"未验错误密集文本, 就不该当成常规档 |
+| **D8** | 整篇轨 `whole_file` 现无尺寸兜底, 管不管 | 本版**加告警 + 加事后检测, 但不强制降级**。**告警的确切含义**: 在「整篇校对」入口选了 `whole_file`(整文件不分块) 档、且文件字数超过阈值 N 时, 开始前弹一次确认 ——「整篇会作为单次请求发出, 长文可能超模型上下文或被截断。继续?」, 点确认照跑 (不是限制线, 是提醒线) | proofread 的 `whole_file` 无条件返回 `[text]` (`app/utils.py:600-601`), 与 DeAI 的 20000 兜底待遇不一致。强制降级会悄悄改掉用户的显式选择 (留 Phase 2)。**告警必须放 `_runProofread`** (共享入口), 否则右键「强制重跑」(`web/app.js:1262-1273`) 会绕过; 同时捕获 `finish_reason == "length"` + 输出/输入长度比, 走既有 `warnings` 通道标记"疑似截断"。阈值建议 **N = 20000**, 对齐 DeAI 的 `_DEAI_WHOLE_FILE_LIMIT` (§11-5 待确认数值) |
+| **D9** | 单结果槽下, 失败/取消会不会冲掉另一轨的好结果 | **必须修**: 失败/取消收尾时, 若磁盘已有 `is_done` 断点则**不覆盖** | 现状 `_finalize_cancelled` (`app/processor.py:637`) 与 `_finalize_failed` (`app/processor.py:671`) 都无条件 `save_checkpoint_async`, 而断点文件只按路径命名 (`app/utils.py:572-582`)。后果: 逐条轨跑完 → 整篇轨启动后立刻取消 → 逐条成果被空 corrected 的 CANCELLED 断点覆盖。**不修这条, §1-3 的"不会被静默覆盖"就是假的**。**副作用已获用户接受 (2026-09-26), 并要求保留"忽略旧结果强制重跑"出口 —— 该出口已存在**(右键「重新校对（忽略缓存）」→ `force_rerun` → `prepare_tasks` 整体跳过 `load_checkpoint`, `web/app.js:297`/`1260-1273` + `app/processor.py:274`)。本版只需把它**接到来源提示条**并写进文案, 不新建机制 |
 | **D10** | 参数页的 `harness_enabled` 复选框怎么处理 | **移除**, 降级为只读兼容字段; 只读段控件改成"当前入口"状态显示 | 前端任何参数改动都会 500ms 后**全量** `saveConfig`, payload 里含 `harness_enabled` (`web/app.js:2119-2121` → `2154-2174`)。若保留复选框而入口切到 rewrite, 下一次任意保存就会把 `harness_enabled=True` 发回后端, 把轨道**翻转回去** (且结果取决于键顺序, 属隐蔽的顺序依赖)。唯一真值必须是 `workflow_mode`, 入口即开关 |
 
 ---
@@ -181,6 +182,8 @@
 7. **来源状态机** (修 B4): `resultWorkflow` **只在成功完成时写入**; 失败/取消保留旧来源。理由: `onTaskComplete` 的失败分支会清掉 `t.corrected` (`web/app.js:1508-1509`), 若那时改写来源字段, 就会把"上一轨的好结果"标成"当前轨的坏结果"。
 8. **覆盖确认要覆盖两条路径** (修 B3 配套): 批量开始 (`web/app.js:1171-1179`) **与** 右键「重新校对」的单文件重跑 (`web/app.js:1262-1273`) 都要挂确认, 否则后者绕过。
 9. **本地模式披露** (见 §3.4): 本地模式结果在两个入口互不命中, 换入口会重跑一次 —— 零成本, 但要在文案里说清, 不能让用户以为是 bug。
+10. **「用当前入口重跑」必须走强制重跑** (用户 2026-09-26 要求): 来源提示条上的按钮要传 `force_rerun=True` (`_runProofread([path], { forceRerun: true })`, 现成通道在 `web/app.js:297`/`1260-1273`)。理由: D9 之后磁盘上仍留着上一轨的成功断点, 普通「开始」会被 `prepare_tasks` 判为缓存命中 (`app/processor.py:274-282`) **秒标完成**, 用户会觉得"点了没反应"。
+11. **缓存命中提示分两种口径**: ①本轨刚跑完又重跑 → 沿用现有 `已跳过 N 个文件（命中上次校对缓存，右键可强制重新校对）` (`web/app.js:1243`); ②命中的是**另一轨遗留**的结果 (D9 后的新状态) → 走"来源不一致"提示 + 强制重跑入口, 不能报成普通缓存命中。
 
 ---
 
@@ -204,13 +207,13 @@
 | 14 | 改 | `web/index.html` | 侧边栏三组 + 父/子项; 头部机制说明; **去掉首个 nav 硬编码 `active`**; 移除 `cfg-harness-enabled` 复选框; 只读段控件改"当前入口"显示; 超大块提示文案 | +55/-25 | 🟡 |
 | 15 | 改 | `web/style.css` | `.nav-children` / `.nav-item.is-child` / `.nav-expander` / 来源徽标 / 跨入口提示条 (全走 token) | +70 | 🟡 |
 | 16 | 改 | `web/app.js` | 唯一 `data-nav-key` 激活 + `renderSidebar` 改读 nav-key + 父项展开/`aria-expanded` + **启动按 `workflow_mode` 恢复** + 入口切换写配置 | +95 | 🟡 |
-| 17 | 改 | `web/app.js` | 来源徽标 / 跨入口提示 / pending 判定 / **两条路径的覆盖确认** / `resultWorkflow` 只在成功时写 | +80 | 🟡 |
-| 18 | 改 | `web/app.js` | chunking **与 prompt_mode 两个**下拉按轨过滤 + 整文件告警放 `_runProofread` + `_deaiChunkEstimate` 改读 rewrite 轨 + `_collectAllConfig` 去掉 `harness_enabled` | +45 | 🟡 |
+| 17 | 改 | `web/app.js` | 来源徽标 / 跨入口提示 / pending 判定 / **两条路径的覆盖确认** / `resultWorkflow` 只在成功时写 / **重跑按钮走 `force_rerun=True`** / 缓存命中提示分两种口径 | +95 | 🟡 |
+| 18 | 改 | `web/app.js` | chunking **与 prompt_mode 两个**下拉按轨过滤 + 整文件告警 (阈值 20000, 放 `_runProofread`) + `_deaiChunkEstimate` 改读 rewrite 轨 + `_collectAllConfig` 去掉 `harness_enabled` | +50 | 🟡 |
 | 19 | 新增 | `web/icons/` 4 处 | 补 `check-list` / `document-edit` / `document-multiple` 的 SVG + mask 映射; `app` 补 mask 映射 (已有 SVG) | +45 | 🟢 |
 | 20 | 改 | `tests/*` | 见 §6 (含既有断言更新 + 新档位 + 轨过滤 + 断点保护) | +420 | 🟡 |
 | 21 | 改 | `README.md` / `AGENTS.md` / `CHANGELOG.md` / `docs/ROADMAP.md` | 架构图 / 决策 §39 + 修正 §37 假声明 / v5.3.0 条目 (含烟测参数) / 进度 | +110 | 🟢 |
 
-**合计**: 4 新增 + 17 改, 净增约 1150 行。
+**合计**: 4 新增 + 17 改, 净增约 1170 行。
 
 ---
 
@@ -237,6 +240,8 @@
 | `tests/test_web_backend_config.py` | `set_config` **单向**兼容: 写 `harness_enabled` → `workflow_mode` 跟随; 写 `workflow_mode` → `harness_enabled` 镜像; 非法 workflow 值 `{ok:false}` |
 | `tests/test_web_backend_config.py` | **B2 集成**: 按 `_collectAllConfig` 的真实键顺序整包保存一遍, 轨道**不翻转** |
 | `tests/test_web_backend_proofread.py` | 5 参数老调用仍绑定 `force_rerun` (第 6 位新参数不破坏既有绑定) |
+| `tests/test_web_backend_deai.py` | 静态: 来源提示条的重跑按钮传 `force_rerun=True` (不是普通开始); 缓存命中提示按"本轨/另一轨遗留"分两种文案 |
+| `tests/test_chunk_lifecycle.py` | D9 保护生效后, `force_rerun=True` 仍能覆盖被保护的成功断点 (强制重跑出口没被堵死) |
 | `tests/test_chunk_lifecycle.py` | **B3 断点保护**: 逐条轨成功 → 整篇轨失败/取消 → 磁盘断点仍是逐条的 `is_done`, 再次加载可命中 |
 | `tests/test_chunk_lifecycle.py` | `finish_reason="length"` 的流式响应 → 结果带 `warnings` 标记 (不静默通过) |
 | `tests/test_harness_split.py` | `workflow_mode=harness` 强制走 harness; `workflow_mode=rewrite` 即使 `harness_enabled=True` 也不走 harness; 两条轨的 chunk/timeout 派生互不串 |
@@ -329,10 +334,12 @@
 - [ ] 侧边栏 3 组 + 「重写 → 去 AI 味」子项; 7 个视图 id 不变且唯一
 - [ ] 两个入口分别以 `harness` / `rewrite` 启动, 日志、payload、导出名都带 workflow
 - [ ] 结果来源徽标 + 跨入口提示 + 覆盖前确认三件套可用
+- [ ] 来源提示条的「重跑」走 `force_rerun=True`, 能覆盖 D9 保护住的旧断点; 缓存命中提示区分"本轨命中 / 另一轨遗留"
+- [ ] 整篇入口选「整文件」且超阈值时弹确认; `finish_reason=length` 会在结果上打截断警告
 - [ ] `extra_large=50000` 在**逐条轨**可选、**整篇轨不可见**; 引擎侧对误配回退 `large` 并记日志
 - [ ] 50000 档的烟测参数 (模型/耗时/是否触顶) 已写进 CHANGELOG; 未记录时不出现"已支持 50K"的用户可见文案
 - [ ] `punct_local` / `md_local` 在两个入口都可选且不触网
-- [ ] `set_config` 老↔新字段镜像与两端钳制生效; `AGENTS.md` §37 假声明被修正
+- [ ] `set_config` **单向**兼容 (`harness_enabled` → `workflow_mode`) 与两端钳制生效; `AGENTS.md` §37 假声明被修正
 - [ ] `run_all_tests.py` 全绿 (基线 1343 + 新增)
 - [ ] 真机侧边栏截图 + Playwright 三视口冒烟通过
 - [ ] `config` 里无 `workflow_mode` 的老用户升级后行为可预测 (派生 = 旧逻辑)
@@ -345,8 +352,8 @@
 2. ~~结果并存~~ → ✅ **已定 (2026-09-26)**: 双结果槽先放, 留在 Phase 2。
 3. **排期**: 接受 v5.3 排在 v6.0 C2 (`app.js` 拆 ES module) 之前?
 4. **烟测参数**: 能否提供那次 50000 字符 harness 烟测的模型/端点、输入字符数、耗时、是否触顶? (用于 CHANGELOG 与 timeout 建议值; 拿不到就沿用 180s 并在文档里标注"参数未记录")
-5. **整文件告警阈值** (D8): 接受 20000 (对齐 DeAI 的 `_DEAI_WHOLE_FILE_LIMIT`) 作为"整文件模式开始前告警"的阈值吗?
-6. **断点保护副作用** (D9): 修完之后, 失败/取消**不再覆盖**磁盘上已有的成功结果 —— 同一文件重跑失败, 之后再添加该文件会命中旧结果而不是重跑。接受这个副作用吗? (不接受 → 得把 Phase 2 的双断点提前到本版)
+5. **整文件告警阈值** (D8): 含义已写明 (选 `whole_file` 档 + 超阈值 → 开始前弹一次提醒, 点确认照跑)。待定的是**数值**, 建议 **20000** (对齐 DeAI 的 `_DEAI_WHOLE_FILE_LIMIT`), 接受吗?
+6. ~~断点保护副作用~~ → ✅ **已定 (2026-09-26)**: 用户接受副作用, 并明确要求保留"忽略旧结果强制重跑"出口。该出口**已存在** (`force_rerun` + 右键「重新校对（忽略缓存）」), 本版把它接到来源提示条 (D9 + §4-10)。
 7. **50000 档的标签**: 烟测参数给全 → 按正式档发布; 给不全 → 标「超大块 (50000, 实验)」并在 CHANGELOG 写明"参数未记录"。
 
 ---
