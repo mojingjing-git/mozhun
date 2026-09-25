@@ -1387,6 +1387,174 @@ def test_v531_api_panel_no_model_examples():
           "if (tpl.model) {\n      this.setVal('cfg-model', tpl.model);\n    }" in js)
 
 
+# === test_v540_deai_think_strip ===
+def test_v540_deai_think_strip():
+    """v5.4 (PLAN §2 D8): DeAI 三处流式剥离 + 消费点不变式.
+
+    覆盖: 分块流 (含块间衔接 prompt / 评分输入) / 错误 payload / revise 轮 /
+    蒸馏 style-card 落盘 + 纯思维链空卡不落盘。
+    """
+    print("\n--- v5.4: DeAI 思维链剥离 ---", flush=True)
+    import asyncio
+    from unittest.mock import patch, MagicMock, AsyncMock
+    from app.web_backend import Backend
+    from app.ai_score_local import REVISE_THRESHOLD
+    from app.style_profiles import loader as loader_mod
+
+    def make_backend():
+        b = Backend(window=None)
+        pushes = []
+        b._push = lambda name, data=None: pushes.append((name, data))
+        return b, pushes
+
+    def make_fake_llm(outputs, fail_on=None):
+        calls = {"n": 0, "prompts": []}
+        client = MagicMock()
+
+        class _S:
+            def __init__(self, text):
+                self._pieces = [text[i:i + 50] for i in range(0, len(text), 50)]
+                self._i = 0
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                if self._i >= len(self._pieces):
+                    raise StopAsyncIteration
+                ev = MagicMock()
+                ev.choices = [MagicMock()]
+                ev.choices[0].delta.content = self._pieces[self._i]
+                self._i += 1
+                return ev
+
+        async def create(**kwargs):
+            calls["n"] += 1
+            calls["prompts"].append(kwargs["messages"][1]["content"])
+            if fail_on is not None and calls["n"] == fail_on:
+                raise RuntimeError("mock: LLM 不可达")
+            return _S(outputs[min(calls["n"], len(outputs)) - 1])
+
+        client.chat.completions.create = create
+        client.close = AsyncMock()
+        return MagicMock(return_value=client), calls
+
+    def _stream_text(pushes):
+        return "".join(str(d.get("partial", "")) for n, d in pushes if n == "onDeaiStream")
+
+    with tempfile.TemporaryDirectory(prefix="v540_deai_") as tmp:
+        orig_dir = loader_mod.STYLES_DIR
+        loader_mod.STYLES_DIR = Path(tmp) / "styles"
+        try:
+            # --- 1) 分块流: 完成结果 / 流式帧 / 评分输入 / 块间衔接 prompt 均无思维链 ---
+            b, pushes = make_backend()
+            b._style_loader = loader_mod.StyleProfileLoader()
+            b._config.chunking_preset_rewrite = "fast"
+            b._config.deai_ai_score = True
+            b._config.deai_revise = False
+            b._config.deai_strip_after = False
+            scored = []
+
+            def fake_score(text):
+                scored.append(text)
+                return {"score": 5,
+                        "dims": {"blacklist": {"score": 0, "weight": 1, "detail": "mock"}},
+                        "offenders": []}
+
+            fake_ctor, calls = make_fake_llm(
+                ["<think>推理</think>改写甲", "改写乙", "改写丙"])
+            with patch("app.web_backend.AsyncOpenAI", fake_ctor), \
+                 patch("app.web_backend._ai_score_local", fake_score):
+                asyncio.run(b._deai_run("d1", "rewrite", "这是需要改写的句子。" * 400, "", "", ""))
+            comp = next(d for n, d in pushes if n == "onDeaiComplete")
+            check("分块: 完成结果无思维链",
+                  "<think>" not in comp.get("result", "") and "推理" not in comp.get("result", ""),
+                  repr(comp.get("result", ""))[:120])
+            check("分块: 流式帧无思维链", "<think>" not in _stream_text(pushes))
+            check("评分输入无思维链", bool(scored) and all("<think>" not in s for s in scored))
+            check("块间衔接 prompt 无思维链",
+                  len(calls["prompts"]) >= 2 and all("<think>" not in p for p in calls["prompts"]))
+
+            # --- 2) 错误 payload: 第 2 块失败 → partial (第 1 块) 无思维链 ---
+            b, pushes = make_backend()
+            b._style_loader = loader_mod.StyleProfileLoader()
+            b._config.chunking_preset_rewrite = "fast"
+            fake_ctor, calls = make_fake_llm(["<think>推理</think>第一块报告"], fail_on=2)
+            with patch("app.web_backend.AsyncOpenAI", fake_ctor):
+                asyncio.run(b._deai_run("d2", "detect", "这是测试句子。" * 400, "", "", ""))
+            err = next(d for n, d in pushes if n == "onDeaiError")
+            check("错误 payload 无思维链", "<think>" not in str(err.get("partial", "")),
+                  repr(err.get("partial", ""))[:120])
+
+            # --- 3) revise 轮: 思维链不进最终结果 / 流式帧 ---
+            b, pushes = make_backend()
+            b._style_loader = loader_mod.StyleProfileLoader()
+            b._config.deai_ai_score = True
+            b._config.deai_revise = True
+            b._config.deai_strip_after = False
+            seq = [REVISE_THRESHOLD + 10, 1]
+            calls_score = {"n": 0}
+
+            def fake_score2(text):
+                s = seq[min(calls_score["n"], len(seq) - 1)]
+                calls_score["n"] += 1
+                return {"score": s,
+                        "dims": {"blacklist": {"score": 0, "weight": 1, "detail": "mock"}},
+                        "offenders": ([{"text": "出戏句", "reasons": ["mock"]}]
+                                      if s >= REVISE_THRESHOLD else [])}
+
+            fake_ctor, calls = make_fake_llm([
+                "<think>初想</think>改写初稿" + "内容" * 200,
+                "<think>再想</think>改定稿" + "内容" * 200,
+            ])
+            with patch("app.web_backend.AsyncOpenAI", fake_ctor), \
+                 patch("app.web_backend._ai_score_local", fake_score2):
+                asyncio.run(b._deai_run("d3", "rewrite", "原文句子。" * 50, "", "", ""))
+            comp = next(d for n, d in pushes if n == "onDeaiComplete")
+            check("revise: 最终结果无思维链",
+                  all(x not in comp.get("result", "") for x in ("<think>", "初想", "再想")),
+                  repr(comp.get("result", ""))[:120])
+            check("revise: 流式帧无思维链",
+                  "<think>" not in _stream_text(pushes) and "再想" not in _stream_text(pushes))
+
+            # --- 4) 蒸馏: style-card 落盘无思维链; 纯思维链 → onDeaiError 且不落盘 ---
+            b, pushes = make_backend()
+            b._style_loader = loader_mod.StyleProfileLoader()
+            b.create_style_profile("v540-think", "思维链", "")
+            for i in range(3):
+                b.add_sample_to_profile("v540-think", f"范文内容{i}", f"s{i}.md")
+            fake_ctor, calls = make_fake_llm(["<think>蒸馏思考</think># 风格卡\n\n正文"])
+            with patch("app.web_backend.AsyncOpenAI", fake_ctor):
+                asyncio.run(b._deai_distill_run("dt1", "v540-think"))
+            comp = next(d for n, d in pushes if n == "onDeaiComplete")
+            card = b.get_style_card("v540-think")
+            check("蒸馏: 完成结果无思维链",
+                  "<think>" not in comp.get("result", "") and "蒸馏思考" not in comp.get("result", ""))
+            check("蒸馏: style-card 落盘无思维链",
+                  card.get("ok") is True
+                  and "蒸馏思考" not in card.get("card_markdown", "")
+                  and "<think>" not in card.get("card_markdown", ""),
+                  str(card.get("card_markdown", ""))[:120])
+
+            b, pushes = make_backend()
+            b._style_loader = loader_mod.StyleProfileLoader()
+            b.create_style_profile("v540-empty", "空卡", "")
+            for i in range(3):
+                b.add_sample_to_profile("v540-empty", f"范文{i}", f"s{i}.md")
+            fake_ctor, calls = make_fake_llm(["<think>只有思考没有卡片</think>"])
+            with patch("app.web_backend.AsyncOpenAI", fake_ctor):
+                asyncio.run(b._deai_distill_run("dt2", "v540-empty"))
+            err = next((d for n, d in pushes if n == "onDeaiError"), None)
+            card2 = b.get_style_card("v540-empty")
+            check("蒸馏: 纯思维链 → onDeaiError",
+                  err is not None and "思维链" in str(err.get("error", "")), str(err))
+            check("蒸馏: 空卡不落盘",
+                  card2.get("ok") is False or not str(card2.get("card_markdown", "")).strip(),
+                  str(card2)[:120])
+        finally:
+            loader_mod.STYLES_DIR = orig_dir
+
+
 # ==================== 模块级常量 (v6.0 C1: 跨章节共享) ====================
 
 passed = 0

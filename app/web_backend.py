@@ -56,6 +56,8 @@ from app.templates import (
 # (3 个 deai_* 开关不进 compute_prompt_hash, 裁定见 AGENTS.md §35)
 from app.ai_score_local import ai_score as _ai_score_local, REVISE_THRESHOLD
 from app.md_strip import strip_markdown
+# v5.4 (PLAN-think-strip-v5.4.md): 思维链剥离 — DeAI 三处流式产出侧唯一单点
+from app.think_strip import ThinkFilter, count_reasoning_fields
 from app.style_profiles.loader import StyleProfileLoader, MIN_SAMPLES_FOR_DISTILL
 
 logger = setup_logging()
@@ -1065,7 +1067,12 @@ class Backend:
                     )
                 except Exception as e:
                     raise RuntimeError(f"块 {i + 1}/{total} 调用失败: {e}") from e
+                # v5.4 (PLAN §2 D8): 只保留剥后累积器 — raw 只存在于 ThinkFilter 内部,
+                # 下游 6 组消费点 (衔接 prompt / 错误 / 取消 / 落盘 / 评分 / style-card)
+                # 全部自动拿到剥后文本。
                 chunk_out = ""
+                chunk_filter = ThinkFilter()
+                reasoning_frames = 0
                 async for event in stream:
                     if cancel_event is not None and cancel_event.is_set():
                         break
@@ -1074,17 +1081,30 @@ class Backend:
                     delta = event.choices[0].delta
                     content = getattr(delta, "content", None) if delta else None
                     if content:
-                        chunk_out += content
+                        chunk_filter.feed(content)
                         now = time.time()
                         if now - last_push >= 0.05:
+                            chunk_out += chunk_filter.take()
                             self._push_deai_stream(task_id, step, partial + chunk_out, i + 1, total)
                             last_push = now
+                    reasoning_frames += count_reasoning_fields(delta)
                 if cancel_event is not None and cancel_event.is_set():
                     cancelled = True
                     break
-                # v4.1.8.2 (B12): 空块报错, 与校对链路 (空流抛 ValueError) 对齐
+                chunk_out += chunk_filter.flush()
+                # v4.1.8.2 (B12) + v5.4 D5: 空块 (含"仅思维链") 报错, 与校对链路对齐
                 if not chunk_out.strip():
-                    raise ValueError(f"API 返回空内容 (块 {i + 1}/{total})")
+                    raise ValueError(f"API 返回空内容 (块 {i + 1}/{total}, 仅含思维链或无有效输出)")
+                nb, nc = chunk_filter.stats()
+                if nb:
+                    logger.info(
+                        f"[思维链] deai {task_id} 块 {i + 1}/{total}: 丢弃 {nb} 块 / {nc} 字符"
+                    )
+                if reasoning_frames:
+                    logger.debug(
+                        f"[思维链] deai {task_id} 块 {i + 1}/{total}: "
+                        f"忽略独立字段 {reasoning_frames} 帧"
+                    )
                 partial += chunk_out
                 if step != "rewrite" and total > 1:
                     partial += "\n\n"
@@ -1135,7 +1155,10 @@ class Backend:
 
         # v4.1.8.2 (B12): 空输出报错
         if not partial.strip():
-            self._push("onDeaiError", {"task_id": task_id, "error": "API 返回空内容 (stream 无 token)"})
+            self._push("onDeaiError", {
+                "task_id": task_id,
+                "error": "API 返回空内容 (stream 无 token 或输出仅含思维链)",
+            })
             self._deai_tasks_pop(task_id)
             return
 
@@ -1283,6 +1306,7 @@ class Backend:
             f"# 待改进文本\n{base_text}"
         )
         out = ""
+        revise_filter = ThinkFilter()   # v5.4 D8: revise 轮同样只保留剥后累积器
         last_push = 0.0
         try:
             stream = await client.chat.completions.create(
@@ -1302,11 +1326,13 @@ class Backend:
                 delta = event.choices[0].delta
                 content = getattr(delta, "content", None) if delta else None
                 if content:
-                    out += content
+                    revise_filter.feed(content)
                     now = time.time()
                     if now - last_push >= 0.05:
+                        out += revise_filter.take()
                         self._push_deai_stream(task_id, "rewrite", out, 1, 1)
                         last_push = now
+            out += revise_filter.flush()
             if cancel_event is not None and cancel_event.is_set():
                 return None
         except Exception as e:
@@ -1624,7 +1650,10 @@ class Backend:
         """
         # 1. 准备样本 (loader 内部已校验 samples_count >= 3)
         try:
-            sdir = self._style_loader._samples_dir(slug)
+            # v5.4: _samples_dir 是 loader 的模块级函数 (不是方法) — 原调用会抛
+            # AttributeError 被下面的 except 吞成"读样本失败", 蒸馏从未真正跑通过。
+            from app.style_profiles.loader import _samples_dir
+            sdir = _samples_dir(slug)
             samples = []
             for f in sorted(sdir.glob("*.md")):
                 txt = f.read_text(encoding="utf-8", errors="replace")
@@ -1666,6 +1695,7 @@ class Backend:
         # 3. 流式调 LLM
         user_prompt = f"以下是 {len(samples)} 篇样本, 请提炼 9 轴风格指纹:\n\n{samples_concat}"
         partial = ""
+        distill_filter = ThinkFilter()   # v5.4 D8: 蒸馏产出同样剥 (style-card 长期样本)
         last_push = 0.0  # v4.1.8.2 (审计 B6): 50ms 节流, 同 _deai_run
         cancel_event = None
         with self._deai_lock:
@@ -1692,15 +1722,17 @@ class Backend:
                 delta = event.choices[0].delta
                 content = getattr(delta, "content", None) if delta else None
                 if content:
-                    partial += content
+                    distill_filter.feed(content)
                     now = time.time()
                     if now - last_push >= 0.05:
+                        partial += distill_filter.take()
                         self._push("onDeaiStream", {
                             "task_id": task_id,
                             "step": "distill",
                             "partial": partial,
                         })
                         last_push = now
+            partial += distill_filter.flush()
         except Exception as e:
             logger.error(f"distill {task_id} LLM 异常: {type(e).__name__}: {e}")
             self._push("onDeaiError", {
@@ -1719,6 +1751,14 @@ class Backend:
             self._push("onDeaiError", {
                 "task_id": task_id, "step": "distill", "error": "已取消",
                 "cancelled": True, "partial": partial,
+            })
+            return
+
+        # v5.4 (PLAN §2 D5): 蒸馏空卡不落盘 (复审: 原路径无任何空判据)
+        if not partial.strip():
+            self._push("onDeaiError", {
+                "task_id": task_id, "step": "distill",
+                "error": "蒸馏输出为空 (仅含思维链或无有效输出)",
             })
             return
 
