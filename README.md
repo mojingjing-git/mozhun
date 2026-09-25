@@ -1,5 +1,7 @@
 # 墨准 (MoZhun) v5.1.0 (pywebview + 水墨宣纸 / Win11 Fluent)
 
+![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg) ![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg) ![Platform: Windows](https://img.shields.io/badge/Platform-Windows-0078d4.svg) ![GUI: pywebview](https://img.shields.io/badge/GUI-pywebview-6DA55F.svg)
+
 基于 LLM 的批量文本校对工具。**pywebview 6.2.1** 前端 + 原生 Web 设计令牌 + **Win11 Fluent 2 视觉**，支持流式输出、任意 OpenAI 兼容 API，以及**零 LLM 成本的本地标点修复**（v4.3.3+）。
 
 ## 特性
