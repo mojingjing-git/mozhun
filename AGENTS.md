@@ -186,7 +186,7 @@ DeAI 后置层（3 项，v3.0/v4.1.7 起借鉴，v5.0.2 补登记 LICENSE）：
 - `docs/THIRD_PARTY_NOTICES.md` — 借鉴来源 + LICENSE 全文 (§12-15: typeset/autocorrect/macro-correct/排版指北)
 - `docs/ROADMAP.md` — 路线图与跨会话待办
 - `docs/PLAN-workflow-split-v5.3.md` — v5.3.0 工作流双入口实施计划 (§12 为执行记录表, 每个 session 完成回填)
-- `docs/PLAN-think-strip-v5.4.md` — v5.4 思维链剥离实施计划 (§12 为执行记录表; 待审计)
+- `docs/PLAN-think-strip-v5.4.md` — v5.4 思维链剥离实施计划 (§12 为执行记录表; v2 已审计·并入 B1-B5, 待开工)
 - `docs/PLAN-splitter-v5.2b.md` — v5.2b 小说切分计划
 - `docs/archive/plans/` — 历史升级 plan 归档 (v3.0 — v4.1.7 完成态存档,见 `README.md`)
 
