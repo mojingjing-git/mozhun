@@ -220,6 +220,7 @@ v5.2c 起，校对参数页把「Harness」和「重写」两条路径的 chunki
 ├── tests/                  # 18 个测试套件
 ├── docs/                   # 文档
 │   ├── archive/plans/      # 历史升级 plan 归档
+│   ├── ROADMAP.md          # 当前路线图与跨会话待办
 │   ├── THIRD_PARTY_NOTICES.md  # 借鉴来源 + LICENSE
 │   └── Windows11-设计原则.md   # v4.1.8 重构参考 (Microsoft Learn 本地副本)
 ├── CHANGELOG.md            # 版本日志

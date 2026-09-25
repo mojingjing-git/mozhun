@@ -12,6 +12,7 @@
 | `PLAN-win11-redesign.md` | v4.1.8 | Win11 Fluent 2 视觉完整重构 (17 token + 6 阴影 + 12 SVG) |
 | `PLAN-v4.1.5-ui-redesign.md` | v4.1.5 | 前端 4 视图 → 7 视图分组导航 (Win11 设置应用式) |
 | `PLAN-baseline-consolidation-2026-09-26.md` | v5.2c | 合并两条 Git 基线 + 工作区整理，含独立审查修订 |
+| `CLEANUP_PLAN-v6.0.md` | v6.0 | 仓库清理 backlog 历史快照，C0/C1 完成，C2-C4 待后续 |
 
 **当前状态** (v5.2c):
 
