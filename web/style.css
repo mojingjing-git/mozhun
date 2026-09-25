@@ -1472,6 +1472,20 @@ del {
   margin: var(--space-1) var(--space-2);
 }
 
+/* ===== v5.4.1: Model 下拉面板 (WebView2 原生 datalist 下拉偶发不弹的替代) =====
+   复用 .menu-flyout acrylic 定位与 hover; 限制最大高度 + 滚动 */
+.model-dropdown {
+  max-height: 280px;
+  overflow-y: auto;
+  box-shadow: var(--shadow16);
+}
+.model-dropdown button { font-family: var(--fontFamilyMono, monospace); }
+.model-dropdown-empty {
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--fontSizeCaption);
+  color: var(--colorNeutralForeground3);
+}
+
 /* ===== 键盘焦点环 (v4.1.9, Win11 焦点矩形: 2px accent + 1px 偏移) =====
    输入框有自己的 WinUI focus 样式 (box-shadow 双环), 优先级更高不受影响 */
 :focus-visible {

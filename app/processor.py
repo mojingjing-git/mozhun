@@ -38,6 +38,7 @@ from app.md_strip import strip_markdown
 from app.think_strip import ThinkFilter, count_reasoning_fields, has_think_residue
 # v5.1.0: harness 化 — Edit 工具链 (LLM 返回编辑建议, 客户端精确匹配应用)
 from app.harness import (
+    content_suspicious_noop,
     CHUNK_SCOPE_NOTE,
     EDIT_TOOLS,
     TOOL_CHOICE,
@@ -929,6 +930,22 @@ class ProcessingEngine:
         token_count = completion.usage.total_tokens if getattr(completion, "usage", None) else 0
         message = completion.choices[0].message
         edits, parse_audit = parse_tool_calls(message)
+
+        # v5.4.1 (用户烟测 Q1): 0 tool_calls 防误报守卫 — 推理模型偶发不产
+        # tool_calls 而把推理/答复写进 content。守卫判可疑 → raise 走通用重试链
+        # (默认重试 1 次后 FAILED), 而不是静默判 "无需修改"。
+        if not edits:
+            _content = getattr(message, "content", None) or ""
+            if content_suspicious_noop(_content):
+                preview = _content.strip().replace("\n", " ")[:80]
+                self._log(
+                    f"[harness] {name}: 模型未产出编辑但 content 非空 "
+                    f"({len(_content)} 字符, 疑似未走工具链) → 重试. 预览: {preview}"
+                )
+                raise ValueError(
+                    f"harness 模型未走工具链 (content {len(_content)} 字符, "
+                    f"无 tool_calls) — 疑似推理模型把答复写进了正文"
+                )
 
         # 本块 audit = 参数解析失败条目 + apply 回执 (重编号保证 index 连续)
         chunk_audit: list[dict] = list(parse_audit)

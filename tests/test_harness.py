@@ -412,6 +412,45 @@ def test_engine_empty_edits_noop_success():
     check("无 warnings", task.result.warnings is False)
 
 
+def test_engine_suspicious_noop_content_retries():
+    """v5.4.1 (用户烟测 Q1): 推理模型 0 tool_calls + content 长文本 → 判可疑,
+    raise 走重试链 (max_retries=0 → FAILED), 不再静默判"无需修改"成功."""
+    print("\n--- 引擎可疑 no-op content 守卫 ---")
+    from app.utils import ProjectConfig, TaskStatus
+
+    long_reasoning = "经过仔细检查，这段文字在语法和用词上都没有问题，因此不需要进行任何修改，可以直接使用。"
+    client = _FakeHarnessClient([
+        _FakeCompletion(tool_calls=[], content=long_reasoning),
+    ])
+    cfg = ProjectConfig(api_base="http://x", api_key="k", model="m",
+                        prompt_mode="strict", max_retries=0)
+    engine, done, key = _run_engine(cfg, "他表视很好。", client)
+    task = engine.tasks[key]
+    check("可疑 content → FAILED (不静默成功)", task.status == TaskStatus.FAILED,
+          str(task.status))
+    check("error 含工具链语义", "工具链" in (task.result.error or ""), task.result.error)
+
+    # 对照: 真正的 "无需修改" 仍判成功
+    client2 = _FakeHarnessClient([
+        _FakeCompletion(tool_calls=[], content="无需修改"),
+    ])
+    engine2, done2, key2 = _run_engine(cfg, "完美文本。", client2)
+    task2 = engine2.tasks[key2]
+    check("真'无需修改'仍判成功", task2.status == TaskStatus.COMPLETED, str(task2.status))
+
+
+def test_content_suspicious_noop_unit():
+    """content_suspicious_noop 纯函数: 白名单/编辑载体/长文本."""
+    print("\n--- content_suspicious_noop 单元 ---")
+    from app.harness import content_suspicious_noop as f
+    check("空串放行", f("") is False)
+    check("'无需修改' 放行", f("无需修改") is False)
+    check("'无需修改。' 放行", f("无需修改。") is False)
+    check("含 old_text 可疑", f("old_text: xxx") is True)
+    check("含 new_text 可疑", f("new_text: yyy") is True)
+    check("长解释文本可疑", f("这段文字写得很好，没有错误。") is True)
+
+
 def test_engine_partial_success_warnings():
     """部分成功 (OK + NOT_FOUND) → warnings=True; 不新增枚举, 状态仍 completed."""
     print("\n--- 引擎部分成功 warnings ---")
@@ -627,6 +666,8 @@ def main():
         test_order_and_overlap,
         test_engine_strict_harness_happy_path,
         test_engine_empty_edits_noop_success,
+        test_engine_suspicious_noop_content_retries,
+        test_content_suspicious_noop_unit,
         test_engine_partial_success_warnings,
         test_engine_all_failed_failed,
         test_engine_harness_disabled_falls_back_stream,

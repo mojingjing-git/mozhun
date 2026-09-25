@@ -106,6 +106,31 @@ TOOL_DISCIPLINE = """# 工具使用纪律
 ## 输出要求
 不要输出修改后的全文。你的全部产出就是 edit_text 调用；除工具调用外不要输出任何正文。全文没有错误时，回复"无需修改"四个字。"""
 
+# v5.4.1 (用户烟测 Q1): "0 tool_calls" 防误报守卫。
+# 背景: MiniMax 等推理模型走 tools 调用时仍会消耗上万思维链 token, 偶发不产出
+# tool_calls 而是在 content 里自答 "无需修改" —— 但真实原因是它把整轮推理都
+# 放进了 content, 工具链根本没被触发。若一律判成功, 用户看到 "完成但零改动"。
+# 守卫: content 若包含编辑载体特征或明显不是 "无需修改", 判可疑 → raise 让
+# 通用重试链再试一次 (默认重试 1 次, 耗尽才 FAILED — 宁可失败也不静默放过)。
+_NOOP_CONTENT = "无需修改"
+_EDIT_CONTENT_MARKERS = ("old_text", "new_text")
+
+
+def content_suspicious_noop(content: str) -> bool:
+    """content 非 tool_call 回复的"可疑无需修改"判定。
+
+    True = content 含编辑载体 (old_text/new_text) 或非平凡长文本 → 大概率是
+    模型没走工具链, 应重试; False = 合法 "无需修改" / 空回复 / 极短白名单。
+    """
+    c = (content or "").strip()
+    if not c or c == _NOOP_CONTENT:
+        return False
+    if any(m in c for m in _EDIT_CONTENT_MARKERS):
+        return True
+    # "无需修改" 的常见变体 (含句号/括号解释) 放行; 其余长文本视为可疑
+    return len(c) > 8 or _NOOP_CONTENT not in c
+
+
 # 分块场景附加说明 (_stream_chunked 注入): 上下文只是参照物, 不可编辑。
 CHUNK_SCOPE_NOTE = (
     "注意：系统提示中的跨段上下文只是理解本文的参照，不要对它提出编辑；"

@@ -834,7 +834,24 @@ const App = {
     if (toggleKeyBtn) toggleKeyBtn.addEventListener('click', () => this.toggleKeyVisibility());
 
     const fetchBtn = document.getElementById('btn-fetch-models');
-    if (fetchBtn) fetchBtn.addEventListener('click', () => this.fetchModels());
+    if (fetchBtn) fetchBtn.addEventListener('click', () => {
+      // v5.4.1: 已有拉取结果时, ⟳ 直接弹面板; 否则发起拉取
+      const dl = document.getElementById('model-datalist');
+      if (dl && dl.options.length) this._showModelDropdownForArrow();
+      else this.fetchModels();
+    });
+    // v5.4.1 (用户烟测 Q2): WebView2 的原生 datalist 下拉偶发不弹 (输入过滤
+    // 却正常) — 这是 WebView2 已知交互缺陷, 不是本应用逻辑问题。改用应用
+    // 自己的下拉面板: 点 ⟳ / 输入框聚焦时弹出, 与右键菜单同源样式。
+    const modelInput = document.getElementById('cfg-model');
+    if (modelInput) {
+      modelInput.addEventListener('focus', () => this._showModelDropdown());
+      modelInput.addEventListener('input', () => this._showModelDropdown());
+      modelInput.addEventListener('blur', () => {
+      // 延迟关闭: 让下拉项的 mousedown/click 先于 blur 生效
+      setTimeout(() => this._closeModelDropdown(), 120);
+      });
+    }
 
     // API 模板选择
     const tplSel = document.getElementById('cfg-template');
@@ -2457,6 +2474,13 @@ const App = {
     if (input) input.type = input.type === 'password' ? 'text' : 'password';
   },
 
+  _showModelDropdownForArrow() {
+    // ⟳ 箭头点击: 聚焦输入框并弹出模型面板 (全部模型, 不按当前值过滤)
+    const input = document.getElementById('cfg-model');
+    if (input) { input.dataset.arrowClick = '1'; input.focus(); }
+    this._showModelDropdown();
+  },
+
   async fetchModels() {
     const base = this.getVal('cfg-api-base');
     const key = this.getVal('cfg-api-key');
@@ -2533,6 +2557,8 @@ const App = {
           dl.appendChild(opt);
         }
         this.showToast(`已获取 ${data.count} 个模型: 点 Model 输入框右侧箭头直接选择`, 'info');
+        // v5.4.1: 拉取成功立即弹自己的下拉面板 (原生 datalist 在 WebView2 里不弹)
+        this._showModelDropdownForArrow();
       }
       this.appendLog(`[测试] 成功, 发现 ${data.count} 个模型`);
     } else {
@@ -2677,6 +2703,63 @@ const App = {
     this.appendLog(`[联动] 已从「${source}」${srcLabel}结果载入去AI味 (跳过检测, 直接改写)`);
     this.showToast(`已载入${srcLabel}结果, 跳过检测直接改写`, 'info');
     await this.deaiStep2();
+  },
+
+  // ====== v5.4.1: Model 下拉面板 (替代 WebView2 有缺陷的原生 datalist 下拉) ======
+  _showModelDropdown() {
+    const dl = document.getElementById('model-datalist');
+    const input = document.getElementById('cfg-model');
+    if (!dl || !input) return;
+    const models = [...dl.options].map(o => o.value).filter(Boolean);
+    if (!models.length) return;
+    let panel = document.getElementById('model-dropdown');
+    if (!panel) {
+      panel = document.createElement('div');
+      panel.id = 'model-dropdown';
+      panel.className = 'menu-flyout acrylic model-dropdown';
+      panel.setAttribute('role', 'listbox');
+      document.body.appendChild(panel);
+    }
+    const filter = (input.value || '').trim().toLowerCase();
+    const hits = models.filter(m => !filter || m.toLowerCase().includes(filter));
+    panel.innerHTML = '';
+    const mk = (m) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.setAttribute('role', 'option');
+      btn.textContent = m;
+      // mousedown 在 blur 之前触发 (click 在 blur 之后, 会先关面板)
+      btn.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        input.value = m;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        this._closeModelDropdown();
+        input.focus();
+      });
+      return btn;
+    };
+    for (const m of hits.slice(0, 50)) panel.appendChild(mk(m));
+    if (!hits.length) {
+      const empty = document.createElement('div');
+      empty.className = 'model-dropdown-empty';
+      empty.textContent = `无匹配 (${models.length} 个模型)`;
+      panel.appendChild(empty);
+    }
+    const rect = input.getBoundingClientRect();
+    panel.style.visibility = 'hidden';
+    panel.style.display = 'block';
+    const pr = panel.getBoundingClientRect();
+    panel.style.left = rect.left + 'px';
+    // 下拉放输入框正下方; 底部不够放时翻转到上方
+    const below = rect.bottom + 4 + pr.height <= window.innerHeight - 8;
+    panel.style.top = (below ? rect.bottom + 4 : rect.top - pr.height - 4) + 'px';
+    panel.style.minWidth = rect.width + 'px';
+    panel.style.visibility = 'visible';
+  },
+
+  _closeModelDropdown() {
+    const el = document.getElementById('model-dropdown');
+    if (el) el.remove();
   },
 
   async deaiStep1() {
