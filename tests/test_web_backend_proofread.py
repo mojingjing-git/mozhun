@@ -842,6 +842,55 @@ def test_v530_start_proofread_workflow():
         check("3 参数调用仍走缓存 (对照)", r_cache.get("cached_files") == [str(src)])
 
 
+# === test_v540_think_residue_cache ===
+def test_v540_think_residue_cache():
+    """v5.4 (PLAN §2 D9): 旧断点含思维链残留 → 定向失效强制重跑;
+    原文自身含行首块 (harness 轨 corrected=原文) → 不重跑 (防永久打不中缓存)."""
+    print("\n--- v5.4: 旧断点思维链残留定向失效 ---", flush=True)
+    import tempfile
+    from unittest.mock import AsyncMock, patch
+    from app.web_backend import Backend
+    from app.processor import ProcessingEngine
+    from app.utils import (
+        FileResult, FileTask, TaskStatus,
+        compute_prompt_hash_for_config, save_checkpoint,
+    )
+
+    with tempfile.TemporaryDirectory(prefix="v540_think_") as tmp:
+        src = Path(tmp) / "dirty.txt"
+        body = "原文内容。" * 50
+        src.write_text(body, encoding="utf-8")
+        b = Backend(window=None)
+        b._window = make_mock_window(None)
+
+        with patch.object(ProcessingEngine, "run_async", new=AsyncMock(return_value=None)):
+            b.start_proofread([str(src)], "strict")   # 初始化 config
+        h = compute_prompt_hash_for_config(b._config)
+
+        # 1) 原文干净 + corrected 含思维链残留 → 忽略缓存强制重跑
+        save_checkpoint(src, FileTask(
+            file_path=src, status=TaskStatus.COMPLETED, original_text=body,
+            result=FileResult(original=body, corrected=f"<think>推理</think>{body}",
+                              prompt_hash=h),
+        ))
+        with patch.object(ProcessingEngine, "run_async", new=AsyncMock(return_value=None)):
+            r_dirty = b.start_proofread([str(src)], "strict")
+        check("残留断点被定向失效 (cached_files 为空)",
+              r_dirty.get("cached_files") == [], str(r_dirty.get("cached_files")))
+
+        # 2) 原文自身含行首块 (corrected=原文) → 不重跑, 缓存照常命中
+        body2 = f"<think>推理</think>{body}"
+        save_checkpoint(src, FileTask(
+            file_path=src, status=TaskStatus.COMPLETED, original_text=body2,
+            result=FileResult(original=body2, corrected=body2, prompt_hash=h),
+        ))
+        with patch.object(ProcessingEngine, "run_async", new=AsyncMock(return_value=None)):
+            r_self = b.start_proofread([str(src)], "strict")
+        check("原文自带残留不重跑 (缓存照常命中)",
+              r_self.get("cached_files") == [str(src)],
+              str(r_self.get("cached_files")))
+
+
 # ==================== 入口 (v6.0 C1: 自动发现本文件所有 test_xxx) ====================
 
 if __name__ == "__main__":

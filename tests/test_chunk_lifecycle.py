@@ -534,6 +534,53 @@ def test_m4_stream_monotonic_fulltext():
     check("M4 最终 emit = 全量", received[-1] == result)
 
 
+def test_m6_think_only_output_failed():
+    """v5.4 (PLAN §2 D5): 纯思维链输出剥后为空 → 走既有失败链 → FAILED (不静默成功)."""
+    print("\n--- M6: 纯思维链输出剥后为空 → FAILED ---")
+    import asyncio
+
+    async def run():
+        cfg = ProjectConfig(api_base="http://x", model="m", chunking_preset="fast",
+                            harness_enabled=False, max_retries=0)
+        engine = ProcessingEngine(cfg)
+        engine._loop = asyncio.get_running_loop()
+        engine._pause_event = threading.Event()
+        engine._pause_event.set()
+
+        def make_ev(content):
+            ev = MagicMock()
+            ev.choices = [MagicMock()]
+            ev.choices[0].delta.content = content
+            ev.choices[0].finish_reason = None
+            ev.usage = None
+            return ev
+
+        async def gen():
+            yield make_ev("<think>只有推理过程, 没有正文</think>")
+
+        mc = AsyncMock()
+        mc.chat.completions.create = AsyncMock(return_value=gen())
+        engine._client = mc
+
+        with tempfile.NamedTemporaryFile(
+            mode='w', suffix='.txt', delete=False, encoding='utf-8'
+        ) as f:
+            f.write("原文内容。")
+            tmp = Path(f.name)
+        try:
+            task = FileTask(file_path=tmp, original_text="原文内容。")
+            engine.tasks[str(tmp)] = task
+            await engine._process_file_async(str(tmp), task)
+        finally:
+            tmp.unlink(missing_ok=True)
+        return task
+
+    task = asyncio.run(run())
+    check("纯思维链 → FAILED (不静默成功)", task.status == TaskStatus.FAILED, str(task.status))
+    check("corrected 不回填原文", task.result.corrected == "")
+    check("error 含思维链语义", "思维链" in (task.result.error or ""), task.result.error)
+
+
 def test_m5_backoff_cancel_interrupts():
     """M5 (v4.1.8.1): 退避 asyncio.sleep 可被 cancel 中断.
 
@@ -673,6 +720,7 @@ def main():
         test_cancel_before_start_finalizes,
         test_custom_prompt_only_when_mode_custom,   # v4.1.8.1 H12
         test_m4_stream_monotonic_fulltext,          # v4.1.8.1 M4
+        test_m6_think_only_output_failed,           # v5.4 D5: 剥后为空 → FAILED
         test_m5_backoff_cancel_interrupts,          # v4.1.8.1 M5
         test_v530_preserve_done_and_force_rerun,    # v5.3.0 D9 + 强制重跑出口
     ]

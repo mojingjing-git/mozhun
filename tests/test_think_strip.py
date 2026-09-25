@@ -284,6 +284,33 @@ def test_has_think_residue():
     check("chunked (corrected_full) 命中", has_think_residue(_Chunked()))
 
 
+def test_stats_and_reasoning_count():
+    """D10 stats (块数/字符数) + D7 独立字段存在性计数."""
+    print("\n--- stats / 独立字段计数 ---")
+    from unittest.mock import MagicMock
+    from app.think_strip import count_reasoning_fields
+
+    flt = ThinkFilter()
+    flt.feed("<think>abc</think>\n")
+    flt.feed("<thought>x</thought>正文")
+    flt.flush()
+    blocks, chars = flt.stats()
+    check("stats: 2 块", blocks == 2, str(flt.stats()))
+    check("stats: 字符数 = 两块跨度",
+          chars == len("<think>abc</think>") + len("<thought>x</thought>"),
+          str(flt.stats()))
+    check("stats: 纯正文 0 块", ThinkFilter().stats() == (0, 0))
+    check("独立字段: str 非空计 1", count_reasoning_fields(
+        SimpleNamespace(reasoning_content="推理")) == 1)
+    check("独立字段: 空串不计", count_reasoning_fields(
+        SimpleNamespace(reasoning="")) == 0)
+    check("独立字段: list 非空计 1", count_reasoning_fields(
+        SimpleNamespace(reasoning_details=[{"t": "x"}])) == 1)
+    check("独立字段: 普通 delta 不计", count_reasoning_fields(
+        SimpleNamespace(content="正文")) == 0)
+    check("独立字段: MagicMock 桩不计 (兼容既有测试)", count_reasoning_fields(MagicMock()) == 0)
+
+
 def main():
     tests = [
         test_table,
@@ -293,6 +320,7 @@ def main():
         test_contract_edges,
         test_lazy_structural,
         test_has_think_residue,
+        test_stats_and_reasoning_count,
         test_perf,
     ]
     for t in tests:

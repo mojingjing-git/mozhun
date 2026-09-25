@@ -169,7 +169,7 @@ class _Scanner:
     __slots__ = (
         "raw", "parts", "i", "n", "fence", "ws_only", "spaces", "head",
         "post_nl", "block_name", "depth", "pending_head_block",
-        "block_search", "new_parts",
+        "block_search", "new_parts", "block_start", "blocks", "removed_chars",
     )
 
     def __init__(self):
@@ -187,6 +187,9 @@ class _Scanner:
         self.pending_head_block = False
         self.block_search = 0      # 块内标签搜索起点
         self.new_parts: list[str] = []  # 已产出、尚未被 take/flush 取走
+        self.block_start = 0       # 当前块开标签 '<' 的位置 (统计用)
+        self.blocks = 0            # 已剥除块数 (D10 日志)
+        self.removed_chars = 0     # 已剥除块字符数 (块跨度为口径, 不含头部清空白)
 
     # ---------- 对外 ----------
 
@@ -259,6 +262,8 @@ class _Scanner:
                 self.block_search = end
                 if self.depth == 0:
                     self.block_name = None
+                    self.blocks += 1
+                    self.removed_chars += end - self.block_start
                     if self.pending_head_block:
                         # 头部块剥除 → 转"清块后空白"阶段
                         self.head = "post"
@@ -281,6 +286,7 @@ class _Scanner:
                 if kind == "tag" and b in THINK_TAGS:
                     self.block_name = b
                     self.depth = 1
+                    self.block_start = self.i
                     self.pending_head_block = self.head in ("pending", "post")
                     self.block_search = a
                     self.i = a
@@ -332,6 +338,8 @@ class _Scanner:
             return
         if self.block_name is not None:
             # 围栏外未闭合块 → 从开标签起整段丢弃
+            self.blocks += 1
+            self.removed_chars += self.n - self.block_start
             self.block_name = None
             self.i = self.n
             if self.head in ("pending", "post"):
@@ -376,6 +384,10 @@ class ThinkFilter:
         self._done = True
         return self._sc.drain()
 
+    def stats(self) -> tuple[int, int]:
+        """D10: (已剥块数, 已剥块字符数) — 收尾日志用."""
+        return (self._sc.blocks, self._sc.removed_chars)
+
 
 def strip_thinking(text: str) -> str:
     """一次性剥离 (非流式路径 / flush 基准 / 测试基准)."""
@@ -404,3 +416,23 @@ def has_think_residue(result) -> bool:
     if original and strip_thinking(original) != original:
         return False
     return True
+
+
+# D7: 独立字段名 (只做"存在性"计数, 永不读取/落盘内容)
+_REASONING_FIELDS = ("reasoning_content", "reasoning", "reasoning_details")
+
+
+def count_reasoning_fields(delta) -> int:
+    """D7: delta 是否携带独立思维链字段 (1 = 有, 0 = 无).
+
+    只看真假, 不保存内容; 非 str/list 的替身对象 (测试 MagicMock 桩) 一律记 0,
+    避免既有假 delta 测试被误计数。
+    """
+    for f in _REASONING_FIELDS:
+        v = getattr(delta, f, None)
+        if isinstance(v, str):
+            if v:
+                return 1
+        elif isinstance(v, (list, tuple)) and v:
+            return 1
+    return 0

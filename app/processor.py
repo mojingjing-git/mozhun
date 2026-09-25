@@ -34,6 +34,8 @@ from app.logger import setup_logging
 from app.templates import PROMPT_MODES
 from app.punct_fix import fix_punctuation_ex
 from app.md_strip import strip_markdown
+# v5.4 (PLAN-think-strip-v5.4.md): 思维链剥离 — 流式产出侧剥离入口
+from app.think_strip import ThinkFilter, count_reasoning_fields, has_think_residue
 # v5.1.0: harness 化 — Edit 工具链 (LLM 返回编辑建议, 客户端精确匹配应用)
 from app.harness import (
     CHUNK_SCOPE_NOTE,
@@ -283,6 +285,11 @@ class ProcessingEngine:
             cached = None if force_rerun else load_checkpoint(
                 fp, expected_hash=self._current_prompt_hash
             )
+            # v5.4 (PLAN §2 D9): 旧断点定向失效 — corrected 含思维链残留 (原文自身不含)
+            # 时忽略缓存强制重跑; 只烧脏文件, 不动 prompt_hash/schema (v2.1 复审口径)。
+            if cached and cached.is_done and has_think_residue(cached.result):
+                self._log(f"[思维链] {fp.name}: 旧断点含思维链残留, 忽略缓存强制重跑")
+                cached = None
             if cached and cached.is_done:
                 self.tasks[key] = cached
                 # v4.3.1 (UX #7): 记录缓存命中, bridge 把它上报给前端
@@ -777,7 +784,10 @@ class ProcessingEngine:
                 raise
 
         # Bug#13: 收集用 list append,只节流时才 join,避免每 token O(N) join
-        buffer: list[str] = []
+        # v5.4 (PLAN §2 D4/D8): 思维链剥离 — 原文只进 ThinkFilter, 产出侧只见剥后文本
+        think_filter = ThinkFilter()
+        visible = ""          # 已产出 (剥后) 文本累计, 保持单调前缀
+        reasoning_frames = 0  # D7: 独立字段出现帧数 (只看真假, 不落内容)
         token_count = 0
         emit_counter = 0
         last_emit_time = 0.0
@@ -797,17 +807,19 @@ class ProcessingEngine:
                 if event.choices:
                     delta = event.choices[0].delta.content
                     if delta:
-                        buffer.append(delta)
+                        think_filter.feed(delta)
                         emit_counter += 1
                         now = time.time()
                         if (
                             emit_counter % _STREAM_THROTTLE_TOKENS == 0
                             or (now - last_emit_time) >= _STREAM_THROTTLE_MS
                         ):
-                            # 节流触发时才 "".join 一次 (O(buffer_size))
                             # v4.1.8.1 (M4): 推单调增长全量 (前缀复用同一 str, 不重复 join)
-                            self._emit(self.on_stream, task_key, stream_prefix + "".join(buffer))
+                            # v5.4: 只推剥后文本 — 思维链不闪现 (take 只在节流点求值)
+                            visible += think_filter.take()
+                            self._emit(self.on_stream, task_key, stream_prefix + visible)
                             last_emit_time = now
+                    reasoning_frames += count_reasoning_fields(event.choices[0].delta)
                     # v5.3.0 (PLAN §2 D8): 记录结束原因 — "length" = 模型被输出
                     # 上限截断 (全仓无 max_tokens, 从前完全静默)
                     fr = getattr(event.choices[0], "finish_reason", None)
@@ -822,16 +834,25 @@ class ProcessingEngine:
             except Exception:
                 pass
 
-        corrected = "".join(buffer)
-        if not corrected:
-            raise ValueError("API 返回空内容 (stream 无 token)")
+        corrected = visible + think_filter.flush()
+        name = self.tasks[task_key].file_path.name if task_key in self.tasks else task_key
 
+        # v5.4 (PLAN §2 D5): 截断标记先记录, 再走空输出判定 (维持 v5.3.0 语义)
         if finish_reason == "length":
-            name = self.tasks[task_key].file_path.name if task_key in self.tasks else task_key
             self.truncated_keys.add(task_key)
             self._log(
                 f"[截断] {name}: 模型输出触顶 (finish_reason=length), 结果可能短于原文"
             )
+
+        # v5.4 (PLAN §2 D10): 剥离可观测
+        n_blocks, n_chars = think_filter.stats()
+        if n_blocks:
+            self._log(f"[思维链] {name}: 丢弃 {n_blocks} 块 / {n_chars} 字符")
+        if reasoning_frames:
+            logger.debug(f"[思维链] {name}: 忽略独立字段 {reasoning_frames} 帧")
+
+        if not corrected:
+            raise ValueError("API 返回空内容 (stream 无 token 或输出仅含思维链)")
 
         self._emit(self.on_stream, task_key, stream_prefix + corrected)
 

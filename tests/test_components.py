@@ -360,6 +360,49 @@ def test_processor():
 
     check("finish_reason=length 记入截断标记", asyncio.run(test_truncated_stream()))
 
+    # v5.4 (PLAN §2 D4/D7/D10): 流式思维链剥离 — corrected 干净 + 预览单调 + 剥离日志
+    async def test_think_strip_stream():
+        eng = ProcessingEngine(ProjectConfig(
+            api_base='http://x', model='m', harness_enabled=False))
+        eng._loop = asyncio.get_running_loop()
+        eng._pause_event = threading.Event()
+        eng._pause_event.set()
+        stream_calls = []
+        eng.on_stream = lambda k, t: stream_calls.append(t)
+        logs = []
+        eng.on_log = lambda m: logs.append(m)
+
+        def _mk(text, reasoning=""):
+            ev = MagicMock()
+            ev.choices = [MagicMock()]
+            ev.choices[0].delta.content = text
+            ev.choices[0].delta.reasoning_content = reasoning
+            ev.choices[0].finish_reason = None
+            ev.usage = None
+            return ev
+
+        async def fake_stream():
+            yield _mk("<think>推理过程</think>", "独立思维链")
+            yield _mk("\n\n正文一")
+            yield _mk("正文二")
+
+        mock_client = AsyncMock()
+        mock_client.chat.completions.create = AsyncMock(return_value=fake_stream())
+        eng._client = mock_client
+        result, tokens, chunks = await eng._call_api_stream("key", "text")
+        mono = all(stream_calls[i + 1].startswith(stream_calls[i])
+                   for i in range(len(stream_calls) - 1))
+        return (
+            result == "正文一正文二"
+            and "推理过程" not in result and "<think>" not in result
+            and mono
+            and chunks[0].corrected == "正文一正文二"
+            and any("[思维链]" in m for m in logs)
+        )
+
+    check("v5.4 流式剥离思维链 (预览单调/日志)",
+          asyncio.run(test_think_strip_stream()))
+
 
 # ============================================================
 # 冒烟测试: 配置 + 引擎 (v4.0+ 已脱离 PySide6 UI 依赖)
