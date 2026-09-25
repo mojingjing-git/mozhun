@@ -341,7 +341,7 @@
 - [x] `punct_local` / `md_local` 在两个入口都可选且不触网
 - [x] `set_config` **单向**兼容 (`harness_enabled` → `workflow_mode`) 与两端钳制生效; `AGENTS.md` §37 假声明被修正
 - [x] `run_all_tests.py` 全绿: **1448 通过 / 0 失败** (基线 1343 + 新增)
-- [x] Playwright 三视口冒烟通过 (78 项断言, 含跨入口来源 + `force_rerun` 端到端, `tools/smoke_ui.py` 入库); ⏳ 真机 pywebview 截图未做 (需人工开窗, 见下方残留项)
+- [x] Playwright 三视口冒烟通过 (84 项断言, 含跨入口来源 + `force_rerun` + 整文件 20000 弹窗端到端, `tools/smoke_ui.py` 入库); ⏳ 真机 pywebview 截图未做 (需人工开窗, 见下方残留项)
 - [x] `config` 里无 `workflow_mode` 的老用户升级后行为可预测 (派生 = 旧逻辑)
 
 **残留项 (交付时向用户说明)**:

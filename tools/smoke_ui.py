@@ -312,6 +312,56 @@ def _check_provenance(page, out: Path) -> None:
     check("重跑带当前入口轨 workflow", len(args) >= 6 and args[5] == "rewrite", str(args))
 
 
+def _check_whole_file_warning(page, out: Path) -> None:
+    """端到端: 整篇入口 + 整文件档 + 超 20000 字 → 先弹确认 (§4-9 / §5-18)。"""
+    print("\n--- 整文件档 20000 字告警 ---", flush=True)
+    page.click('.nav-item[data-nav-key="rewrite"]')
+    page.evaluate("""() => {
+      App.tasks = [{path: '/tmp/超长稿.txt', status: 'pending', original: '',
+                    corrected: '', error: ''}];
+      App.selectedFileKey = null;
+      App.renderFileList();
+      App.config.chunking_preset_rewrite = 'whole_file';
+      window.pywebview.api.get_file_char_counts = async (paths) => ({
+        ok: true,
+        counts: Object.fromEntries((paths || []).map(p => [p, 30000])),
+      });
+    }""")
+    check("整篇轨生效档为整文件", page.evaluate(
+        "() => App._effectiveChunkPreset() === 'whole_file'"))
+
+    page.evaluate("""() => {
+      window.__cfResult = null;
+      App._confirmWholeFileRewrite(['/tmp/超长稿.txt'])
+         .then(r => { window.__cfResult = r; });
+    }""")
+    page.wait_for_selector("#dialog-root:not([hidden])", timeout=5000)
+    check("超 20000 字弹确认框", page.evaluate(
+        "() => !document.getElementById('dialog-root').hidden"))
+    check("确认框写明阈值 20000", page.evaluate(
+        "() => document.getElementById('dialog-body-text').textContent.includes('20000')"))
+    page.screenshot(path=str(out / "1440x900-5-wholefile-warning.png"))
+    page.click("#dialog-btn-secondary")          # 返回改档
+    page.wait_for_function("() => window.__cfResult !== null", timeout=5000)
+    check("选「返回改档」→ 取消本次启动", page.evaluate(
+        "() => window.__cfResult === false"))
+
+    # 阈值以内的文件不打扰
+    page.evaluate("""() => {
+      window.pywebview.api.get_file_char_counts = async (paths) => ({
+        ok: true,
+        counts: Object.fromEntries((paths || []).map(p => [p, 5000])),
+      });
+      window.__cfResult = null;
+      App._confirmWholeFileRewrite(['/tmp/超长稿.txt'])
+         .then(r => { window.__cfResult = r; });
+    }""")
+    page.wait_for_function("() => window.__cfResult !== null", timeout=5000)
+    check("20000 字以内直接放行", page.evaluate("() => window.__cfResult === true"))
+    check("放行时不弹框", page.evaluate(
+        "() => document.getElementById('dialog-root').hidden"))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="墨准 v5.3 前端三视口冒烟")
     parser.add_argument("--out", default=str(ROOT / ".local" / "smoke-ui-v5.3"),
@@ -347,6 +397,7 @@ def main() -> int:
                 for w, h in VIEWPORTS:
                     _run_viewport(page, url, w, h, out)
                 _check_provenance(page, out)
+                _check_whole_file_warning(page, out)
                 check("页面无 JS 异常", not errs, str(errs[:3]))
             finally:
                 browser.close()
