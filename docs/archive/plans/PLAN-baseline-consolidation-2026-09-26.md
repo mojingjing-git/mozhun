@@ -1,9 +1,20 @@
 # 墨准双基线合并与工作区整理计划
 
-> 状态: 调研完成，独立审查完成，待按修订版执行
+> 状态: 已完成
 > 创建: 2026-09-26
 > 目标分支: `master`
 > 实施分支: `codex/merge-baselines`
+
+## 执行结果
+
+- 合并提交: `ea187e8`，第一父 `cleanup/v6`，第二父旧 `master`
+- 文档对齐提交: `9bb88c7`
+- 工作区与归档提交: `968f2cb`
+- `master` 已快进到 `968f2cb`
+- 合并点和主线均通过 `python run_all_tests.py`: **1336 通过 / 0 失败**
+- ASR 烟测移入 `.local/asr-smoke-2026-09-13/`
+- 提交草稿移入 `.local/commit-drafts/`
+- `.workbuddy/` 按 `plans/`、`reviews/`、`verifier/` 分类并保持忽略
 
 ## 0. 独立审查结论
 
