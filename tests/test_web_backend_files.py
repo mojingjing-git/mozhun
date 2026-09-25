@@ -151,6 +151,30 @@ def test_read_file_chinese():
     finally:
         Path(tmp_path).unlink(missing_ok=True)
 
+# === test_v530_get_file_char_counts ===
+def test_v530_get_file_char_counts():
+    """v5.3.0: 批量字符数只读接口 (整文件档超长告警用, 不回正文)。"""
+    print("\n--- v5.3.0: get_file_char_counts ---", flush=True)
+    from app.web_backend import Backend
+    backend = Backend(window=None)
+    with tempfile.TemporaryDirectory(prefix="v530_counts_") as tmp:
+        a = Path(tmp) / "a.txt"
+        b = Path(tmp) / "b.txt"
+        a.write_text("中文校对", encoding="utf-8")
+        b.write_text("x" * 25001, encoding="utf-8")
+        missing = Path(tmp) / "nope.txt"
+        r = backend.get_file_char_counts([str(a), str(b), str(missing), "", None])
+        check("返回 ok", r.get("ok") is True)
+        counts = r.get("counts") or {}
+        check("中文字符数正确", counts.get(str(a)) == 4, str(counts.get(str(a))))
+        check("长文本字符数正确", counts.get(str(b)) == 25001, str(counts.get(str(b))))
+        check("不存在的文件被跳过", str(missing) not in counts)
+        check("非字符串入参不崩", "" not in counts)
+        check("只回长度不回正文", all(isinstance(v, int) for v in counts.values()))
+        empty = backend.get_file_char_counts([])
+        check("空列表返回空 counts", empty == {"ok": True, "counts": {}})
+
+
 # === test_drag_drop_files ===
 def test_drag_drop_files():
     print("\n--- drag_drop_files ---", flush=True)

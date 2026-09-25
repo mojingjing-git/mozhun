@@ -28,6 +28,9 @@ const App = {
   eventQueue: [],
   dmp: null,                  // diff_match_patch instance (lazy)
   isProcessing: false,
+  // v5.3.0: 当前工作区入口轨 (harness=逐条校对 / rewrite=整篇校对)
+  // 与 config.workflow_mode 单向同步; 空 config 值按后端同款规则派生 (app/utils.py:derive_workflow)
+  workspaceTrack: 'harness',
   // 500ms 防抖保存 config
   configSaveTimer: null,
   configDirty: false,
@@ -94,6 +97,9 @@ const App = {
       this.chunkingPresets = [];
     }
 
+    // v5.3.0: 入口轨恢复 — 显式 workflow_mode 优先; 老配置 (空) 按旧逻辑派生
+    this.workspaceTrack = this._deriveTrack(this.config);
+
     this.renderSidebar();
     this.renderHome();
     this.renderSettings();
@@ -101,7 +107,7 @@ const App = {
     this.bindCompatFields();  // v5.2c: 兼容字段同步 + 段控件重算事件
     this.startEventLoop();
     this.setView('home');
-    this.appendLog('[就绪] v5.2c pywebview 前端已加载');
+    this.appendLog('[就绪] v5.3 pywebview 前端已加载 (入口: ' + this._trackLabel(this._currentTrack()) + ')');
     // v4.1.7: 加载风格 profile 列表 (异步, 不阻塞 init)
     this.loadStyleProfiles();
     // v4.1.9 (S2.3 个人原则): 恢复持久化主题 (auto/light/dark)
@@ -111,13 +117,31 @@ const App = {
   },
 
   // ====== 视图切换 ======
-  setView(viewName) {
+  // v5.3.0: navKey 可选 — 两个校对入口共用 view-home, 靠 data-nav-key 区分高亮
+  setView(viewName, navKey = '') {
     document.querySelectorAll('.view').forEach(el => el.classList.remove('active'));
     document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
     const view = document.getElementById('view-' + viewName);
-    const nav = document.querySelector(`.nav-item[data-view="${viewName}"]`);
     if (view) view.classList.add('active');
+    const key = navKey || (viewName === 'home' ? this._currentTrack() : viewName);
+    const nav = document.querySelector(`.nav-item[data-nav-key="${key}"]`);
     if (nav) nav.classList.add('active');
+    // 「重写」父项: 进入 去 AI 味 时自动展开 (展开箭头仍是独立 button)
+    this._setNavParentState('deai', viewName === 'deai');
+  },
+
+  // v5.3.0: 父/子导航状态 (aria-expanded 双向维护)
+  _setNavChildrenOpen(parentKey, open) {
+    const children = document.getElementById('nav-children-' + parentKey);
+    const toggle = document.querySelector(`.nav-expander[data-nav-expand="${parentKey}"]`);
+    if (children) children.classList.toggle('is-open', !!open);
+    if (toggle) toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+  },
+
+  _setNavParentState(parentKey, active) {
+    const wrap = document.getElementById('nav-parent-' + parentKey);
+    if (wrap) wrap.classList.toggle('is-child-active', !!active);
+    if (active) this._setNavChildrenOpen(parentKey, true);
   },
 
   // ====== 主题 (v4.1.9: S2.3 个人原则 - 主题持久化到 config) ======
@@ -401,8 +425,122 @@ const App = {
   // ====== 侧边栏 ======
   renderSidebar() {
     document.querySelectorAll('.nav-item').forEach(btn => {
-      btn.addEventListener('click', () => this.setView(btn.dataset.view));
+      btn.addEventListener('click', () => {
+        // v5.3.0: 带 data-workflow 的是校对入口 — 先切轨, 再进共用视图
+        if (btn.dataset.workflow) {
+          this.setWorkspaceTrack(btn.dataset.workflow);
+          this.setView('home');
+          return;
+        }
+        this.setView(btn.dataset.view || 'home');
+      });
     });
+    // v5.3.0: 展开箭头是独立 button (不嵌套), 只切换展开态、不导航
+    document.querySelectorAll('.nav-expander').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const key = btn.dataset.navExpand;
+        const children = document.getElementById('nav-children-' + key);
+        this._setNavChildrenOpen(key, !(children && children.classList.contains('is-open')));
+      });
+    });
+  },
+
+  // ====== v5.3.0: 入口轨 (逐条校对 / 整篇校对) ======
+  // 与后端 derive_workflow 同款规则: harness_enabled 且 prompt_mode ∈ {strict, polish} → harness
+  // (workflow_mode 为空 = 未显式指定, 老配置走这条派生路径)
+  _deriveTrack(cfg) {
+    const c = cfg || {};
+    const wf = String(c.workflow_mode || '').toLowerCase();
+    if (wf === 'harness' || wf === 'rewrite') return wf;
+    const enabled = c.harness_enabled !== false;
+    const mode = c.prompt_mode || 'strict';
+    return (enabled && ['strict', 'polish'].includes(mode)) ? 'harness' : 'rewrite';
+  },
+
+  _currentTrack() {
+    return this.workspaceTrack === 'rewrite' ? 'rewrite' : 'harness';
+  },
+
+  _trackLabel(track) {
+    return track === 'rewrite' ? '整篇校对' : '逐条校对';
+  },
+
+  _otherTrack() {
+    return this._currentTrack() === 'harness' ? 'rewrite' : 'harness';
+  },
+
+  // 切换入口: 更新 UI + 落盘 workflow_mode (后端 set_config 单向镜像 harness_enabled)
+  setWorkspaceTrack(track, { persist = true } = {}) {
+    if (track !== 'harness' && track !== 'rewrite') return;
+    const changed = this._currentTrack() !== track;
+    this.workspaceTrack = track;
+    this._applyTrackToUI();
+    if (changed && persist) this._persistTrack(track);
+  },
+
+  async _persistTrack(track) {
+    try {
+      const r = await window.pywebview.api.set_config('workflow_mode', track);
+      if (r && r.ok === false) {
+        this.appendLog(`[错误] 入口保存失败: ${r.error || '未知'}`);
+        return;
+      }
+      await window.pywebview.api.save_config();
+      this.config.workflow_mode = track;
+      this.appendLog(`[入口] 已切到「${this._trackLabel(track)}」`);
+    } catch (e) {
+      this.appendLog('[错误] 入口保存异常: ' + e);
+    }
+  },
+
+  // 入口相关 UI 的全部联动点 (标题/说明/段控件/prompt 下拉/分块标签/文件徽标/结果来源条)
+  _applyTrackToUI() {
+    this._refreshTrackHeader();
+    this._updateModeSegment();
+    this._renderPromptModeOptions();
+    this.renderChunkingDisplay();
+    this.renderFileList();
+    if (this.selectedFileKey) this.renderCompare(this.selectedFileKey);
+  },
+
+  _refreshTrackHeader() {
+    const track = this._currentTrack();
+    const title = document.getElementById('home-title');
+    if (title) title.textContent = this._trackLabel(track);
+    const hint = document.getElementById('home-mode-hint');
+    if (!hint) return;
+    if (track === 'rewrite') {
+      hint.textContent = '模型重写全文输出, 兼容不支持工具调用的服务端';
+      return;
+    }
+    // 逐条入口遇到白名单外的 prompt 模式: 引擎退回整篇行为, 页头明示 (不静默降级)
+    const mode = this.getVal('cfg-prompt-mode') || this.config.prompt_mode || 'strict';
+    if (['punct_local', 'md_local'].includes(mode)) {
+      hint.textContent = '纯本地模式 (不调用 API) — 本地规则与入口无关, 两个入口结果互不命中';
+    } else if (!['strict', 'polish'].includes(mode)) {
+      hint.textContent = `当前 Prompt 模式 (${mode}) 不支持逐条工具链, 本次按整篇输出执行 — 建议改为「纯纠错模式」或「纠错+轻润色」`;
+    } else {
+      hint.textContent = '模型只提交改动条目, 输出 token 少, 可逐条审计';
+    }
+  },
+
+  // prompt 模式按入口过滤: 逐条轨不提供 tech_doc/custom (白名单外), 本地模式两轨都提供
+  _promptModesForTrack(track) {
+    const local = ['punct_local', 'md_local'];
+    const allow = track === 'harness'
+      ? ['strict', 'polish'].concat(local)
+      : ['strict', 'polish', 'tech_doc', 'custom'].concat(local);
+    return (this.promptModes || []).filter(m => allow.includes(m.key));
+  },
+
+  // 当前持久化值不在本轨列表时, fillSelect 会自动补「当前值, 选项列表缺失」项 —
+  // 保留用户原值不静默改写 (与 §3.4 "不制造静默降级" 一致)
+  _renderPromptModeOptions() {
+    const sel = document.getElementById('cfg-prompt-mode');
+    if (!sel) return;
+    const current = sel.value || this.config.prompt_mode || 'strict';
+    this.fillSelect('cfg-prompt-mode', this._promptModesForTrack(this._currentTrack()), current);
   },
 
   // v5.2c: 兼容字段同步写 (M-3 修: DeAI 字段改时同步给 rewrite 字段, harness 字段不联动)
@@ -415,11 +553,9 @@ const App = {
     };
     sync('cfg-chunking-preset', 'cfg-chunking-preset-rewrite');
     sync('cfg-timeout', 'cfg-rewrite-request-timeout');
-    // v5.2c: prompt_mode / harness_enabled 变化 → 段控件重算
-    ['cfg-prompt-mode', 'cfg-harness-enabled'].forEach(id => {
-      const el = document.getElementById(id);
-      if (el) el.addEventListener('change', () => this._updateModeSegment());
-    });
+    // v5.3.0: prompt_mode 变化 → 页头说明重算 (入口不再由这个字段切换)
+    const pm = document.getElementById('cfg-prompt-mode');
+    if (pm) pm.addEventListener('change', () => this._refreshTrackHeader());
   },
 
   // ====== 主页渲染 ======
@@ -427,6 +563,9 @@ const App = {
     // v4.1 (I5): chunking 预设下拉挪到设置页, 主页只显示只读 label
     this.renderChunkingDisplay();
     this.updateFileCount();
+    // v5.3.0: 标题/说明/下拉过滤/段控件随入口
+    this._refreshTrackHeader();
+    this._updateModeSegment();
   },
 
   // v4.1 (I5): 渲染主页只读 chunking 标签, 读 this.config.chunking_preset
@@ -442,9 +581,8 @@ const App = {
 
   // v5.2c: 段控件 active 重算 + mode-dependent 灰显 (M-2 修: 只读)
   _updateModeSegment() {
-    const isHarness = this.config.harness_enabled !== false
-      && ['strict', 'polish'].includes(this.config.prompt_mode);
-    const activeMode = isHarness ? 'harness' : 'rewrite';
+    // v5.3.0: 段控件跟随入口 (唯一真值 = workspaceTrack), 不再由 harness_enabled 派生
+    const activeMode = this._currentTrack();
     document.querySelectorAll('#cfg-mode-display .seg').forEach(btn => {
       btn.classList.toggle('active', btn.dataset.mode === activeMode);
     });
@@ -454,10 +592,9 @@ const App = {
   },
 
   // v5.2c: 派生实际生效的 chunking 档 (前端版, 与 processor.py:_effective_chunk_preset 同步)
+  // v5.3.0: 按入口取轨 (harness → _harness 字段 / rewrite → _rewrite 字段)
   _effectiveChunkPreset() {
-    const isHarness = this.config.harness_enabled !== false
-      && ['strict', 'polish'].includes(this.config.prompt_mode);
-    if (isHarness) {
+    if (this._currentTrack() === 'harness') {
       return this.config.chunking_preset_harness || 'large';
     }
     return this.config.chunking_preset_rewrite || 'balanced';
@@ -501,8 +638,8 @@ const App = {
 
   // ====== 设置页渲染 ======
   renderSettings() {
-    // 填充 prompt 模式
-    this.fillSelect('cfg-prompt-mode', this.promptModes, this.config.prompt_mode);
+    // 填充 prompt 模式 (v5.3.0: 按当前入口过滤)
+    this._renderPromptModeOptions();
 
     // 填充 API 模板
     const tplSel = document.getElementById('cfg-template');
@@ -518,11 +655,13 @@ const App = {
       }
     }
 
-    // 填充 chunking 预设
-    this.fillSelect('cfg-chunking-preset', this.chunkingPresets, this.config.chunking_preset);
+    // 填充 chunking 预设 (v5.3.0: 按轨过滤 — extra_large(50000) 只出现在逐条轨)
+    const presetsByTrack = (track) => (this.chunkingPresets || [])
+      .filter(p => !p.tracks || p.tracks.includes(track));
+    this.fillSelect('cfg-chunking-preset', presetsByTrack('rewrite'), this.config.chunking_preset);
     // v5.2c (D 方案): harness / 重写 双轨配置 — 4 新控件
-    this.fillSelect('cfg-chunking-preset-harness', this.chunkingPresets, this.config.chunking_preset_harness);
-    this.fillSelect('cfg-chunking-preset-rewrite', this.chunkingPresets, this.config.chunking_preset_rewrite);
+    this.fillSelect('cfg-chunking-preset-harness', presetsByTrack('harness'), this.config.chunking_preset_harness || 'large');
+    this.fillSelect('cfg-chunking-preset-rewrite', presetsByTrack('rewrite'), this.config.chunking_preset_rewrite || 'balanced');
     this.setVal('cfg-harness-request-timeout', this.config.harness_request_timeout);
     this.setVal('cfg-rewrite-request-timeout', this.config.rewrite_request_timeout);
     // v5.2c: 段控件 active 重算 + mode-dependent 灰显 (M-2 修: 只读)
@@ -548,11 +687,6 @@ const App = {
     {
       const mcb = document.getElementById('cfg-md-strip');
       if (mcb) mcb.checked = this.config.md_strip_before_llm === true;
-    }
-    // v5.1.0: harness Edit 工具链开关 (默认 True 字段, 缺失视为 true)
-    {
-      const hcb = document.getElementById('cfg-harness-enabled');
-      if (hcb) hcb.checked = this.config.harness_enabled !== false;
     }
     // v4.3.4: 标点修复 v2 规则选项
     {
@@ -991,12 +1125,18 @@ const App = {
       }[t.status] || t.status;
       const statusText = (t.status === 'completed' && t.warnings)
         ? '完成（部分建议未采纳）' : baseStatusText;
+      // v5.3.0: 结果来源徽标 — 取结果自带的 workflow, 不取当前导航状态;
+      // 来源与当前入口不一致时标黄, 提示"这是另一条轨留下的结果"
+      const trackBadge = (t.status === 'completed' && t.workflow)
+        ? `<span class="file-track${t.workflow !== this._currentTrack() ? ' is-other' : ''}" title="该结果由「${this._trackLabel(t.workflow)}」产出">${t.workflow === 'harness' ? '逐条' : '整篇'}</span>`
+        : '';
       // v5.0.0 (联动 UX): 已完成文件行加「→ 去AI味」按钮 — 一键送去改写
       const deaiBtn = t.status === 'completed'
         ? `<button class="file-deai" data-path="${this.escapeHtml(t.path)}" title="把校对结果送去「去 AI 味」直接改写 (跳过检测)" type="button">→去AI味</button>`
         : '';
       li.innerHTML = `<span class="file-name" title="${this.escapeHtml(t.path)}">${this.escapeHtml(name)}</span>
                       <span class="file-status ${t.status}">${statusText}</span>
+                      ${trackBadge}
                       ${deaiBtn}
                       <button class="file-remove" data-path="${this.escapeHtml(t.path)}" title="删除" type="button">×</button>`;
       li.addEventListener('click', (e) => {
@@ -1169,8 +1309,12 @@ const App = {
 
   // v4.1.8.2 (审计 F5): cancelled 也纳入重跑 (与 hasPending/后端断点语义一致)
   async startProofread() {
+    const cur = this._currentTrack();
+    // v5.3.0: 除常规待处理状态外, 还要挑「另一入口留下的已完成结果」——
+    // 单结果槽下当前入口并没有可用结果, 否则这些文件会被错误跳过 (PLAN §4-2)
     const paths = this.tasks.filter(t =>
-        t.status === 'pending' || t.status === 'failed' || t.status === 'cancelled')
+        t.status === 'pending' || t.status === 'failed' || t.status === 'cancelled'
+        || (t.status === 'completed' && t.workflow && t.workflow !== cur))
                             .map(t => t.path);
     if (paths.length === 0) {
       this.appendLog('[提示] 没有待处理文件');
@@ -1181,7 +1325,7 @@ const App = {
 
   // v4.3.1 (UX #7): 校对执行主体 — 开始按钮与文件右键"重新校对(忽略缓存)"共用;
   // forceRerun=true 透传后端 start_proofread 第 5 个位置参数 (跳过断点缓存强制重跑)
-  async _runProofread(paths, { forceRerun = false } = {}) {
+  async _runProofread(paths, { forceRerun = false, skipOverrideConfirm = false } = {}) {
     if (!paths || paths.length === 0) {
       this.appendLog('[提示] 没有待处理文件');
       return;
@@ -1196,8 +1340,35 @@ const App = {
       await this.saveConfig({silent: true});
       this.configDirty = false;
     }
-    // v4.1 (I5): 主页不再有 chunking select, 直接读 config (从设置页同步过来)
-    const preset = this.config.chunking_preset || 'balanced';
+    const cur = this._currentTrack();
+    // v5.3.0 (修 B3): 单结果槽的诚实告知 — 本次会覆盖另一入口的已完成结果。
+    // 批量开始与单文件重跑两条路径都走这里, 右键重跑不会绕过 (PLAN §4-3/§4-8)
+    const crossOthers = paths.filter(p => {
+      const t = this.tasks.find(x => x.path === p);
+      return !!(t && t.status === 'completed' && t.workflow && t.workflow !== cur);
+    });
+    if (crossOthers.length > 0 && !skipOverrideConfirm) {
+      const ok = await this.showConfirmDialog({
+        title: '将覆盖另一入口的结果',
+        body: `本次「${this._trackLabel(cur)}」会覆盖 ${crossOthers.length} 个文件在「${this._trackLabel(this._otherTrack())}」的已完成结果` +
+              `（同一文件只保留一份结果）。继续?`,
+        primaryText: '继续',
+        secondaryText: '取消',
+        icon: 'warning',
+      });
+      if (!ok) {
+        this.appendLog('[取消] 用户放弃覆盖另一入口的结果');
+        return;
+      }
+    }
+    // v5.3.0: 整篇入口选「整文件」且单文件 > 20000 字 → 先确认。
+    // (逐条入口不查: 该轨有 extra_large(50000) 正式档, 用 20000 告警会自相矛盾)
+    if (cur === 'rewrite') {
+      const proceed = await this._confirmWholeFileRewrite(paths);
+      if (!proceed) return;
+    }
+    // v4.1 (I5): 主页不再有 chunking select, 直接读当前入口生效的档 (从设置页同步过来)
+    const preset = this._effectiveChunkPreset();
     this.isProcessing = true;
     // v4.1.8.2 (审计 F10): 重跑时 renderState 一律重建 — 旧版 _initRenderState
     // "存在即跳过", 残留的 mode='full' 会让新一轮流式直接落进每帧全量 diff 路径
@@ -1221,13 +1392,15 @@ const App = {
     this.setProcessingButtons(true);
     this.appendLog(`[启动] ${paths.length} 个文件${forceRerun ? ' (强制重新校对, 忽略缓存)' : ''}, 模式=${this.config.prompt_mode || 'strict'}, 分块=${preset}`);
     try {
-      // v4.3.1 (UX #7): 第 5 个位置参数 force_rerun (pywebview 按位置传参)
+      // v4.3.1 (UX #7): 第 5 个位置参数 force_rerun
+      // v5.3.0: 第 6 个位置参数 workflow (必须追加在 force_rerun 之后, 不能插在前面)
       const result = await window.pywebview.api.start_proofread(
         paths,
         this.config.prompt_mode || 'strict',
         this.config.custom_prompt || '',
         preset,
-        forceRerun ? true : false
+        forceRerun ? true : false,
+        cur
       );
       // v4.1.8.2 (审计 B3/F4): 统一契约检查 — 旧版不检查 ok, 启动失败时文件
       // 永久卡"处理中"且开始按钮永久禁用
@@ -1240,7 +1413,17 @@ const App = {
       // (force_rerun 时后端返回空数组, 天然不弹)
       const cached = Array.isArray(result.cached_files) ? result.cached_files : [];
       if (cached.length > 0) {
-        this.showToast(`已跳过 ${cached.length} 个文件（命中上次校对缓存，右键文件可强制重新校对）`, 'info');
+        // v5.3.0: 缓存命中分两种口径 — 「本轨命中」才是普通跳过;
+        // 命中另一轨遗留结果 (D9 保护下来的成功断点) 必须说清来源 + 给出强制重跑入口
+        const fromOther = cached.filter(p => {
+          const t = this.tasks.find(x => x.path === p);
+          return !!(t && t.workflow && t.workflow !== cur);
+        });
+        if (fromOther.length > 0) {
+          this.showToast(`已跳过 ${cached.length} 个文件：其中 ${fromOther.length} 个命中的是「${this._trackLabel(this._otherTrack())}」留下的结果（右键文件可强制重新校对）`, 'info');
+        } else {
+          this.showToast(`已跳过 ${cached.length} 个文件（命中上次校对缓存，右键文件可强制重新校对）`, 'info');
+        }
       }
     } catch (e) {
       this.appendLog('[错误] start_proofread 失败: ' + e);
@@ -1257,15 +1440,53 @@ const App = {
     }
   },
 
-  // v4.3.1 (UX #7): 单文件强制重新校对 (右键菜单入口) — 有任务在跑时拒绝,
+  // v5.3.0: 整篇入口选「整文件」档时的超长确认 (阈值 20000, 与后端 DeAI
+  // _DEAI_WHOLE_FILE_LIMIT 对齐)。字数走后端只读接口, 不把全文拉进前端。
+  async _confirmWholeFileRewrite(paths) {
+    const info = (this.chunkingPresets || []).find(p => p.key === this._effectiveChunkPreset());
+    if (!info || info.max_chars) return true;   // 非 whole_file 档, 不告警
+    let counts = {};
+    try {
+      const r = await window.pywebview.api.get_file_char_counts(paths);
+      if (r && r.ok) counts = r.counts || {};
+    } catch (e) {
+      this.appendLog('[提示] 无法读取文件字符数, 跳过整文件超长检查: ' + e);
+      return true;
+    }
+    const over = paths.filter(p => (counts[p] || 0) > 20000);
+    if (over.length === 0) return true;
+    const maxLen = Math.max(...over.map(p => counts[p] || 0));
+    const ok = await this.showConfirmDialog({
+      title: '整文件校对超长提醒',
+      body: `有 ${over.length} 个文件超过 20000 字（最长 ${maxLen} 字）。「整文件」档会把整篇一次性发给模型，` +
+            `可能超出模型上下文或导致输出被截断。建议改用「高上下文 (4000)」或「大块 (6000)」。仍要继续?`,
+      primaryText: '仍然继续',
+      secondaryText: '返回改档',
+      icon: 'warning',
+    });
+    if (!ok) {
+      this.appendLog('[取消] 整文件档超长, 用户选择先改档');
+      return false;
+    }
+    return true;
+  },
+
+  // v4.3.1 (UX #7): 单文件强制重新校对 (右键菜单/来源提示条入口) — 有任务在跑时拒绝,
   // 防并发双任务打乱后端 engine 状态
-  _rerunSingleFile(filePath) {
+  // v5.3.0: confirmOverride=false 供来源提示条使用 (用户已看到来源不一致提示, 不再二次确认)
+  _rerunSingleFile(filePath, { confirmOverride = true } = {}) {
     if (this.isProcessing) {
       this.showToast('有任务正在运行，请等当前任务结束再重新校对', 'error');
       return;
     }
     const t = this.tasks.find(t => t.path === filePath);
     if (!t) return;
+    if (!confirmOverride) {
+      // 来源提示条: 直接强制重跑 (§4-10), 但仍走 _runProofread 的统一入口
+      this.appendLog(`[重跑] ${filePath.split(/[\\/]/).pop()} (当前入口 ${this._trackLabel(this._currentTrack())}, 忽略缓存)`);
+      this._runProofread([filePath], { forceRerun: true, skipOverrideConfirm: true });
+      return;
+    }
     t.status = 'pending';
     this.renderFileList();
     this.updateFileCount();
@@ -1408,6 +1629,8 @@ const App = {
       // v5.1.0: 缓存 harness 改动审计与部分成功标记 (onFileDone payload 附带)
       if (data && data.audit !== undefined) t.audit = data.audit;
       if (data && data.warnings !== undefined) t.warnings = !!data.warnings;
+      // v5.3.0: 结果来源只在成功时写入 — 失败/取消保留上一轨的好结果来源 (PLAN §4-7)
+      if (status === 'completed' && data && data.workflow) t.workflow = data.workflow;
       this.renderFileList();
       // v4.1.5: 文件完成, 刷新按钮态
       if (this.selectedFileKey === fileKey) {
@@ -1512,6 +1735,8 @@ const App = {
           // 双路径都带, 前端不依赖事件到达顺序; audit 字段缺失时保留旧值)
           if (info.audit !== undefined) t.audit = info.audit;
           t.warnings = !!info.result.warnings;
+          // v5.3.0: 来源只在成功时写入 (失败/取消保留旧来源, 见 PLAN §4-7)
+          if (st === 'completed' && info.workflow) t.workflow = info.workflow;
           // v4.3.1 (UX #5): 无条件回写 error — 旧版只在有值时覆盖, 重跑成功后
           // 上一轮旧 error 残留, 对比区永远显示 error-mark
           t.error = info.result.error || '';
@@ -1584,7 +1809,31 @@ const App = {
   },
 
   // 核心渲染: 左 compare-original (静态原文字), 右 compare-revised (流式/全量)
+  // v5.3.0: 结果来源提示条 — 当前入口与结果来源不一致时显示 + 一键强制重跑 (§4-1/§4-10)
+  _renderProvenance(fileKey) {
+    const bar = document.getElementById('result-provenance');
+    if (!bar) return;
+    const t = fileKey ? this.tasks.find(x => x.path === fileKey) : null;
+    const cur = this._currentTrack();
+    if (!t || t.status !== 'completed' || !t.workflow || t.workflow === cur) {
+      bar.hidden = true;
+      bar.innerHTML = '';
+      return;
+    }
+    bar.hidden = false;
+    bar.innerHTML =
+      `<span class="provenance-text">此结果来自 <strong>${this._trackLabel(t.workflow)}</strong>, ` +
+      `当前入口是「${this._trackLabel(cur)}」</span>` +
+      `<button id="btn-provenance-rerun" class="btn btn-standard btn-subtle" type="button">` +
+      `用${this._trackLabel(cur)}重跑（忽略缓存）</button>`;
+    const btn = document.getElementById('btn-provenance-rerun');
+    // 走 force_rerun: D9 断点保护会把上一轨的成功结果留在盘上, 普通重跑会被判缓存命中秒完成
+    if (btn) btn.addEventListener('click', () => this._rerunSingleFile(fileKey, { confirmOverride: false }));
+  },
+
   renderCompare(fileKey) {
+    // v5.3.0: 来源提示条先刷新 (空态/错误态也要收掉上一条)
+    this._renderProvenance(fileKey);
     const originalEl = document.getElementById('compare-original');
     const revisedEl = document.getElementById('compare-revised');
     if (!originalEl || !revisedEl) return;
@@ -1970,7 +2219,10 @@ const App = {
     if (!text) return;
     try {
       // v4.1.4: 弹原生保存对话框 (默认位置=源文件目录, 默认文件名=<stem>-<YYMMDD>-<HHMMSS>.<ext>)
-      const r = await window.pywebview.api.export_result(this.selectedFileKey, text, 'txt');
+      // v5.3.0: 第 4 个位置参数传"这份结果实际的来源轨" — 默认名带 -逐条/-整篇,
+      // 避免两个入口同秒导出撞名, 也避免把另一轨的结果标成当前入口 (PLAN §4-5)
+      const r = await window.pywebview.api.export_result(this.selectedFileKey, text, 'txt',
+                                                         t.workflow || '');
       if (r.ok) {
         this.appendLog(`[导出] 已保存: ${r.path}`);
         // v4.3.1 (UX #2): 导出成功 toast (只报文件名, 完整路径进日志)
@@ -2115,11 +2367,8 @@ const App = {
         const cb = document.getElementById('cfg-md-strip');
         return cb ? cb.checked : (this.config.md_strip_before_llm === true);
       })(),
-      // v5.1.0: harness Edit 工具链开关 (默认 True 字段, 元素缺失时回退当前配置)
-      harness_enabled: (() => {
-        const cb = document.getElementById('cfg-harness-enabled');
-        return cb ? cb.checked : (this.config.harness_enabled !== false);
-      })(),
+      // v5.3.0: harness_enabled 复选框已移除 — 入口由侧边栏决定, workflow_mode 由
+      // setWorkspaceTrack 单独落盘 (放这里会被每次保存翻回旧轨, 见 PLAN §5-18)
       // v4.3.4: 标点修复 v2 规则选项 (checkbox 缺失时回退当前配置)
       punct_quote_style:  this.getVal('cfg-punct-quote-style') || this.config.punct_quote_style || 'curly',
       punct_fullwidth_alnum: (() => {
@@ -2396,11 +2645,24 @@ const App = {
     const input = document.getElementById('deai-input');
     if (!input) return;
     input.value = text;
-    input.title = `已从「${source}」校对结果载入 (v5.0 联动)`;
+    // v5.3.0: 标明来源入口 (§4-6) — 结果自带 workflow, 不取当前导航状态
+    const srcTrack = (t && t.workflow) || '';
+    const srcLabel = srcTrack ? `「${this._trackLabel(srcTrack)}」` : '校对';
+    input.title = `已从「${source}」${srcLabel}结果载入 (v5.0 联动)`;
+    const hint = document.getElementById('deai-source-hint');
+    if (hint) {
+      if (srcTrack) {
+        hint.hidden = false;
+        hint.textContent = `来源: ${srcLabel} · ${source}`;
+      } else {
+        hint.hidden = true;
+        hint.textContent = '';
+      }
+    }
     this._updateDeaiCharCount();
     this.setView('deai');
-    this.appendLog(`[联动] 已从「${source}」校对结果载入去AI味 (跳过检测, 直接改写)`);
-    this.showToast('已载入校对结果, 跳过检测直接改写', 'info');
+    this.appendLog(`[联动] 已从「${source}」${srcLabel}结果载入去AI味 (跳过检测, 直接改写)`);
+    this.showToast(`已载入${srcLabel}结果, 跳过检测直接改写`, 'info');
     await this.deaiStep2();
   },
 
@@ -2439,8 +2701,9 @@ const App = {
   },
 
   // 预计块数 (与后端 whole_file 兜底逻辑一致)
+  // v5.3.0: DeAI 固定走 rewrite 轨 — 读 chunking_preset_rewrite, 不再读 legacy chunking_preset
   _deaiChunkEstimate(len) {
-    const preset = this.config.chunking_preset || 'balanced';
+    const preset = this.config.chunking_preset_rewrite || 'balanced';
     const found = (this.chunkingPresets || []).find(p => p.key === preset);
     let maxChars = found ? found.max_chars : 3000;
     if (!maxChars && len > 20000) maxChars = 6000;

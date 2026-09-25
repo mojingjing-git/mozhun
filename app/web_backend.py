@@ -281,6 +281,26 @@ class Backend:
             logger.error(f"read_file 失败 [{path}]: {e}")
             return {"ok": False, "error": str(e)}
 
+    def get_file_char_counts(self, paths: list) -> dict:
+        """v5.3.0: 批量返回文件字符数 (只读, 不把全文送进前端)。
+
+        用途: 整篇入口选「整文件」档时, 前端要先判断"整篇一次性发给模型"会不会
+        超长 (阈值 20000, 与 _DEAI_WHOLE_FILE_LIMIT 对齐)。只回长度不回正文,
+        避免为一次告警把几十万字经 IPC 塞进 WebView (PLAN §5-18)。
+
+        返回 {"ok": True, "counts": {path: chars}}; 单个文件读取失败则跳过该键
+        (前端按 0 处理 = 不告警), 不因一个坏文件拦掉整批。
+        """
+        counts: dict = {}
+        for p in (paths or []):
+            if not isinstance(p, str) or not p:
+                continue
+            try:
+                counts[p] = len(read_file_text(Path(p)))
+            except Exception as e:
+                logger.warning(f"get_file_char_counts 读取失败 [{p}]: {e}")
+        return {"ok": True, "counts": counts}
+
     def drag_drop_files(self, paths: list) -> dict:
         """前端拖拽文件时调用 (兼容性保留, 主路径走 init_drag_drop + onFilesDropped).
 

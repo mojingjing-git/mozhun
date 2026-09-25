@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!--
-  墨准 v5.2c 前端 (Win11 Fluent 2 完整重构, PLAN-win11-redesign.md)
+  墨准 v5.3 前端 (Win11 Fluent 2 完整重构; v5.3 起工作区拆「逐条校对 / 整篇校对」双入口)
 
   借鉴自 https://learn.microsoft.com/zh-cn/windows/apps/design/ (Microsoft Terms of Use, 文档非版权材料) - 5 设计原则 + 7 签名体验
   借鉴自 https://fluent2.microsoft.design/ (MIT) 的设计令牌命名
@@ -22,7 +22,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>墨准 v5.2c</title>
+  <title>墨准 v5.3</title>
   <link rel="stylesheet" href="style.css">
   <link rel="icon" type="image/svg+xml" href="icons/app.svg">
 </head>
@@ -32,43 +32,67 @@
     <nav class="sidebar" id="sidebar">
       <div class="sidebar-title type-body-large-strong">墨准</div>
       <div class="nav-group">工作区</div>
-      <button class="nav-item active" data-view="home" type="button">
-        <span class="nav-icon" data-icon="home"></span>
-        <span>校对与对比</span>
+      <!-- v5.3.0: 两个独立入口共用 view-home — 靠 data-workflow 决定运行轨 (harness=逐条编辑 / rewrite=整篇输出)。
+           激活态一律用唯一的 data-nav-key 定位 (两个入口共用 data-view=home, 旧 querySelector 只能命中第一个)。 -->
+      <button class="nav-item" data-nav-key="harness" data-view="home" data-workflow="harness" type="button">
+        <span class="nav-icon" data-icon="check-list"></span>
+        <span>逐条校对</span>
       </button>
-      <button class="nav-item" data-view="deai" type="button">
-        <span class="nav-icon" data-icon="sparkle"></span>
-        <span>去 AI 味</span>
+      <button class="nav-item" data-nav-key="rewrite" data-view="home" data-workflow="rewrite" type="button">
+        <span class="nav-icon" data-icon="document-edit"></span>
+        <span>整篇校对</span>
       </button>
-      <button class="nav-item" data-view="styles" type="button">
+      <!-- v5.3.0: 「重写」父项 (可点击进入) + 子项「去 AI 味」; 展开箭头是独立 button, 不嵌套 -->
+      <div class="nav-parent" id="nav-parent-deai">
+        <button class="nav-item" data-nav-parent-item="deai" data-view="deai" type="button">
+          <span class="nav-icon" data-icon="sparkle"></span>
+          <span>重写</span>
+        </button>
+        <button class="nav-expander" data-nav-expand="deai" type="button"
+                aria-expanded="false" aria-controls="nav-children-deai" aria-label="展开或收起「重写」">
+          <span class="nav-icon" data-icon="chevron-down"></span>
+        </button>
+      </div>
+      <div class="nav-children" id="nav-children-deai">
+        <button class="nav-item is-child" data-nav-key="deai" data-view="deai" type="button">
+          <span class="nav-icon" data-icon="sparkle"></span>
+          <span>去 AI 味</span>
+        </button>
+      </div>
+      <div class="nav-group">工具</div>
+      <button class="nav-item" data-nav-key="styles" data-view="styles" type="button">
         <span class="nav-icon" data-icon="document"></span>
         <span>风格库</span>
       </button>
       <!-- v5.2b: 小说切分独立视图 (集成自姊妹项目「小说分析器」SplitterService) -->
-      <button class="nav-item" data-view="splitter" type="button">
+      <button class="nav-item" data-nav-key="splitter" data-view="splitter" type="button">
         <span class="nav-icon" data-icon="document-multiple"></span>
         <span>小说切分</span>
       </button>
       <div class="nav-group">设置</div>
-      <button class="nav-item" data-view="api" type="button">
-        <span class="nav-icon" data-icon="app"></span>
+      <button class="nav-item" data-nav-key="api" data-view="api" type="button">
+        <span class="nav-icon" data-icon="settings"></span>
         <span>API 接口</span>
       </button>
-      <button class="nav-item" data-view="params" type="button">
-        <span class="nav-icon" data-icon="settings"></span>
+      <button class="nav-item" data-nav-key="params" data-view="params" type="button">
+        <span class="nav-icon" data-icon="check"></span>
         <span>校对参数</span>
       </button>
-      <button class="nav-item" data-view="appearance" type="button">
+      <button class="nav-item" data-nav-key="appearance" data-view="appearance" type="button">
         <span class="nav-icon" data-icon="info"></span>
         <span>外观与关于</span>
       </button>
-      <div class="sidebar-footer">v5.2c</div>
+      <div class="sidebar-footer">v5.3</div>
     </nav>
 
     <!-- ========== 校对与对比 (结果对比合并回主页) ========== -->
     <main id="view-home" class="view active">
       <div class="page-header">
-        <h1>校对与对比</h1>
+        <!-- v5.3.0: 头部常驻机制说明 — 两个入口共用本视图, 标题/说明随入口切换 -->
+        <div class="page-heading">
+          <h1 id="home-title">逐条校对</h1>
+          <div class="header-hint" id="home-mode-hint">模型只提交改动条目, 输出 token 少, 可逐条审计</div>
+        </div>
         <div class="actions">
           <button id="btn-add-files" class="btn btn-standard btn-subtle" type="button">
             <span class="nav-icon" data-icon="add" style="width:16px;height:16px;"></span>
@@ -123,7 +147,7 @@
           </section>
         </div>
 
-        <!-- 右: 结果对比 (原文 + 校对结果, 常驻) -->
+            <!-- 右: 结果对比 (原文 + 校对结果, 常驻) -->
         <section class="card compare-card">
           <div class="compare-header">
             <h2>结果对比</h2>
@@ -135,6 +159,8 @@
               <button id="btn-export-result" class="btn btn-standard btn-subtle" type="button" disabled title="校对完成后可用">导出</button>
             </div>
           </div>
+          <!-- v5.3.0: 结果来源提示条 (当前入口与结果来源不一致时显示 + 一键强制重跑) -->
+          <div id="result-provenance" class="provenance-bar" hidden></div>
           <div class="compare-grid">
             <div class="compare-original" id="compare-original">
               <div class="type-emptystate">选择文件查看原文<br>(添加并运行校对后即可查看)</div>
@@ -280,13 +306,6 @@
           </div>
           <div class="form-row checkbox-row">
             <label class="checkbox-label">
-              <input type="checkbox" id="cfg-harness-enabled">
-              <span>启用 Edit 工具链 (harness 模式)</span>
-            </label>
-            <span class="form-hint">仅「严格校对」与「纠错+轻润色」模式生效: 模型返回逐条编辑建议 (改哪/改成什么/为什么), 客户端精确应用, 输出 token 大幅下降。右侧对比区底部显示「改动清单」。关闭后回退为模型整篇重输出</span>
-          </div>
-          <div class="form-row checkbox-row">
-            <label class="checkbox-label">
               <input type="checkbox" id="cfg-md-strip">
               <span>发送 LLM 前先剥离 Markdown 标记</span>
             </label>
@@ -334,54 +353,58 @@
         </section>
         <section class="card">
           <h2>长文本分块</h2>
-          <!-- v5.2c: 段控件 - 当前模式高亮, 另一档灰显 (只读, 改 prompt_mode 或 harness_enabled 切换) -->
+          <!-- v5.3.0: 段控件 - 当前入口高亮, 另一档灰显 (只读, 在左侧「工作区」切换入口) -->
           <div class="form-row">
-            <label>当前校对模式 (只读, 切换改 prompt_mode 或 harness_enabled)</label>
+            <label>当前入口 (只读, 在左侧「工作区」切换)</label>
             <div class="theme-switcher" id="cfg-mode-display" role="tablist" aria-disabled="true">
               <button class="seg active" data-mode="harness" type="button" disabled
-                      title="Edit 工具链模式 (harness_enabled=True 且 prompt_mode ∈ {strict, polish})">
-                <span class="seg-icon" data-icon="check-list"></span> 校对 (Harness)
+                      title="逐条校对 — 模型返回逐条编辑建议, 客户端精确应用 (需 prompt_mode ∈ {纯纠错, 纠错+轻润色})">
+                <span class="seg-icon" data-icon="check-list"></span> 逐条校对
               </button>
               <button class="seg" data-mode="rewrite" type="button" disabled
-                      title="整篇重写模式 (harness_enabled=False 或 prompt_mode=custom)">
-                <span class="seg-icon" data-icon="document-edit"></span> 校对 (重写)
+                      title="整篇校对 — 模型重写全文输出, 兼容不支持工具调用的服务端">
+                <span class="seg-icon" data-icon="document-edit"></span> 整篇校对
               </button>
             </div>
-            <div class="form-hint">改 <code>prompt_mode</code> (API 接口页) 或 <code>harness_enabled</code> (本节) 切换模式</div>
+            <div class="form-hint">入口在左侧「工作区」切换; 下方两轨的分块/超时只在对应入口生效</div>
           </div>
-          <!-- v5.2c: harness 模式配置 (mode-dependent 灰显当前不活跃档) -->
+          <!-- v5.2c: 逐条轨配置 (mode-dependent 隐藏当前不活跃档) -->
           <div class="form-row mode-dependent" data-mode="harness">
-            <label>Harness 分块预设</label>
-            <select id="cfg-chunking-preset-harness" title="Harness 模式专用分块档: large(6000) 推荐"></select>
+            <label>逐条校对分块预设</label>
+            <select id="cfg-chunking-preset-harness" title="逐条校对专用分块档: large(6000) 推荐; extra_large(50000) 已烟测通过 (10 万档才会失误)"></select>
           </div>
           <div class="form-row mode-dependent" data-mode="harness">
-            <label>Harness 请求超时 (秒)</label>
+            <div class="form-hint">超大块 (extra_large 50000 字) 已由用户烟测确认可用, 10 万档才出现失误; 该档仅逐条校对入口可选, 整篇入口会自动回退到 large</div>
+          </div>
+          <div class="form-row mode-dependent" data-mode="harness">
+            <label>逐条校对请求超时 (秒)</label>
             <input id="cfg-harness-request-timeout" type="number" min="60" max="600" step="10" value="180"
-                   title="Harness 模式专用 timeout. 模型响应慢 2-5x, 建议 ≥180s">
+                   title="逐条校对专用 timeout. 模型响应慢 2-5x, 建议 ≥180s">
           </div>
-          <!-- v5.2c: 重写模式配置 -->
+          <!-- v5.2c: 整篇轨配置 -->
           <div class="form-row mode-dependent" data-mode="rewrite">
-            <label>重写分块预设</label>
-            <select id="cfg-chunking-preset-rewrite" title="整篇重写模式分块档: balanced(3000) 推荐"></select>
+            <label>整篇校对分块预设</label>
+            <select id="cfg-chunking-preset-rewrite" title="整篇校对分块档: balanced(3000) 推荐; 选「整文件」且单文件超 20000 字时会先弹确认"></select>
           </div>
           <div class="form-row mode-dependent" data-mode="rewrite">
-            <label>重写请求超时 (秒)</label>
+            <label>整篇校对请求超时 (秒)</label>
             <input id="cfg-rewrite-request-timeout" type="number" min="60" max="600" step="10" value="120"
-                   title="整篇重写 timeout. 沿用原 timeout 字段值">
+                   title="整篇校对 timeout. 沿用原 timeout 字段值">
           </div>
-          <!-- v5.2c: 兼容字段 (老用户 + DeAI 视图专用) - C-3 修法: 保留控件, 不删 -->
+          <!-- v5.2c: 兼容字段 (老用户 + DeAI 视图) - C-3 修法: 保留控件, 不删;
+               v5.3.0: DeAI 与整篇校对共用 rewrite 轨, 改这里等于改整篇轨 -->
           <details class="compat-section">
-            <summary>DeAI 专用分块/超时 (折叠)</summary>
-            <div class="form-hint">这两个字段 DeAI 视图走, 校对视图不读。改这俩会同步到上面的 rewrite 字段, 但不影响 harness 字段。</div>
+            <summary>DeAI / 整篇校对 共用分块与超时 (折叠, 与上方整篇字段联动)</summary>
+            <div class="form-hint">DeAI 视图与「整篇校对」入口共用这两个值: 改动会同步到上方的整篇字段, 不影响逐条校对字段。</div>
             <div class="form-row">
-              <label>原 chunking_preset (DeAI)</label>
+              <label>原 chunking_preset (DeAI / 整篇)</label>
               <select id="cfg-chunking-preset" data-scope="deai"
-                      title="DeAI 视图专用, 改时同步给 chunking_preset_rewrite"></select>
+                      title="DeAI / 整篇校对共用, 改时同步给 chunking_preset_rewrite"></select>
             </div>
             <div class="form-row">
-              <label>原 timeout (DeAI)</label>
+              <label>原 timeout (DeAI / 整篇)</label>
               <input id="cfg-timeout" type="number" min="10" max="300" step="10" data-scope="deai"
-                     title="DeAI 视图专用, 改时同步给 rewrite_request_timeout">
+                     title="DeAI / 整篇校对共用, 改时同步给 rewrite_request_timeout">
             </div>
           </details>
           <div class="form-row">
@@ -430,7 +453,7 @@
         </section>
         <section class="card">
           <h2>关于</h2>
-          <div class="about-row"><span class="about-label">版本</span><span>v5.2c (pywebview)</span></div>
+          <div class="about-row"><span class="about-label">版本</span><span>v5.3 (pywebview)</span></div>
           <div class="about-row"><span class="about-label">定位</span><span>本地标点修复 + LLM 批量校对 + 去 AI 味, 支持任意 OpenAI 兼容 API</span></div>
           <div class="about-row"><span class="about-label">运行日志</span><span class="font-mono">~/.proofreader/app.log</span></div>
           <div class="about-row"><span class="about-label">快捷键</span><span>Ctrl+O 添加文件 · Ctrl+Enter 开始校对 · Ctrl+, API 接口 · Ctrl+. 去 AI 味</span></div>
@@ -460,6 +483,8 @@
             <label>待处理文本 (可拖入 .txt/.md 文件或选中文本)</label>
             <textarea id="deai-input" rows="10" placeholder="粘贴需要清除 AI 痕迹的文本, 或直接把文件/选中文本拖进来..."></textarea>
             <div id="deai-input-chars" class="stats-secondary">0 字</div>
+            <!-- v5.3.0: 联动来源标注 (从哪个校对入口送来的结果) -->
+            <div id="deai-source-hint" class="form-hint" hidden></div>
           </div>
           <div class="form-row">
             <label>Few-shot 范文 (可选, 可拖入; 超 2 万字自动截断)</label>

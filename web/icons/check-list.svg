@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round">
+  <!-- 借鉴自 https://github.com/microsoft/fluentui-system-icons (MIT) 的 1px 单线风格
+       借鉴内容: 1px 单线 / 24x24 网格 / round cap 视觉风格
+       借鉴方式: 风格借鉴,path 全部项目语言手写,无 path 复制
+       Copyright (c) 2020 Microsoft Corporation
+       完整 LICENSE 见 THIRD_PARTY_NOTICES.md §11
+  -->
+  <!-- 三行: 每行一个对勾 + 一条短横 (逐条编辑语义) -->
+  <path d="M4 6.5 L5.5 8 L8 5"/>
+  <path d="M10.5 6.5 L20 6.5"/>
+  <path d="M4 12 L5.5 13.5 L8 10.5"/>
+  <path d="M10.5 12 L20 12"/>
+  <path d="M4 17.5 L5.5 19 L8 16"/>
+  <path d="M10.5 17.5 L20 17.5"/>
+</svg>

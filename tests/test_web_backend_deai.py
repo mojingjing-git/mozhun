@@ -1205,6 +1205,161 @@ def test_v502_deai_switches_roundtrip():
 
 
 
+# === test_v530_workflow_nav ===
+def test_v530_workflow_nav():
+    """v5.3.0: 侧边栏双入口 (逐条校对/整篇校对) + 「重写 › 去 AI 味」父子项 + 工具组。
+
+    静态核验 DOM / CSS / JS 三件套 (PLAN-workflow-split-v5.3.md §3.1/§3.5/§6.1):
+    7 个视图 id 不变, 激活态改用唯一 data-nav-key, 图标/分组/展开箭头结构正确。
+    """
+    print()
+    print("--- v5.3.0: 工作流双入口导航 ---", flush=True)
+    import re
+    html = (_WEB_DIR / "index.html").read_text(encoding="utf-8")
+    js = _read_app_js()
+    css = _read_style_css()
+
+    # 1) 三个分组标题 (工作区 / 工具 / 设置)
+    for grp in ("工作区", "工具", "设置"):
+        check(f"导航分组「{grp}」", f">{grp}</div>" in html)
+
+    # 2) 两个校对入口共用 view-home, 靠 data-workflow 区分运行轨
+    check("两个 data-view=home 入口", html.count('data-view="home"') == 2,
+          str(html.count('data-view="home"')))
+    check("逐条入口 data-workflow=harness", 'data-workflow="harness"' in html)
+    check("整篇入口 data-workflow=rewrite", 'data-workflow="rewrite"' in html)
+    check("入口短名「逐条校对」", ">逐条校对</span>" in html)
+    check("入口短名「整篇校对」", ">整篇校对</span>" in html)
+
+    # 3) 「重写」父项 + 独立展开箭头 + 子项
+    check("重写父项容器", 'id="nav-parent-deai"' in html)
+    check("子项容器", 'id="nav-children-deai"' in html)
+    check("去 AI 味子项", 'class="nav-item is-child" data-nav-key="deai"' in html)
+    check("展开箭头是独立 button",
+          '<button class="nav-expander" data-nav-expand="deai"' in html)
+    parent_block = html[html.find('id="nav-parent-deai"') - 80:
+                        html.find('id="nav-children-deai"')]
+    check("父项块内 button 不嵌套 (先闭合再开)",
+          parent_block.count("<button") == 2
+          and parent_block.count("</button>") == 2
+          and parent_block.index("</button>") < parent_block.rindex("<button"))
+
+    # 4) 7 个视图 id 仍唯一存在
+    for vid in ("view-home", "view-deai", "view-styles", "view-splitter",
+                "view-api", "view-params", "view-appearance"):
+        check(f"视图 {vid} 唯一", html.count(f'id="{vid}"') == 1)
+
+    # 5) 首个 nav 不再硬编码 active (启动时按 workflow_mode 决定)
+    check("首个导航项不再硬编码 active", 'class="nav-item active"' not in html)
+    check("侧边栏 base 类保留 (无 active)",
+          '<button class="nav-item" data-nav-key="harness"' in html)
+
+    # 6) data-nav-key 唯一且覆盖 7 视图 + 两入口
+    keys = re.findall(r'data-nav-key="([a-z0-9-]+)"', html)
+    check("data-nav-key 无重复", len(keys) == len(set(keys)), str(keys))
+    check("nav-key 集合正确",
+          set(keys) == {"harness", "rewrite", "deai", "styles", "splitter",
+                        "api", "params", "appearance"},
+          str(sorted(keys)))
+
+    # 7) setView 改用唯一 key 定位激活项
+    check("setView 支持 navKey", "setView(viewName, navKey = '')" in js)
+    check("激活态按 data-nav-key 查找", "nav-item[data-nav-key=" in js)
+    check("按 data-view=home 查找已移除",
+          'nav-item[data-view="${viewName}"]' not in js)
+
+    # 8) 父项展开态 + aria
+    check("父/子导航 helper 存在",
+          "_setNavParentState" in js and "_setNavChildrenOpen" in js)
+    check("进 DeAI 自动展开父项",
+          "this._setNavParentState('deai', viewName === 'deai')" in js)
+    check("aria-expanded 双向维护",
+          "aria-expanded" in js and 'aria-expanded="false"' in html)
+    check("展开箭头不冒泡到导航", "e.stopPropagation()" in js)
+
+    # 9) 启动按 workflow_mode 恢复 (空值按旧逻辑派生, 与后端 derive_workflow 同款)
+    check("启动按 config 恢复入口",
+          "this.workspaceTrack = this._deriveTrack(this.config)" in js)
+    check("派生走 strict/polish 白名单",
+          "['strict', 'polish'].includes(mode)" in js)
+    check("切换入口写 workflow_mode",
+          "api.set_config('workflow_mode', track)" in js)
+
+    # 10) CSS 组件
+    for cls in (".nav-children {", ".nav-children.is-open {", ".nav-item.is-child {",
+                ".nav-expander {", ".provenance-bar {", ".file-track {"):
+        check(f"CSS {cls.strip()}", cls in css)
+    check("父项激活提示类", ".nav-parent.is-child-active" in css)
+    check("展开时箭头旋转", '.nav-expander[aria-expanded="true"]' in css)
+
+    # 11) 图标: 所有 data-icon 都有 SVG + mask 映射
+    icons = sorted(set(re.findall(r'data-icon="([a-z0-9-]+)"', html)))
+    missing_svg = [i for i in icons if not (_ICONS_DIR / f"{i}.svg").exists()]
+    missing_mask = [i for i in icons if f'data-icon="{i}"' not in css]
+    check(f"{len(icons)} 个 data-icon 全部有 SVG", not missing_svg, str(missing_svg))
+    check("全部 data-icon 有 mask 映射", not missing_mask, str(missing_mask))
+    check("v5.3.0 补齐 4 个图标文件",
+          all((_ICONS_DIR / f"{n}.svg").exists() for n in
+              ("check-list", "document-edit", "document-multiple", "chevron-down")))
+
+    # 12) 参数页: harness 复选框移除, 段控件改「当前入口」
+    check("cfg-harness-enabled 已从 HTML 移除", "cfg-harness-enabled" not in html)
+    check("cfg-harness-enabled 已从 JS 移除", "cfg-harness-enabled" not in js)
+    check("_collectAllConfig 不再写 harness_enabled", "harness_enabled:" not in js)
+    check("段控件改「当前入口」只读",
+          "当前入口 (只读, 在左侧「工作区」切换)" in html)
+    check("双轨提示文案", "两轨的分块/超时只在对应入口生效" in html)
+
+
+# === test_v530_provenance_static ===
+def test_v530_provenance_static():
+    """v5.3.0: 结果来源标注 / 覆盖确认 / 强制重跑出口 (PLAN §4 行为规格静态核验)."""
+    print()
+    print("--- v5.3.0: 结果来源 + 强制重跑 ---", flush=True)
+    html = (_WEB_DIR / "index.html").read_text(encoding="utf-8")
+    js = _read_app_js()
+
+    # 来源只在成功时写入 (§4-7: 失败/取消保留上一轨好结果的来源)
+    check("markFileDone 只在 completed 写来源",
+          "if (status === 'completed' && data && data.workflow) t.workflow = data.workflow;" in js)
+    check("onTaskComplete 只在 completed 写来源",
+          "if (st === 'completed' && info.workflow) t.workflow = info.workflow;" in js)
+
+    # 来源提示条 + 强制重跑出口 (§4-10: D9 保护下普通重跑会秒完成, 必须 force_rerun)
+    check("结果来源提示条元素", 'id="result-provenance"' in html)
+    check("文件行来源徽标渲染", "file-track" in js)
+    check("来源条重跑走单文件重跑",
+          "_rerunSingleFile(fileKey, { confirmOverride: false })" in js)
+    check("单文件重跑强制忽略缓存",
+          "this._runProofread([filePath], { forceRerun: true, skipOverrideConfirm: true })" in js)
+    check("来源提示条文案", "当前入口是「" in js)
+
+    # 覆盖前确认 (§4-3/§4-8: 批量与右键两条路径都覆盖)
+    check("覆盖确认弹窗", "将覆盖另一入口的结果" in js)
+    check("覆盖确认可跳过 (来源条路径)", "skipOverrideConfirm" in js)
+    check("开始按钮挑另一入口的已完成结果",
+          "t.status === 'completed' && t.workflow && t.workflow !== cur" in js)
+
+    # 桥接: workflow 追加在第 6 位
+    check("start_proofread 传第 6 位 workflow",
+          "forceRerun ? true : false,\n        cur" in js)
+
+    # 整文件档超长告警 (阈值 20000, 只在整篇入口; 逐条轨有 extra_large 正式档)
+    check("整文件告警阈值 20000", "> 20000" in js)
+    check("整文件告警只查整篇入口", "if (cur === 'rewrite')" in js)
+    check("字数走后端只读接口", "get_file_char_counts" in js)
+
+    # 缓存命中分两种口径 (§4-11)
+    check("缓存命中区分本轨/另一轨", "命中的是「" in js)
+
+    # DeAI 一致性 (§5-13/S5)
+    check("_deaiChunkEstimate 读 rewrite 轨",
+          "this.config.chunking_preset_rewrite || 'balanced'" in js)
+    check("DeAI 页标注联动来源", 'id="deai-source-hint"' in html and "deai-source-hint" in js)
+    check("导出传结果自身的来源轨 (不是当前入口)",
+          "export_result(this.selectedFileKey, text, 'txt',\n                                                         t.workflow || '')" in js)
+
+
 # ==================== 模块级常量 (v6.0 C1: 跨章节共享) ====================
 
 passed = 0

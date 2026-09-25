@@ -471,6 +471,72 @@ body {
   padding-left: calc(var(--space-3) - 3px);
 }
 
+/* ===== v5.3.0: 侧边栏两级导航 (工作区下分「逐条校对 / 整篇校对」+「重写 › 去 AI 味」) ===== */
+/* 父项行: 左侧可点击进入 + 右侧独立展开按钮 (禁止 button 嵌套 button) */
+.nav-parent {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.nav-parent > .nav-item {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* 子项激活时父项行给出层级提示 (不加 .active, 避免两个高亮) */
+.nav-parent.is-child-active > .nav-item {
+  color: var(--colorNeutralForeground1);
+}
+
+.nav-expander {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: var(--controlCornerRadius);
+  color: var(--colorNeutralForeground3);
+  cursor: pointer;
+  transition: background-color var(--durationNormal) var(--curvePointToPoint),
+              color var(--durationNormal) var(--curvePointToPoint);
+}
+
+.nav-expander:hover {
+  background: var(--colorBrandSubtle);
+  color: var(--colorNeutralForeground1);
+}
+
+.nav-expander .nav-icon {
+  width: 16px;
+  height: 16px;
+  transition: transform var(--durationNormal) var(--curvePointToPoint);
+}
+
+.nav-expander[aria-expanded="true"] .nav-icon {
+  transform: rotate(180deg);
+}
+
+/* 子项列表: 默认收起, 展开时显示; 子项左侧留出层级缩进 */
+.nav-children {
+  display: none;
+}
+
+.nav-children.is-open {
+  display: block;
+}
+
+.nav-item.is-child {
+  padding-left: var(--space-6);
+}
+
+.nav-item.is-child.active {
+  padding-left: calc(var(--space-6) - 3px);
+}
+
 .nav-icon {
   width: 20px;
   height: 20px;
@@ -498,6 +564,12 @@ body {
 .nav-icon[data-icon="error"]     { -webkit-mask-image: url("icons/error.svg"); mask-image: url("icons/error.svg"); }
 .nav-icon[data-icon="info"]      { -webkit-mask-image: url("icons/info.svg"); mask-image: url("icons/info.svg"); }
 .nav-icon[data-icon="document"]  { -webkit-mask-image: url("icons/document.svg"); mask-image: url("icons/document.svg"); }
+/* v5.3.0: 导航双入口 + 工具组 + 展开箭头 图标补齐 (此前 index.html 已引用但缺映射) */
+.nav-icon[data-icon="app"]               { -webkit-mask-image: url("icons/app.svg"); mask-image: url("icons/app.svg"); }
+.nav-icon[data-icon="check-list"]        { -webkit-mask-image: url("icons/check-list.svg"); mask-image: url("icons/check-list.svg"); }
+.nav-icon[data-icon="document-edit"]     { -webkit-mask-image: url("icons/document-edit.svg"); mask-image: url("icons/document-edit.svg"); }
+.nav-icon[data-icon="document-multiple"] { -webkit-mask-image: url("icons/document-multiple.svg"); mask-image: url("icons/document-multiple.svg"); }
+.nav-icon[data-icon="chevron-down"]      { -webkit-mask-image: url("icons/chevron-down.svg"); mask-image: url("icons/chevron-down.svg"); }
 
 /* ===== 视图 ===== */
 .view {
@@ -532,6 +604,19 @@ body {
   font-weight: var(--fontWeightSemibold);
   color: var(--colorNeutralForeground1);
   line-height: var(--lineHeightTitle);
+}
+
+/* v5.3.0: 标题 + 机制说明 竖排 (两个入口共用 view-home, 说明随入口切换) */
+.page-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.page-heading .header-hint {
+  margin-right: 0;
+  align-self: flex-start;
 }
 
 .actions { display: flex; gap: var(--space-2); }
@@ -897,6 +982,50 @@ body {
 .compare-header h2 {
   margin-bottom: 0;
 }
+
+/* v5.3.0: 结果来源提示条 (整篇结果出现在逐条入口 / 反之) */
+.provenance-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  padding: var(--space-2) var(--space-3);
+  border-left: 3px solid var(--colorStatusWarning);
+  border-radius: var(--controlCornerRadius);
+  background: var(--colorStatusWarningSubtle);
+  color: var(--colorNeutralForeground1);
+  font-size: var(--fontSizeBody);
+  flex-shrink: 0;
+}
+
+/* author 样式的 display:flex 会盖掉 UA 的 [hidden]{display:none} — 必须显式收回 */
+.provenance-bar[hidden] {
+  display: none;
+}
+
+.provenance-bar .provenance-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* 文件行结果来源徽标 (来源取自结果本身, 不取当前导航) */
+.file-track {
+  flex-shrink: 0;
+  font-size: var(--fontSizeCaption);
+  line-height: var(--lineHeightCaption);
+  padding: 2px var(--space-2);
+  border-radius: 999px;
+  background: var(--colorNeutralBackground2);
+  color: var(--colorNeutralForeground2);
+  border: 1px solid var(--colorNeutralStroke2);
+}
+
+.file-track.is-other {
+  border-color: var(--colorStatusWarning);
+  color: var(--colorStatusWarning);
+  background: var(--colorStatusWarningSubtle);
+}
+
 .compare-actions {
   flex-wrap: wrap;
   justify-content: flex-end;
