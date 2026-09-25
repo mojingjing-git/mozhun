@@ -7,6 +7,18 @@
 
 ---
 
+## 🚧 待审计: v5.4 思维链剥离 (2026-09-26 用户拍板"直接丢")
+
+计划文件: [`PLAN-think-strip-v5.4.md`](PLAN-think-strip-v5.4.md)
+
+- 现状: 全仓**零**思维链处理 —— harness 不读 content、流式三处只取 `delta.content`, 靠"厂商把思维链放独立字段"侥幸不漏
+- 漏点: 内联式 ` thinking…` (MiniMax M2/M3 部分端点、部分自建 Qwen/GLM、合并 reasoning 的中转) 会整段进 `corrected` → diff / 复制 / 导出 / 断点 / 送 DeAI 全污染
+- 方案: 新增 `app/think_strip.py` (纯函数 + 增量过滤器), 三条链路 4 个点接线; 独立字段显式不读 + 测试锁死; 不动断点 hash
+- 附带项 (请审计裁定范围): harness `0 tool_calls` + content 含编辑载体 → 记 `WARN_EDIT_IN_CONTENT` (现在是静默 no-op)
+- 状态: 计划已写 (§0 前提 / §2 D1-D10 决策 / §3 边界表 / §6 测试计划), **待独立 verifier agent 审计**
+
+---
+
 ## ✅ 已完成: v5.3.0 工作流双入口 (2026-09-26 批准并当日完成)
 
 计划文件: [`PLAN-workflow-split-v5.3.md`](PLAN-workflow-split-v5.3.md)（§12 执行记录表已回填）
