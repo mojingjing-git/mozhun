@@ -1,4 +1,4 @@
-# 墨准 (MoZhun) v5.1.0 (pywebview + 水墨宣纸 / Win11 Fluent)
+# 墨准 (MoZhun) v5.2c (pywebview + 水墨宣纸 / Win11 Fluent)
 
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg) ![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg) ![Platform: Windows](https://img.shields.io/badge/Platform-Windows-0078d4.svg) ![GUI: pywebview](https://img.shields.io/badge/GUI-pywebview-6DA55F.svg)
 
@@ -8,12 +8,14 @@
 
 - **Web UI (v4.0+)** — pywebview + 原生 HTML/CSS/JS，零构建工具，秒开
 - **Win11 Fluent 2 视觉 (v4.1.8)** — 17 颜色 token + 6 阴影 + 9 type ramp + Acrylic/Smoke 材料 + 完整暗色模式
-- **7 视图分组导航 (v4.2.0)** — Win11 设置应用式侧边栏：校对 / 结果对比 / 去AI味 / 风格库 / API接口 / 校对参数 / 外观与关于
+- **8 视图分组导航 (v4.2.0 / v5.2b)** — Win11 设置应用式侧边栏：校对 / 结果对比 / 去AI味 / 风格库 / API接口 / 校对参数 / 小说切分 / 外观与关于
 - **双皮肤 (v4.4.0+)** — 水墨宣纸（默认，贴合墨准：宣纸底 / 玄墨字 / 朱砂印 / 楷体品牌）与 Win11 Fluent，与深浅主题 2×2 自由组合
 - **1px 单线图标 + 暗色模式 (v4.1.8)** — 13 SVG Segoe Fluent Icons 风格；主题 auto / light / dark 三态切换
 - **本地标点修复 (v4.3.3 / v4.3.4)** — 纯规则脚本，**不调用 LLM、零成本、零 API 延迟**：中文引号自动配对（弯/直角两种风格）、省略号/破折号/波浪号归一、全角字母数字折叠、引号不平衡行号报告
 - **Markdown 清洗 (v4.4.2)** — AI 产出的 .md / md 格式 txt 直接丢进来，产出一篇无标记、适宜人类阅读的文章（本地规则引擎 `md_strip`，零成本零延迟）；可选「送 LLM 前剥离 Markdown」让校对/去AI味不再读标记
 - **Edit 工具链 harness (v5.1.0)** — 「严格校对 / 纠错+轻润色」模式默认改走 function calling：模型逐条返回编辑建议（改哪 / 改成什么 / 为什么），客户端精确匹配应用，**输出 token 大幅下降**；结果对比页「改动清单」逐条审计（已应用 / 未找到原文 / 匹配多处 / 级联失效），部分未采纳时文件标「完成（部分建议未采纳）」
+- **Harness / 重写双轨配置 (v5.2c)** — harness 模式默认 `large=6000` + 180s，整篇重写默认 `balanced=3000` + 120s；切换 Prompt 模式或 harness 开关后自动派生实际配置，降低慢模型触发超时重试的概率
+- **小说切分 (v5.2b)** — 第 8 视图，支持中英文章节/卷/特章识别、广告清理、相邻去重、超大章拆分、Gutenberg 头截断和批量落盘
 - **流式输出** — 边生成边显示，实时预览校对结果
 - **后台线程 + asyncio (v4.0+)** — 主线程跑 pywebview 事件循环，桥接 `window.pywebview.api.xxx`
 - **5 档分块预设 (v3.0+)** — 2000/3000/4000/6000 字 + 整文件模式；**跨段上下文**自动注入前 N 段校对结果
@@ -55,8 +57,8 @@ python main.py       # 或直接开发模式运行
 ┌─ pywebview 窗口 (系统 WebView2) ─────────────────────────┐
 │                                                            │
 │  web/index.html + app.js + style.css                       │
-│  ├─ 7 视图 SPA (v4.2.0): 校对 / 结果对比 / 去AI味 /        │
-│  │   风格库 / API接口 / 校对参数 / 外观与关于               │
+│  ├─ 8 视图 SPA: 校对 / 结果对比 / 去AI味 / 风格库 /        │
+│  │   API接口 / 校对参数 / 小说切分 / 外观与关于             │
 │  └─ Toast / ContentDialog / Acrylic 右键菜单               │
 │                                                            │
 │  调用: window.pywebview.api.xxx()                          │
@@ -67,6 +69,10 @@ python main.py       # 或直接开发模式运行
 │  ├─ web_backend.py    ← Bridge API class (暴露给 JS)        │
 │  ├─ processor.py      ← async LLM 引擎 (v3.0 保留)          │
 │  ├─ punct_fix.py      ← 本地标点修复规则引擎 (v4.3.3+)      │
+│  ├─ md_strip.py       ← 本地 Markdown 清洗引擎 (v4.4.2+)    │
+│  ├─ ai_score_local.py ← 本地 AI 味评分 (v5.0.2+)            │
+│  ├─ harness.py        ← Edit 工具链审计 (v5.1.0+)           │
+│  ├─ novel_splitter.py ← 小说章节/卷切分 (v5.2b+)            │
 │  ├─ context_builder.py ← 跨段 prefix 注入                   │
 │  ├─ utils.py / templates.py / logger.py                     │
 │  └─ main.py           ← webview.create_window + start()     │
@@ -118,6 +124,18 @@ python main.py       # 或直接开发模式运行
 - **改动清单**：结果对比页底部折叠面板，逐条显示状态与理由 —— 已应用 / 未找到原文 / 匹配多处 / 已被前序编辑修改 / 无意义调用；未采纳的条目灰显，文件状态显示「完成（部分建议未采纳）」
 - **安全边界**：old_text 匹配多处时**不猜**（跳过并报告）；换行符差异（\r\n/\n）自动归一匹配；单块超 50 条建议自动截断并告警；全部编辑未生效时整文件标失败（走既有重试链）
 - **取消/断点语义不变**；harness 开关纳入缓存指纹，切换开关后旧断点自动失效重跑一次
+
+v5.2c 起，校对参数页把「Harness」和「重写」两条路径的 chunking 与 timeout 分开保存。harness 模式慢 2-5 倍，因此默认使用更大的块和更长的请求超时；整篇重写沿用常规配置。
+
+## 小说切分 (v5.2b+)
+
+侧边栏「小说切分」用于把长篇小说文本拆成可继续校对/改写的章节文件。
+
+- 自动识别中文章节、回、节、卷，以及英文 Chapter、罗马数字和序章/番外等特章
+- 支持自定义正则、卷层级、最小/最大章字数与短章合并
+- 可选广告/水印清理、相邻重复内容去重、Gutenberg 头部截断
+- 预览不落盘；批量保存后输出到 `~/.proofreader/novel_splits/{slug}/`
+- 包含 `blocks/`、`chapters.json`、`metadata.json`、`split_report.txt`
 
 ## 去 AI 味 (v3.1+，独立视图)
 
@@ -178,24 +196,28 @@ python main.py       # 或直接开发模式运行
 ├── start.py                # 统一启动器（智能/exe/dev/check 四模式）
 ├── 启动.bat                # start.py 的双击薄包装
 ├── web/                    # 前端 (v4.0+)
-│   ├── index.html          # 7 视图骨架（校对/结果对比/去AI味/风格库/API接口/校对参数/外观关于）
+│   ├── index.html          # 8 视图骨架（含小说切分）
 │   ├── app.js              # 路由/状态/API 调用
 │   ├── style.css           # 设计令牌 + Fluent 2 风格
 │   ├── icons/              # Fluent UI System Icons (MIT) — 13 个 SVG
+│   ├── views/              # novel-splitter.js 等视图模块
 │   └── lib/                # diff-match-patch.js
 ├── app/                    # Python 后端
 │   ├── web_backend.py      # v4.0+ Bridge API class
 │   ├── processor.py        # async LLM 引擎 (v3.0 保留)
 │   ├── punct_fix.py        # v4.3.3+ 本地标点修复规则引擎
+│   ├── md_strip.py         # v4.4.2+ Markdown 清洗
+│   ├── ai_score_local.py   # v5.0.2+ 本地 AI 味评分
+│   ├── harness.py          # v5.1.0+ Edit 工具链
+│   ├── novel_splitter.py   # v5.2b+ 小说切分
 │   ├── context_builder.py  # v3.0+ 跨段 prefix
 │   ├── templates.py        # API 模板 (10 预设) + Prompt (6 模式 + deai)
 │   ├── utils.py            # 数据模型 + 配置持久化 + 断点
 │   └── logger.py           # RotatingFileHandler
 ├── build.spec              # PyInstaller 打包（v4.0 重写）
 ├── check_exe.py            # 打包后 exe 资源完整性校验
-├── test_*.py               # 8 套件 1165 项
-├── run_all_tests.py        # 一键跑全部
-├── tests/                  # v6.0+ 测试套件
+├── run_all_tests.py        # 自动发现并一键跑全部测试
+├── tests/                  # 18 个测试套件
 ├── docs/                   # 文档
 │   ├── archive/plans/      # 历史升级 plan 归档
 │   ├── THIRD_PARTY_NOTICES.md  # 借鉴来源 + LICENSE
@@ -216,21 +238,16 @@ python main.py       # 或直接开发模式运行
 ## 开发测试
 
 ```bash
-# 一键跑全部 8 套件（推荐）
+# 一键跑全部套件（推荐）
 python run_all_tests.py
 
 # 或单独跑
-python test_bugs.py
-python test_components.py
-python test_chunker_presets.py
-python test_chunk_lifecycle.py
-python test_context_builder.py
-python test_punct_fix.py
-python test_md_strip.py
-python test_web_backend.py
+python tests/test_harness.py
+python tests/test_novel_splitter.py
+python tests/test_web_backend_proofread.py
 ```
 
-当前状态：**8 个套件 1165 / 1165 通过**（v5.0.0）
+当前状态：`run_all_tests.py` 自动发现 18 个套件，v5.2c 合并基线报告 **1336 通过 / 0 失败**。
 
 ## 打包
 
@@ -246,7 +263,7 @@ python check_exe.py   # 校验 exe 内 web/ 资源与 style_profiles 完整性
 
 ## 借鉴来源
 
-v3.0 → v5.1.0 共借鉴 **20 个开源项目 / 文档**，全部思路借鉴，代码自写：
+v3.0 → v5.2c 共借鉴 **23 个开源项目 / 文档**，全部思路借鉴，代码自写：
 
 - **业务层 (v3.0)**：tianhm/ollama-batch-processor / shreyan241/gpt-proofreader / Xueheng-Li/proofreading (MIT) + qasync (BSD-2)
 - **GUI 层 (v4.0)**：pywebview (BSD-3) + diff-match-patch (Apache-2.0) + marked.js (MIT) + Fluent UI System Icons (MIT)
@@ -256,6 +273,7 @@ v3.0 → v5.1.0 共借鉴 **20 个开源项目 / 文档**，全部思路借鉴�
 - **Markdown 清洗 (v4.4.2)**：[commonmark/commonmark-spec](https://github.com/commonmark/commonmark-spec)（CC-BY-SA 4.0 spec 文本 + BSD-2 参考实现）— 围栏/强调边界/表格形态的结构语义引用
 - **DeAI 后置三件套 (v5.0.2)**：[harshaneel/humanize](https://github.com/harshaneel/humanize) (MIT) — audit-revise 出戏句反馈循环 + 4 pass 法；[blader/humanizer](https://github.com/blader/humanizer) (MIT) — AI 痕迹分类语义（现行 v3.0 "five sections + 25 patterns"，本项目不用其编号）；[Aboudjem/humanizer-skill](https://github.com/Aboudjem/humanizer-skill) (MIT) — 0-100 AI-tell 本地评分范式（分数是信号不是判定）
 - **校对 harness (v5.1.0)**：[Claude Code Edit 工具](https://code.claude.com/docs/)（Anthropic 文档，致谢非协议）— old_text/new_text 精确匹配 + 唯一性要求 + 逐条状态回执的 Edit 工具设计范式
+- **小说切分 (v5.2b)**：[novel-analyzer](https://github.com/mojingjing-git/novel-analyzer) (Apache-2.0) — 章节/卷识别、广告清理、去重、超大章拆分、Gutenberg 头截断；[zzk6780051/novel](https://github.com/zzk6780051/novel) (MIT) — 多格式章节正则与前 N 行打分；[oomol-lab/txt-to-epub-converter](https://github.com/oomol-lab/txt-to-epub-converter) (MIT) — 卷/章/节层级结构
 
 完整 LICENSE 副本见 [`docs/THIRD_PARTY_NOTICES.md`](./docs/THIRD_PARTY_NOTICES.md)。
 

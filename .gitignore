@@ -20,6 +20,8 @@ logs/
 *.tmp
 *.bak
 *.bak2
+.commit-msg-*.txt
+.local/
 nul
 tmp.txt
 
