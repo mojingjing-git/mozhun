@@ -88,6 +88,7 @@ def compute_prompt_hash(
     chunking_preset_rewrite: str = "balanced",
     harness_request_timeout: int = 180,
     rewrite_request_timeout: int = 120,
+    workflow_mode: str = "",
 ) -> str:
     """计算 prompt/生成配置指纹 — 断点缓存随配置变化而失效。
 
@@ -120,6 +121,10 @@ def compute_prompt_hash(
         # v5.2c (D 方案): 双轨配置纳入 — 字段集与 ProjectConfig 严格同步
         f"|hchunk={chunking_preset_harness}|wchunk={chunking_preset_rewrite}"
         f"|hto={harness_request_timeout}|wto={rewrite_request_timeout}"
+        # v5.3.0: workflow 一等字段纳入 (用 effective 值, 见
+        # compute_prompt_hash_for_config) — 与 v5.1.0 |he= / v5.2c 4 字段同质,
+        # 老断点一次性失效属预期 (PLAN §7 R1)
+        f"|wm={workflow_mode}"
     ).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()[:16]
 
@@ -132,7 +137,10 @@ def compute_prompt_hash_for_config(cfg: "ProjectConfig") -> str:
     (旧 3 处测试只传 8/14 字段, 任何默认值漂移都会静默破坏屏障).
 
     v5.2c (D 方案): 4 新字段 chunking_preset_harness/rewrite + harness/rewrite_request_timeout
-    一并传入, 与 compute_prompt_hash 严格同步."""
+    一并传入, 与 compute_prompt_hash 严格同步.
+
+    v5.3.0: workflow 传**effective 值** (空值配置按其派生结果参与指纹), 这样
+    "没显式设过 workflow 的老配置"与"显式设成同一轨"不会无谓地互失效断点。"""
     return compute_prompt_hash(
         cfg.prompt_mode, cfg.model, cfg.custom_prompt,
         chunking_preset=cfg.chunking_preset,
@@ -151,6 +159,7 @@ def compute_prompt_hash_for_config(cfg: "ProjectConfig") -> str:
         chunking_preset_rewrite=cfg.chunking_preset_rewrite,
         harness_request_timeout=cfg.harness_request_timeout,
         rewrite_request_timeout=cfg.rewrite_request_timeout,
+        workflow_mode=effective_workflow(cfg),
     )
 
 
@@ -161,6 +170,64 @@ class TaskStatus(Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+
+
+# === v5.3.0: 工作流 (workflow) 一等身份 ===
+# 设计见 docs/PLAN-workflow-split-v5.3.md §2 D4 / §3.4:
+# - workflow_mode 是唯一真值; "" = 未显式指定, 按 v5.2c 之前的旧逻辑派生
+#   (兼容老配置文件, 以及测试里大量出现的 ProjectConfig(prompt_mode=...) 直接构造)
+# - harness_enabled 降级为兼容镜像: 老 API 客户端仍可写, 由 set_config 单向映射过来
+WORKFLOW_HARNESS = "harness"
+WORKFLOW_REWRITE = "rewrite"
+WORKFLOW_MODES = (WORKFLOW_HARNESS, WORKFLOW_REWRITE)
+# 白名单: 只有这两个 prompt 模式能走 Edit 工具链 (AGENTS.md §36 —
+# custom 语义不可控, tech_doc/本地模式各有独立语义)
+HARNESS_PROMPT_MODES = ("strict", "polish")
+# 专属档位: extra_large(50000) 只对 harness 轨开放 (PLAN §2 D7)
+HARNESS_ONLY_PRESETS = ("extra_large",)
+
+
+def normalize_workflow(value) -> str:
+    """把外部输入 (配置文件 / Bridge / 老 API) 规整为合法 workflow 值。
+
+    非法值一律返回 "" (表示"未显式指定", 交给 effective_workflow 派生),
+    不抛异常 — 老配置里出现未知字符串时按旧逻辑跑, 而不是让应用起不来。
+    """
+    if not isinstance(value, str):
+        return ""
+    v = value.strip().lower()
+    return v if v in WORKFLOW_MODES else ""
+
+
+def derive_workflow(config) -> str:
+    """按 v5.2c 之前的旧逻辑派生工作流 (仅在 workflow_mode 为空时使用)。"""
+    enabled = bool(getattr(config, "harness_enabled", True))
+    mode = getattr(config, "prompt_mode", "strict")
+    if enabled and mode in HARNESS_PROMPT_MODES:
+        return WORKFLOW_HARNESS
+    return WORKFLOW_REWRITE
+
+
+def effective_workflow(config) -> str:
+    """唯一派生入口: 显式值优先, 空/非法值回退旧逻辑。
+
+    引擎 (`_harness_active`)、桥接 (payload / 导出名)、断点指纹全部走这里,
+    避免出现"配置说一套、引擎跑另一套"的两套真值 (PLAN §3.4)。
+    """
+    explicit = normalize_workflow(getattr(config, "workflow_mode", ""))
+    return explicit or derive_workflow(config)
+
+
+def workflow_allows_tools(config) -> bool:
+    """工具链是否真正生效 — workflow 与 prompt 白名单的**双重**判定。
+
+    workflow=harness 但 prompt_mode 不在白名单 (custom / tech_doc / 本地模式)
+    时返回 False: 引擎退回整篇行为, 且**不改写**用户的 prompt_mode (PLAN §3.4)。
+    """
+    return (
+        effective_workflow(config) == WORKFLOW_HARNESS
+        and getattr(config, "prompt_mode", "") in HARNESS_PROMPT_MODES
+    )
 
 
 @dataclass
@@ -332,6 +399,10 @@ class ProjectConfig:
     chunking_preset_rewrite: str = "balanced"     # 整篇重写模式分块档 (默认 3000, 含原 chunking_preset 兼容迁移)
     harness_request_timeout: int = 180            # harness 模式 timeout (秒, 3 分钟)
     rewrite_request_timeout: int = 120            # 整篇重写 timeout (秒, 沿用原 timeout)
+    # v5.3.0: 工作流一等身份 (PLAN-workflow-split-v5.3.md §2 D4)。
+    # "" = 未显式指定 → 按旧逻辑派生 (兼容老配置与直接构造); 合法值 ∈ {harness, rewrite}。
+    # 字段数 31→32; 参与 compute_prompt_hash (|wm=, 传 effective 值)。
+    workflow_mode: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -367,6 +438,7 @@ class ProjectConfig:
             "chunking_preset_rewrite": self.chunking_preset_rewrite,
             "harness_request_timeout": self.harness_request_timeout,
             "rewrite_request_timeout": self.rewrite_request_timeout,
+            "workflow_mode": self.workflow_mode,
         }
 
     @classmethod
@@ -405,6 +477,8 @@ class ProjectConfig:
             chunking_preset_rewrite=d.get("chunking_preset_rewrite") or d.get("chunking_preset") or "balanced",
             harness_request_timeout=int(d.get("harness_request_timeout", 180)),
             rewrite_request_timeout=int(d.get("rewrite_request_timeout") or d.get("timeout") or 120),
+            # v5.3.0: 非法/缺失 → "" (走 effective_workflow 派生, 行为与升级前一致)
+            workflow_mode=normalize_workflow(d.get("workflow_mode")),
         )
 
 
@@ -484,9 +558,11 @@ def read_file_text(path: Path) -> str:
     return raw.decode("utf-8", errors="replace")
 
 
-async def save_checkpoint_async(file_path: Path, task: FileTask) -> None:
-    """save_checkpoint 的异步包装。"""
-    await asyncio.to_thread(save_checkpoint, file_path, task)
+async def save_checkpoint_async(
+    file_path: Path, task: FileTask, preserve_done: bool = False
+) -> None:
+    """save_checkpoint 的异步包装 (v5.3.0: preserve_done 透传)。"""
+    await asyncio.to_thread(save_checkpoint, file_path, task, preserve_done)
 
 
 def _atomic_write_text(path: Path, text: str) -> None:
@@ -529,16 +605,68 @@ CONFIG_FILE = CONFIG_DIR / "last_config.json"
 # 借鉴内容: chunking preset 分档设计思路
 # 借鉴方式: 思路借鉴,无代码复制
 # Copyright (c) 2025 tianhm
+# v5.3.0: 每档加 tracks 元数据 (哪些轨可选)。
+# extra_large(50000) 是**逐条校对 (harness) 专属正式档** — 用户 2026-09-26 确认
+# 50K 字符可承受, 10 万档才出现失误, 故 50K 即设计上限 (不再往上加档)。
 CHUNKING_PRESETS = [
-    {"key": "fast",         "label": "快速 (2000 字)",   "max_chars": 2000},
-    {"key": "balanced",     "label": "均衡 (3000 字)",   "max_chars": 3000},
-    {"key": "high_context", "label": "高上下文 (4000)",  "max_chars": 4000},
-    {"key": "large",        "label": "大块 (6000)",       "max_chars": 6000},
-    {"key": "whole_file",   "label": "整文件 (不分块)",  "max_chars": 0},
+    {"key": "fast",         "label": "快速 (2000 字)",   "max_chars": 2000,
+     "tracks": ["harness", "rewrite"]},
+    {"key": "balanced",     "label": "均衡 (3000 字)",   "max_chars": 3000,
+     "tracks": ["harness", "rewrite"]},
+    {"key": "high_context", "label": "高上下文 (4000)",  "max_chars": 4000,
+     "tracks": ["harness", "rewrite"]},
+    {"key": "large",        "label": "大块 (6000)",       "max_chars": 6000,
+     "tracks": ["harness", "rewrite"]},
+    {"key": "extra_large",  "label": "超大块 (50000, 仅逐条校对)", "max_chars": 50000,
+     "tracks": ["harness"]},
+    {"key": "whole_file",   "label": "整文件 (不分块)",  "max_chars": 0,
+     "tracks": ["harness", "rewrite"]},
 ]
 # 字符串 -> dict 索引 (processor 内部用)
 CHUNKING_PRESETS_MAP = {p["key"]: p for p in CHUNKING_PRESETS}
 DEFAULT_CHUNK_PRESET = "balanced"
+
+
+def presets_for_workflow(workflow: str = "") -> list[dict]:
+    """按轨过滤分块档 (PLAN §5-10)。
+
+    workflow 为空/非法 → 返回全量副本, 保持旧 `get_chunking_presets()` 行为不变。
+    """
+    wf = normalize_workflow(workflow)
+    if not wf:
+        return [dict(p) for p in CHUNKING_PRESETS]
+    return [dict(p) for p in CHUNKING_PRESETS if wf in p.get("tracks", WORKFLOW_MODES)]
+
+
+def resolve_chunk_preset(config, workflow: str = "") -> str:
+    """按轨取分块档 + 越轨/未知档回退 (单点 helper, PLAN §5-6)。
+
+    - workflow 空/非法 → 用 effective_workflow(config)
+    - harness 轨 → chunking_preset_harness (默认 large); 其余 → ..._rewrite
+    - 未知档 → balanced
+    - HARNESS_ONLY_PRESETS (extra_large) 出现在非 harness 轨 → 回退 large
+      (防老配置 / 老 API 绕过 UI 把 50000 塞进流式整篇重写轨)
+
+    校对引擎、DeAI、蒸馏三条路径共用本函数, 避免"各读各的字段"漏堵。
+    """
+    wf = normalize_workflow(workflow) or effective_workflow(config)
+    if wf == WORKFLOW_HARNESS:
+        preset = getattr(config, "chunking_preset_harness", "large") or "large"
+    else:
+        preset = getattr(config, "chunking_preset_rewrite", "balanced") or "balanced"
+    if preset not in CHUNKING_PRESETS_MAP:
+        return DEFAULT_CHUNK_PRESET
+    if preset in HARNESS_ONLY_PRESETS and wf != WORKFLOW_HARNESS:
+        return "large"
+    return preset
+
+
+def resolve_request_timeout(config, workflow: str = "") -> int:
+    """按轨取 request timeout (秒). 与 resolve_chunk_preset 配套 (PLAN §5-6)。"""
+    wf = normalize_workflow(workflow) or effective_workflow(config)
+    if wf == WORKFLOW_HARNESS:
+        return int(getattr(config, "harness_request_timeout", 180))
+    return int(getattr(config, "rewrite_request_timeout", 120))
 
 
 def save_config(config: ProjectConfig) -> bool:
@@ -633,9 +761,38 @@ def split_text(text: str, max_chars: int, preset: str = "balanced") -> list[str]
     return chunks
 
 
-def save_checkpoint(file_path: Path, task: FileTask) -> None:
+def _checkpoint_is_done(cp_file: Path) -> bool:
+    """断点文件里是否已有**成功**结果 (v5.3.0)。
+
+    读失败/结构不符一律返回 False —— 宁可覆盖, 也不因解析异常把结果永久锁死。
+    只看规范命名 (`_checkpoint_file`); 旧命名断点处于一次性迁移期, 不参与判定。
+    """
+    try:
+        if not cp_file.exists():
+            return False
+        data = json.loads(cp_file.read_text(encoding="utf-8"))
+        result = data.get("result")
+        if not isinstance(result, dict):
+            return False
+        return FileResult.from_dict(result).is_done
+    except Exception:
+        return False
+
+
+def save_checkpoint(file_path: Path, task: FileTask, preserve_done: bool = False) -> None:
+    """写断点 (原子替换)。
+
+    v5.3.0 (PLAN §2 D9): ``preserve_done=True`` 时, 若磁盘上已有成功结果则**跳过写入**
+    —— 失败/取消的收尾不再冲掉另一条轨已完成的结果 (单结果槽的核心护栏)。
+    成功收尾仍用默认 False, 照常覆盖。
+    """
     try:
         cp_file = _checkpoint_file(file_path)
+        if preserve_done and _checkpoint_is_done(cp_file):
+            logger.info(
+                f"[断点] 保留已有完成结果, 跳过 {task.status.value} 覆盖: {file_path.name}"
+            )
+            return
         _atomic_write_text(
             cp_file,
             json.dumps(task.to_dict(), ensure_ascii=False, indent=2),

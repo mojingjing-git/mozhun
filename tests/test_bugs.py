@@ -211,6 +211,74 @@ def test_fewshot():
         check(f"Few-shot {k}", "## 示例" in v['system'])
 
 
+def test_v530_checkpoint_preserve_done():
+    """v5.3.0 (PLAN §2 D9): 失败/取消收尾不覆盖已完成断点, 成功仍可覆盖。
+
+    单结果槽 + 双入口场景下, 这是"另一条轨的好结果不会被冲掉"的唯一护栏。
+    """
+    from app.utils import (
+        FileResult, FileTask, ProjectConfig, TaskStatus,
+        compute_prompt_hash_for_config, load_checkpoint, save_checkpoint,
+    )
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False,
+                                     encoding='utf-8') as f:
+        f.write('原文' * 50)
+        tmp = Path(f.name)
+    cfg = ProjectConfig(api_base='http://x', model='m', harness_enabled=False)
+    h = compute_prompt_hash_for_config(cfg)
+
+    # 1) 先落一个成功断点 (模拟"逐条校对跑完")
+    done_task = FileTask(
+        file_path=tmp, status=TaskStatus.COMPLETED, original_text='原文' * 50,
+        result=FileResult(original='原文' * 50, corrected='改好了', prompt_hash=h),
+    )
+    save_checkpoint(tmp, done_task)
+
+    # 2) 另一条轨失败/取消收尾 (preserve_done=True) → 不覆盖
+    bad_task = FileTask(
+        file_path=tmp, status=TaskStatus.CANCELLED, original_text='原文' * 50,
+        result=FileResult(original='原文' * 50, corrected='', error='已取消',
+                          prompt_hash=h),
+    )
+    save_checkpoint(tmp, bad_task, preserve_done=True)
+    cached = load_checkpoint(tmp, expected_hash=h)
+    check("失败/取消不覆盖已完成断点",
+          cached is not None and cached.status == TaskStatus.COMPLETED
+          and cached.result is not None and cached.result.corrected == '改好了')
+
+    # 3) 新的成功结果仍可覆盖 (默认 preserve_done=False)
+    rerun_task = FileTask(
+        file_path=tmp, status=TaskStatus.COMPLETED, original_text='原文' * 50,
+        result=FileResult(original='原文' * 50, corrected='重跑结果', prompt_hash=h),
+    )
+    save_checkpoint(tmp, rerun_task)
+    cached2 = load_checkpoint(tmp, expected_hash=h)
+    check("成功结果仍可覆盖 (重跑出口没被堵死)",
+          cached2 is not None and cached2.result is not None
+          and cached2.result.corrected == '重跑结果')
+
+    # 4) 无历史断点时 preserve_done 照常写 (不能把首次失败也吞掉)
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False,
+                                     encoding='utf-8') as f:
+        f.write('fresh')
+        tmp2 = Path(f.name)
+    fresh_fail = FileTask(
+        file_path=tmp2, status=TaskStatus.FAILED, original_text='fresh',
+        result=FileResult(original='fresh', corrected='', error='APITimeout',
+                          prompt_hash=h),
+    )
+    save_checkpoint(tmp2, fresh_fail, preserve_done=True)
+    raw = load_checkpoint(tmp2)
+    check("无历史断点时 preserve_done 仍落盘 (失败状态可见)",
+          raw is not None and raw.status == TaskStatus.FAILED)
+
+    for p in (tmp, tmp2):
+        try:
+            p.unlink()
+        except OSError:
+            pass
+
+
 def main():
     print("=" * 60)
     print("  回归测试 (v4.0+ 已脱离 PySide6/fluent 依赖)")
@@ -220,6 +288,7 @@ def main():
         test_bug6, test_bug7, test_bug8, test_bug9, test_bug10,
         test_bug11, test_bug12, test_bug13,
         test_fewshot,
+        test_v530_checkpoint_preserve_done,
     ]
     for t in tests:
         try: t()

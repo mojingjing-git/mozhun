@@ -178,13 +178,56 @@ def test_get_chunking_presets():
     b = Backend(window=None)
     presets = b.get_chunking_presets()
     check("返回 list", isinstance(presets, list))
-    check("恰好 5 档", len(presets) == 5)
-    expected = {"fast", "balanced", "high_context", "large", "whole_file"}
+    # v5.3.0: 5→6 档 (extra_large, 逐条校对专属)
+    check("恰好 6 档", len(presets) == 6)
+    expected = {"fast", "balanced", "high_context", "large", "extra_large", "whole_file"}
     got = {p["key"] for p in presets}
-    check("包含 fast/balanced/high_context/large/whole_file", expected.issubset(got))
+    check("包含 fast/balanced/high_context/large/extra_large/whole_file", expected.issubset(got))
     for p in presets:
         check(f"{p['key']} 有 label", "label" in p)
         check(f"{p['key']} 有 max_chars", "max_chars" in p)
+
+
+# === test_v530_workflow_mode ===
+def test_v530_workflow_mode_and_track_presets():
+    """v5.3.0: workflow 一等字段 + 按轨档位过滤 + 单向兼容 (PLAN §2 D4/D7/D10)"""
+    print("\n--- v5.3.0: workflow_mode / 按轨预设 / set_config 兼容 ---", flush=True)
+    from app.web_backend import Backend
+    b = Backend(window=None)
+
+    # --- 按轨过滤 ---
+    all_keys = {p["key"] for p in b.get_chunking_presets()}
+    harness_keys = {p["key"] for p in b.get_chunking_presets("harness")}
+    rewrite_keys = {p["key"] for p in b.get_chunking_presets("rewrite")}
+    check("空参 = 全量 6 档", len(all_keys) == 6)
+    check("harness 轨含 extra_large", "extra_large" in harness_keys)
+    check("rewrite 轨不含 extra_large (逐条校对专属)", "extra_large" not in rewrite_keys)
+    check("rewrite 轨仍含 whole_file", "whole_file" in rewrite_keys)
+
+    # --- set_config: workflow_mode 是唯一真值, harness_enabled 单向跟随 ---
+    r = b.set_config("workflow_mode", "rewrite")
+    check("写 workflow_mode=rewrite 返回 ok", r.get("ok") is True)
+    check("harness_enabled 单向镜像为 False", b._config.harness_enabled is False)
+    r2 = b.set_config("harness_enabled", True)
+    check("老客户端写 harness_enabled=True → workflow 跟随", r2.get("ok") is True
+          and b._config.workflow_mode == "harness")
+    r3 = b.set_config("workflow_mode", "bogus")
+    check("非法 workflow_mode 被拒", r3.get("ok") is False)
+    check("非法值不落地 (仍是 harness)", b._config.workflow_mode == "harness")
+
+    # --- 前端新 payload 不含 harness_enabled → 改别的字段不会翻轨 ---
+    b.set_config("workflow_mode", "rewrite")
+    for k, v in (("temperature", 0.3), ("concurrency", 4), ("chunking_preset", "fast")):
+        b.set_config(k, v)
+    check("改其它字段不翻转轨道", b._config.workflow_mode == "rewrite")
+
+    # --- 双轨 timeout 后端钳制 (此前只有前端 JS 挡) ---
+    b.set_config("harness_request_timeout", 5)
+    check("harness_request_timeout 下限钳到 60", b._config.harness_request_timeout == 60)
+    b.set_config("harness_request_timeout", 9999)
+    check("harness_request_timeout 上限钳到 600", b._config.harness_request_timeout == 600)
+    b.set_config("rewrite_request_timeout", 1)
+    check("rewrite_request_timeout 下限钳到 60", b._config.rewrite_request_timeout == 60)
 
 # === test_set_config_type_coercion ===
 def test_set_config_type_coercion():

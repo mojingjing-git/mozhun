@@ -595,6 +595,9 @@ def test_hash_and_config_roundtrip():
               punct_dash_tilde=on_cfg.punct_dash_tilde,
               md_strip=on_cfg.md_strip_before_llm,
               harness_enabled=on_cfg.harness_enabled,
+              # v5.3.0: for_config 传的是 effective 值 (harness_enabled=True +
+              # prompt_mode=strict → "harness"), 显式调用必须传同一个值
+              workflow_mode="harness",
           ))
     # FileResult.warnings 字段
     from app.utils import FileResult

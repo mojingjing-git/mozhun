@@ -716,7 +716,10 @@ def test_v430_deai_longtext():
             fake_ctor, calls = make_fake_llm(["块1报告", "块2报告", "块3报告"])
             long_text = "这是测试句子。" * 800  # 9600 字 -> balanced(3000) 切 4 块? 实际按 split_text
             with patch("app.web_backend.AsyncOpenAI", fake_ctor):
-                b._config.chunking_preset = "fast"  # 2000 字/块 -> 5 块
+                # v5.3.0 (PLAN §5-13): DeAI 跟随**整篇校对轨** —
+                # 老兼容字段 chunking_preset 不再驱动 DeAI 分块
+                b._config.chunking_preset = "whole_file"       # 故意设成"整文件"
+                b._config.chunking_preset_rewrite = "fast"     # 真正生效的轨
                 asyncio.run(b._deai_run("deai_t1", "detect", long_text, "", "", ""))
             check("多块: 每块一次 LLM 调用", calls["n"] >= 3, f"实际 {calls['n']} 次")
             names = [n for n, _ in pushes]
@@ -738,7 +741,7 @@ def test_v430_deai_longtext():
             fake_ctor, calls = make_fake_llm(["改写甲", "改写乙", "改写丙", "改写丁"])
             long_text = "这是需要改写的句子。" * 800  # ~8000 字
             with patch("app.web_backend.AsyncOpenAI", fake_ctor):
-                b._config.chunking_preset = "fast"
+                b._config.chunking_preset_rewrite = "fast"  # v5.3.0: 走 rewrite 轨
                 asyncio.run(b._deai_run("deai_t2", "rewrite", long_text, "", "", ""))
             comp = next(d for n, d in pushes if n == "onDeaiComplete")
             check("rewrite 纯拼接无分节符", "=== 第" not in comp.get("result", ""))
@@ -759,7 +762,7 @@ def test_v430_deai_longtext():
             big = "长" * 30000  # 单块输出 30000 字 x2 块 -> full 60000 > 50000 阈值
             fake_ctor, calls = make_fake_llm([big, big])
             with patch("app.web_backend.AsyncOpenAI", fake_ctor):
-                b._config.chunking_preset = "fast"
+                b._config.chunking_preset_rewrite = "fast"  # v5.3.0: 走 rewrite 轨
                 asyncio.run(b._deai_run("deai_t3", "rewrite", "句子。" * 1000, "", "", ""))
             streams = [d for n, d in pushes if n == "onDeaiStream"]
             check("超阈值流式降级 (truncated)", any(st.get("truncated") for st in streams))
@@ -791,7 +794,7 @@ def test_v430_deai_longtext():
             b._deai_tasks[tid]["cancel_event"].set()  # 启动前已取消
             fake_ctor, calls = make_fake_llm(["x"])
             with patch("app.web_backend.AsyncOpenAI", fake_ctor):
-                b._config.chunking_preset = "balanced"
+                b._config.chunking_preset_rewrite = "balanced"  # v5.3.0: 走 rewrite 轨
                 asyncio.run(b._deai_run(tid, "rewrite", "一些文本", "", "", ""))
             err = next((d for n, d in pushes if n == "onDeaiError"), None)
             check("取消走 onDeaiError", err is not None)
@@ -838,7 +841,7 @@ def test_v430_deai_longtext():
             fake_ctor, calls = make_fake_llm(["块甲", "块乙", "块丙", "块丁"])
             long_text = "整本书内容。" * 4000  # 24000 字 > 20000 兜底阈值
             with patch("app.web_backend.AsyncOpenAI", fake_ctor):
-                b._config.chunking_preset = "whole_file"
+                b._config.chunking_preset_rewrite = "whole_file"  # v5.3.0: 走 rewrite 轨
                 asyncio.run(b._deai_run("deai_t7", "rewrite", long_text, "", "", ""))
             check("whole_file 兜底回退分块 (不单次调用)", calls["n"] >= 2, f"实际 {calls['n']} 块")
         finally:
@@ -1186,7 +1189,7 @@ def test_v502_deai_switches_roundtrip():
           cfg.deai_strip_after is True and cfg.deai_ai_score is True
           and cfg.deai_revise is False)
     d = cfg.to_dict()
-    check("to_dict 字段数 31", len(d) == 31, str(len(d)))  # v5.1.0: + harness_enabled; v5.2c (D 方案): + chunking_preset_harness/rewrite + harness/rewrite_request_timeout (4 字段)
+    check("to_dict 字段数 32", len(d) == 32, str(len(d)))  # v5.1.0: + harness_enabled; v5.2c: + 4 双轨字段; v5.3.0: + workflow_mode
     cfg2 = ProjectConfig.from_dict({**d, "deai_strip_after": False,
                                     "deai_ai_score": False, "deai_revise": True})
     check("from_dict 往返保留修改",

@@ -3,7 +3,7 @@ tests/test_harness_split.py — Harness / 重写 双轨配置 单元 + 集成测
 
 按 docs/.workbuddy/plan-v5.2c-harness-split.md §5.1 + §5.2 测试分块清单.
 
-覆盖: 12 单元 (字段默认值 / from_dict 老配置迁移 / from_dict 新配置 / to_dict 31 字段
+覆盖: 12 单元 (字段默认值 / from_dict 老配置迁移 / from_dict 新配置 / to_dict 32 字段
        / compute_prompt_hash 4 字段 / 引擎 helper / _stream_single 派生 / _call_api_stream 派生
        / _harness_active 复用 / 兼容字段同步写) + 3 集成 (端到端 harness / 端到端 rewrite
        / 跨模式切换 hash 变化)
@@ -42,11 +42,11 @@ class TestProjectConfigDefaults(unittest.TestCase):
         self.assertEqual(cfg.harness_request_timeout, 180)
         self.assertEqual(cfg.rewrite_request_timeout, 120)
 
-    def test_field_count_31(self):
-        """ProjectConfig 字段数 27→31 (to_dict 校验)"""
+    def test_field_count_32(self):
+        """ProjectConfig 字段数 27→31→32 (v5.3.0 + workflow_mode)"""
         cfg = ProjectConfig()
         d = cfg.to_dict()
-        self.assertEqual(len(d), 31)
+        self.assertEqual(len(d), 32)
 
     def test_new_fields_in_to_dict(self):
         """4 字段都在 to_dict 里"""
@@ -110,9 +110,9 @@ class TestProjectConfigFromDictNew(unittest.TestCase):
 
 
 class TestProjectConfigRoundtrip(unittest.TestCase):
-    """单元 #4: to_dict 31 字段全部往返无丢失"""
+    """单元 #4: to_dict 32 字段全部往返无丢失"""
 
-    def test_roundtrip_all_31_fields(self):
+    def test_roundtrip_all_32_fields(self):
         cfg = ProjectConfig(
             chunking_preset_harness="high_context",
             chunking_preset_rewrite="large",
@@ -336,6 +336,134 @@ class TestCrossModeHashChanges(unittest.TestCase):
         h2 = compute_prompt_hash_for_config(cfg2)
         # 不等: harness_enabled 不同 + 派生 chunking 不同
         self.assertNotEqual(h1, h2)
+
+
+# ============================================================
+# v5.3.0: workflow 一等身份 (PLAN-workflow-split-v5.3.md §2 D4/D7)
+# ============================================================
+
+class TestWorkflowModeV530(unittest.TestCase):
+    """workflow_mode 派生 / 白名单 / 档位按轨过滤 / hash 纳入"""
+
+    def test_derives_when_empty(self):
+        """未显式指定 → 按 v5.2c 之前旧逻辑派生 (老配置行为不变)"""
+        from app.utils import effective_workflow
+        self.assertEqual(effective_workflow(ProjectConfig()), "harness")
+        self.assertEqual(
+            effective_workflow(ProjectConfig(harness_enabled=False)), "rewrite")
+        self.assertEqual(
+            effective_workflow(ProjectConfig(prompt_mode="custom")), "rewrite")
+        self.assertEqual(
+            effective_workflow(ProjectConfig(prompt_mode="tech_doc")), "rewrite")
+        self.assertEqual(
+            effective_workflow(ProjectConfig(prompt_mode="punct_local")), "rewrite")
+
+    def test_explicit_wins_and_invalid_falls_back(self):
+        """显式值优先; 非法值回退派生 (不抛异常)"""
+        from app.utils import effective_workflow
+        # harness 轨关掉 (显式 rewrite) — 即使 harness_enabled=True + strict
+        cfg = ProjectConfig(harness_enabled=True, prompt_mode="strict",
+                            workflow_mode="rewrite")
+        self.assertEqual(effective_workflow(cfg), "rewrite")
+        # 显式 harness + harness_enabled=False → 仍按 harness (workflow 是权威)
+        cfg2 = ProjectConfig(harness_enabled=False, prompt_mode="strict",
+                             workflow_mode="harness")
+        self.assertEqual(effective_workflow(cfg2), "harness")
+        # 非法值 → 回退派生
+        self.assertEqual(
+            effective_workflow(ProjectConfig(prompt_mode="strict", workflow_mode="bogus")),
+            "harness")
+
+    def test_normalize_workflow_rejects_bad_input(self):
+        from app.utils import normalize_workflow
+        self.assertEqual(normalize_workflow("  HARNESS "), "harness")
+        self.assertEqual(normalize_workflow("rewrite"), "rewrite")
+        self.assertEqual(normalize_workflow(""), "")
+        self.assertEqual(normalize_workflow(None), "")
+        self.assertEqual(normalize_workflow(123), "")
+
+    def test_tools_matrix(self):
+        """白名单优先: workflow=harness 但模式不在白名单 → 不走工具链"""
+        from app.utils import workflow_allows_tools
+        self.assertTrue(workflow_allows_tools(ProjectConfig(prompt_mode="strict")))
+        self.assertTrue(workflow_allows_tools(ProjectConfig(prompt_mode="polish")))
+        self.assertFalse(workflow_allows_tools(
+            ProjectConfig(prompt_mode="custom", workflow_mode="harness")))
+        self.assertFalse(workflow_allows_tools(
+            ProjectConfig(prompt_mode="tech_doc", workflow_mode="harness")))
+        self.assertFalse(workflow_allows_tools(
+            ProjectConfig(prompt_mode="strict", workflow_mode="rewrite")))
+
+    def test_hash_includes_effective_workflow(self):
+        """工作流不同 → 断点指纹不同 (老断点一次性失效, 属预期)"""
+        h_harness = compute_prompt_hash_for_config(
+            ProjectConfig(prompt_mode="strict", workflow_mode="harness"))
+        h_rewrite = compute_prompt_hash_for_config(
+            ProjectConfig(prompt_mode="strict", workflow_mode="rewrite"))
+        self.assertNotEqual(h_harness, h_rewrite)
+        # 显式 harness 与"派生得到 harness"应等价 (老配置升级不无谓失效)
+        h_derived = compute_prompt_hash_for_config(ProjectConfig(prompt_mode="strict"))
+        self.assertEqual(h_harness, h_derived)
+
+    def test_from_dict_missing_workflow_is_empty(self):
+        """老配置文件无 workflow_mode → "" (走派生, 升级后行为可预测)"""
+        cfg = ProjectConfig.from_dict({"prompt_mode": "strict"})
+        self.assertEqual(cfg.workflow_mode, "")
+        from app.utils import effective_workflow
+        self.assertEqual(effective_workflow(cfg), "harness")
+        # 非法值也规整为 ""
+        cfg2 = ProjectConfig.from_dict({"workflow_mode": "nonsense"})
+        self.assertEqual(cfg2.workflow_mode, "")
+
+    def test_resolve_chunk_preset_extra_large_harness_only(self):
+        """extra_large 只对 harness 轨生效; 越轨一律回退 large"""
+        from app.utils import resolve_chunk_preset
+        cfg = ProjectConfig(
+            prompt_mode="strict",
+            chunking_preset_harness="extra_large",
+            chunking_preset_rewrite="extra_large",  # 被老 API / 老配置写脏
+        )
+        self.assertEqual(resolve_chunk_preset(cfg), "extra_large")
+        # 显式切到 rewrite 轨 → 回退 large (50000 不进流式整篇重写)
+        self.assertEqual(resolve_chunk_preset(cfg, "rewrite"), "large")
+        # 未知档位 → balanced
+        self.assertEqual(
+            resolve_chunk_preset(ProjectConfig(chunking_preset_harness="nope")),
+            "balanced")
+
+    def test_resolve_request_timeout_per_track(self):
+        from app.utils import resolve_request_timeout
+        cfg = ProjectConfig(
+            prompt_mode="strict",
+            harness_request_timeout=180, rewrite_request_timeout=120,
+        )
+        self.assertEqual(resolve_request_timeout(cfg), 180)
+        self.assertEqual(resolve_request_timeout(cfg, "rewrite"), 120)
+
+    def test_presets_for_workflow_filters(self):
+        """按轨过滤: harness 含 extra_large, rewrite 不含; 空参 = 全量"""
+        from app.utils import presets_for_workflow
+        all_keys = [p["key"] for p in presets_for_workflow()]
+        harness_keys = [p["key"] for p in presets_for_workflow("harness")]
+        rewrite_keys = [p["key"] for p in presets_for_workflow("rewrite")]
+        self.assertEqual(len(all_keys), 6)
+        self.assertIn("extra_large", harness_keys)
+        self.assertNotIn("extra_large", rewrite_keys)
+        self.assertIn("whole_file", rewrite_keys)
+        # 返回副本, 改不动全局常量
+        presets_for_workflow("harness")[0]["label"] = "MUTATED"
+        self.assertNotEqual(presets_for_workflow("harness")[0]["label"], "MUTATED")
+
+    def test_engine_effective_preset_falls_back(self):
+        """引擎侧闭环: 整篇轨写出 extra_large 也不会真的用 50000"""
+        from app.processor import ProcessingEngine
+        cfg = ProjectConfig(
+            prompt_mode="strict", harness_enabled=False,
+            chunking_preset_rewrite="extra_large",
+        )
+        eng = ProcessingEngine.__new__(ProcessingEngine)
+        eng.config = cfg
+        self.assertEqual(eng._effective_chunk_preset(), "large")
 
 
 # ============================================================

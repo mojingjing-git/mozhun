@@ -58,6 +58,12 @@ from app.utils import (
     split_text,
     CHUNKING_PRESETS_MAP,
     DEFAULT_CHUNK_PRESET,
+    # v5.3.0: workflow 一等身份 + 按轨派生 (PLAN-workflow-split-v5.3.md §2 D4/D7)
+    WORKFLOW_HARNESS,
+    effective_workflow,
+    workflow_allows_tools,
+    resolve_chunk_preset,
+    resolve_request_timeout,
 )
 
 # v3.0 Phase 3 错误分类常量
@@ -126,6 +132,9 @@ class ProcessingEngine:
         # 按设计决策不放 FileResult — 桥接层在 onFileDone/onTaskComplete 时
         # 从这里读取并附加到推送 payload; 会话内存态, 不落断点。
         self.file_audits: dict[str, list[dict]] = {}
+        # v5.3.0: 本会话内被模型输出上限截断的文件 (finish_reason="length")。
+        # 与 file_audits 同层: 会话内存态, 不落断点; 每次 _call_api_stream 重建。
+        self.truncated_keys: set[str] = set()
 
         self.on_file_done: Optional[Callable[[str, str], None]] = None
         self.on_file_start: Optional[Callable[[str], None]] = None
@@ -477,6 +486,13 @@ class ProcessingEngine:
             preset = DEFAULT_CHUNK_PRESET
         max_chars = _CHUNK_PRESETS[preset]["max_chars"]
         chunks = self._split_text(text, max_chars, preset=preset)
+        # v5.3.0 (PLAN §3.4): workflow 指明 harness 但模式不在白名单 →
+        # 不静默换行为, 在日志里说清"本次按整篇输出执行"
+        if effective_workflow(self.config) == WORKFLOW_HARNESS and not self._harness_active():
+            self._log(
+                f"[模式] prompt_mode={self.config.prompt_mode} 不在工具链白名单内, "
+                f"本次按整篇输出执行"
+            )
         if len(chunks) > 1:
             self._log(
                 f"[分块] {task.file_path.name}: {len(chunks)} 块 "
@@ -518,7 +534,11 @@ class ProcessingEngine:
                     chunks_results=chunks_results,
                     failed_chunks=failed_chunks,
                     schema_version=2,
-                    warnings=audit_has_warnings(self.file_audits.get(key, [])),
+                    warnings=(
+                        audit_has_warnings(self.file_audits.get(key, []))
+                        # v5.3.0: 模型输出触顶 (finish_reason=length) 也算告警
+                        or key in self.truncated_keys
+                    ),
                 )
                 with self._lock:
                     task.status = TaskStatus.COMPLETED
@@ -634,7 +654,8 @@ class ProcessingEngine:
         with self._stats_lock:
             self.stats.completed_files += 1
             self.stats.elapsed = time.time() - self.stats.start_time
-        await save_checkpoint_async(task.file_path, task)
+        # v5.3.0 (PLAN §2 D9): 取消不该冲掉另一条轨已完成的结果
+        await save_checkpoint_async(task.file_path, task, preserve_done=True)
         self._emit(self.on_file_done, key, TaskStatus.CANCELLED.value)
         self._emit(self.on_file_completed, key, TaskStatus.CANCELLED.value)
         self._emit(self.on_stats_update, self.stats)
@@ -668,7 +689,8 @@ class ProcessingEngine:
             self.stats.completed_files += 1
             self.stats.failed_files += 1
             self.stats.elapsed = time.time() - self.stats.start_time
-        await save_checkpoint_async(task.file_path, task)
+        # v5.3.0 (PLAN §2 D9): 失败不该冲掉另一条轨已完成的结果
+        await save_checkpoint_async(task.file_path, task, preserve_done=True)
         self._emit(self.on_file_done, key, TaskStatus.FAILED.value)
         self._emit(self.on_file_completed, key, TaskStatus.FAILED.value)
         self._emit(self.on_stats_update, self.stats)
@@ -759,6 +781,7 @@ class ProcessingEngine:
         token_count = 0
         emit_counter = 0
         last_emit_time = 0.0
+        finish_reason: Optional[str] = None
 
         try:
             async for event in stream:
@@ -785,6 +808,11 @@ class ProcessingEngine:
                             # v4.1.8.1 (M4): 推单调增长全量 (前缀复用同一 str, 不重复 join)
                             self._emit(self.on_stream, task_key, stream_prefix + "".join(buffer))
                             last_emit_time = now
+                    # v5.3.0 (PLAN §2 D8): 记录结束原因 — "length" = 模型被输出
+                    # 上限截断 (全仓无 max_tokens, 从前完全静默)
+                    fr = getattr(event.choices[0], "finish_reason", None)
+                    if fr:
+                        finish_reason = fr
 
                 if event.usage:
                     token_count = event.usage.total_tokens
@@ -798,46 +826,44 @@ class ProcessingEngine:
         if not corrected:
             raise ValueError("API 返回空内容 (stream 无 token)")
 
+        if finish_reason == "length":
+            name = self.tasks[task_key].file_path.name if task_key in self.tasks else task_key
+            self.truncated_keys.add(task_key)
+            self._log(
+                f"[截断] {name}: 模型输出触顶 (finish_reason=length), 结果可能短于原文"
+            )
+
         self._emit(self.on_stream, task_key, stream_prefix + corrected)
 
         return corrected, token_count
 
     def _harness_active(self) -> bool:
-        """v5.1.0: harness 生效判定 — 双决策 (AGENTS.md §36)。
+        """harness (Edit 工具链) 生效判定 — v5.3.0 起以 workflow 为权威。
 
-        生效条件 = ProjectConfig.harness_enabled (用户逃生口, 校对参数页
-        checkbox) **且** prompt_mode ∈ {strict, polish} (模式白名单)。
-        custom 由用户自带 prompt 语义不可控, punct_local/md_local 是纯本地
-        引擎, 均不走 harness。
+        生效条件 = `effective_workflow(config) == "harness"` **且**
+        prompt_mode ∈ {strict, polish} (模式白名单, 见 AGENTS.md §36)。
+        workflow 说是 harness 但模式不在白名单 (custom / tech_doc / 本地模式) 时
+        退回整篇行为, 且**不改写**用户的 prompt_mode (PLAN §3.4)。
+        harness_enabled 只在 workflow_mode 为空时参与派生 (老配置兼容)。
         """
-        return (
-            bool(getattr(self.config, "harness_enabled", True))
-            and self.config.prompt_mode in ("strict", "polish")
-        )
+        return workflow_allows_tools(self.config)
 
     def _effective_chunk_preset(self) -> str:
-        """v5.2c (D 方案): 派生实际生效的 chunking 档.
+        """v5.2c / v5.3.0: 派生实际生效的 chunking 档。
 
-        - harness 模式 → chunking_preset_harness (默认 "large")
-        - 重写模式 → chunking_preset_rewrite (默认 "balanced")
-        字段缺失时走 getattr 兜底, 不抛异常.
-        调用方 (L475 + L1021) 共用本 helper, 确保两处派生结果一致.
+        v5.3.0 起委托 `utils.resolve_chunk_preset` — 单点定义, 与 web_backend 的
+        DeAI / 蒸馏路径共用; 非 harness 轨拿到 extra_large(50000) 会自动回退
+        large (PLAN §2 D7 / §5-6)。调用方 (两处) 仍共用本 helper 保持一致。
         """
-        if self._harness_active():
-            return getattr(self.config, "chunking_preset_harness", "large")
-        return getattr(self.config, "chunking_preset_rewrite", "balanced")
+        return resolve_chunk_preset(self.config)
 
     def _effective_timeout(self) -> int:
-        """v5.2c (D 方案): 派生实际生效的 request timeout (秒).
+        """v5.2c / v5.3.0: 派生实际生效的 request timeout (秒)。
 
-        - harness 模式 → harness_request_timeout (默认 180, 3 分钟)
-        - 重写模式 → rewrite_request_timeout (默认 120, 2 分钟)
-        字段缺失时走 getattr 兜底, 不抛异常.
-        调用方 (L364) 共用本 helper, 与 _effective_chunk_preset 配套.
+        v5.3.0 起委托 `utils.resolve_request_timeout`, 与 `_effective_chunk_preset`
+        配套共用同一条派生链。
         """
-        if self._harness_active():
-            return int(getattr(self.config, "harness_request_timeout", 180))
-        return int(getattr(self.config, "rewrite_request_timeout", 120))
+        return resolve_request_timeout(self.config)
 
     async def _harness_call(
         self,
@@ -1019,6 +1045,8 @@ class ProcessingEngine:
         """
         # v5.1.0: 每次进入 (含整文件重试) 重建 audit, 防跨 attempt 重复累积
         self.file_audits.pop(task_key, None)
+        # v5.3.0: 截断标记同理重建 (重试成功后不该留着上一轮的截断告警)
+        self.truncated_keys.discard(task_key)
 
         # v4.4.2: 仅 Markdown 清洗模式 — 纯本地规则 (app/md_strip.py), 不调用 LLM.
         # 整文件处理 (不切块): 围栏代码块是跨行状态, 分块可能把围栏切开 (评审 P1-6);

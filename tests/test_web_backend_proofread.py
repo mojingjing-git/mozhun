@@ -341,9 +341,10 @@ def test_m2_presets_consistent():
     print("\n--- M2: chunking 预设单点定义 ---", flush=True)
     from app.utils import CHUNKING_PRESETS, CHUNKING_PRESETS_MAP
     from app.processor import _CHUNK_PRESETS
-    check("CHUNKING_PRESETS 5 档", len(CHUNKING_PRESETS) == 5)
-    check("CHUNKING_PRESETS_MAP 5 档", len(CHUNKING_PRESETS_MAP) == 5)
-    check("_CHUNK_PRESETS 5 档", len(_CHUNK_PRESETS) == 5)
+    # v5.3.0: 5→6 档 (extra_large, 逐条校对专属)
+    check("CHUNKING_PRESETS 6 档", len(CHUNKING_PRESETS) == 6)
+    check("CHUNKING_PRESETS_MAP 6 档", len(CHUNKING_PRESETS_MAP) == 6)
+    check("_CHUNK_PRESETS 6 档", len(_CHUNK_PRESETS) == 6)
     # 验证 max_chars 一致
     for key, info in CHUNKING_PRESETS_MAP.items():
         check(
@@ -786,6 +787,60 @@ V416_CFG_FIELDS = [
 _WEB_DIR = Path(__file__).parent.parent / "web"  # v6.0: 修正为项目根 (tests/ 的父目录)
 _STYLE_CSS = _WEB_DIR / "style.css"
 _ICONS_DIR = _WEB_DIR / "icons"
+
+# === test_v530_start_proofread_workflow ===
+def test_v530_start_proofread_workflow():
+    """v5.3.0: start_proofread 第 6 位 workflow + 旧调用位置参数不破 (PLAN §5-9)"""
+    print("\n--- v5.3.0: start_proofread workflow 参数 ---", flush=True)
+    import tempfile
+    from unittest.mock import AsyncMock, patch
+    from app.web_backend import Backend
+    from app.processor import ProcessingEngine
+    from app.utils import (
+        FileResult, FileTask, TaskStatus,
+        compute_prompt_hash_for_config, save_checkpoint,
+    )
+
+    with tempfile.TemporaryDirectory(prefix="v530_sp_") as tmp:
+        src = Path(tmp) / "s.txt"
+        src.write_text("原文内容。" * 50, encoding="utf-8")
+        b = Backend(window=None)
+        b._window = make_mock_window(None)
+
+        # 1) 显式第 6 位 workflow=rewrite
+        with patch.object(ProcessingEngine, "run_async", new=AsyncMock(return_value=None)):
+            r = b.start_proofread([str(src)], "strict", "", "", False, "rewrite")
+        check("start_proofread 返回 ok", r.get("ok") is True)
+        check("workflow 落到 config", b._config.workflow_mode == "rewrite")
+        check("harness_enabled 单向镜像为 False", b._config.harness_enabled is False)
+        # run_async 被 mock 掉, 任务本身不会产出 result — 手工补一条再验来源字段
+        _eng = b._engine
+        _k = next(iter(_eng.tasks))
+        _eng.tasks[_k].result = FileResult(original="a", corrected="b")
+        entry = next(iter(b._collect_results(_eng).values()), {})
+        check("结果条目带 workflow=rewrite", entry.get("workflow") == "rewrite")
+
+        # 2) 第 4 位 (废弃的 chunking_preset) 不再写旧字段
+        before = b._config.chunking_preset
+        with patch.object(ProcessingEngine, "run_async", new=AsyncMock(return_value=None)):
+            b.start_proofread([str(src)], "strict", "", "fast")
+        check("废弃的第 4 参数不再改写 chunking_preset",
+              b._config.chunking_preset == before)
+
+        # 3) 老 5 参数调用仍绑定 force_rerun (第 6 位追加不破坏既有位置)
+        h = compute_prompt_hash_for_config(b._config)
+        save_checkpoint(src, FileTask(
+            file_path=src, status=TaskStatus.COMPLETED, original_text="原文内容。" * 50,
+            result=FileResult(original="原文内容。" * 50, corrected="改好了", prompt_hash=h),
+        ))
+        with patch.object(ProcessingEngine, "run_async", new=AsyncMock(return_value=None)):
+            r_force = b.start_proofread([str(src)], "strict", "", "balanced", True)
+        check("5 参数调用 = force_rerun (命中也不复用缓存)",
+              r_force.get("cached_files") == [])
+        with patch.object(ProcessingEngine, "run_async", new=AsyncMock(return_value=None)):
+            r_cache = b.start_proofread([str(src)], "strict")
+        check("3 参数调用仍走缓存 (对照)", r_cache.get("cached_files") == [str(src)])
+
 
 # ==================== 入口 (v6.0 C1: 自动发现本文件所有 test_xxx) ====================
 

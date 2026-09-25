@@ -60,7 +60,7 @@ def test_utils():
     d = c.to_dict()
     c2 = ProjectConfig.from_dict(d)
     check("ProjectConfig 往返完整", c == c2)
-    check("ProjectConfig 包含所有字段", len(d) == 31)  # v5.1.0: + harness_enabled; v5.2c (D 方案): + chunking_preset_harness/rewrite + harness/rewrite_request_timeout (4 字段)
+    check("ProjectConfig 包含所有字段", len(d) == 32)  # v5.1.0: + harness_enabled; v5.2c: + 4 双轨字段; v5.3.0: + workflow_mode
 
     # ProjectConfig 边界值
     c_empty = ProjectConfig()
@@ -315,6 +315,38 @@ def test_processor():
         )
 
     check("_call_api_stream 正常流式", asyncio.run(test_normal_stream()))
+
+    # v5.3.0 (PLAN §2 D8): finish_reason="length" → 截断标记 (不再静默)
+    async def test_truncated_stream():
+        eng = ProcessingEngine(ProjectConfig(
+            api_base='http://x', model='m', harness_enabled=False))
+        eng._loop = asyncio.get_running_loop()
+        eng._pause_event = threading.Event()
+        eng._pause_event.set()
+
+        def _mk_event(text, finish_reason):
+            ev = MagicMock()
+            ev.choices = [MagicMock()]
+            ev.choices[0].delta.content = text
+            ev.choices[0].finish_reason = finish_reason
+            ev.usage = None
+            return ev
+
+        async def run_with(finish_reason):
+            async def fake_stream():
+                yield _mk_event("半截输出", finish_reason)
+            mock_client = AsyncMock()
+            mock_client.chat.completions.create = AsyncMock(return_value=fake_stream())
+            eng._client = mock_client
+            await eng._call_api_stream("key", "text")
+            return "key" in eng.truncated_keys
+
+        truncated = await run_with("length")
+        # 每次进入重建标记 (重试/重跑不继承上一轮告警)
+        normal = await run_with("stop")
+        return truncated and not normal
+
+    check("finish_reason=length 记入截断标记", asyncio.run(test_truncated_stream()))
 
 
 # ============================================================

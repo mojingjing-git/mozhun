@@ -34,6 +34,14 @@ from app.utils import (
     CHUNKING_PRESETS,
     CHUNKING_PRESETS_MAP,
     DEFAULT_CHUNK_PRESET,
+    # v5.3.0: workflow 一等身份 + 按轨派生 (PLAN-workflow-split-v5.3.md §2 D4/D7)
+    WORKFLOW_HARNESS,
+    WORKFLOW_MODES,
+    effective_workflow,
+    normalize_workflow,
+    presets_for_workflow,
+    resolve_chunk_preset,
+    resolve_request_timeout,
 )
 from app.templates import (
     PROMPT_MODES,
@@ -162,10 +170,20 @@ class Backend:
             "temperature": (0.0, 2.0),
             "context_max_chars": (200, 2000),
             "context_max_chunks": (1, 5),
+            # v5.3.0: 双轨 timeout 补后端钳制 (此前只有前端 JS 挡, 手输/老 API
+            # 可绕过; 与设置页 min/max 一致)
+            "harness_request_timeout": (60, 600),
+            "rewrite_request_timeout": (60, 600),
         }
         if key in clamp_map:
             lo, hi = clamp_map[key]
             value = max(lo, min(hi, value))
+        # v5.3.0 (PLAN §2 D4/D10): workflow_mode 值域校验 — 非法值拒绝落地
+        if key == "workflow_mode":
+            wf = normalize_workflow(value)
+            if not wf:
+                return {"ok": False, "error": f"非法 workflow_mode: {value!r}"}
+            value = wf
         if key == "api_key":
             # v4.1.8.1 (审计修复 H2): 拒绝把混淆串当明文写回 (旧版前端残留 /
             # 用户误粘贴 obf: 值). 只接受真正的明文新 key.
@@ -173,6 +191,14 @@ class Backend:
                 logger.warning("set_config 忽略 obf: 前缀的 api_key (疑似混淆串回写)")
                 return {"ok": False, "error": "api_key 不能是混淆串"}
         setattr(self._config, key, value)
+        # v5.3.0: 单向兼容镜像 —— workflow_mode 是唯一真值 (PLAN §2 D10)。
+        # 写 workflow_mode → 同步 harness_enabled (仅作展示/兼容读取);
+        # 写 harness_enabled (老 API 客户端) → 推出 workflow; 反向不回写,
+        # 避免前端全量保存把轨道翻回去。
+        if key == "workflow_mode":
+            self._config.harness_enabled = (value == WORKFLOW_HARNESS)
+        elif key == "harness_enabled":
+            self._config.workflow_mode = WORKFLOW_HARNESS if value else "rewrite"
         return {"ok": True}
 
     def save_config(self) -> dict:
@@ -204,12 +230,14 @@ class Backend:
         """
         return list(API_TEMPLATES)
 
-    def get_chunking_presets(self) -> list[dict]:
-        """返回 5 档 chunking 预设 (供主页下拉).
+    def get_chunking_presets(self, track: str = "") -> list[dict]:
+        """返回 chunking 预设 (供设置页下拉)。
 
         v4.1 (M2): 直接返回 utils.CHUNKING_PRESETS 的副本, 避免双点定义漂移.
+        v5.3.0: 按轨过滤 — ``track="rewrite"`` 不含 harness 专属的 extra_large(50000);
+        不传参 (track="") 返回全量 6 档, 旧调用行为不变 (PLAN §5-10)。
         """
-        return list(CHUNKING_PRESETS)
+        return presets_for_workflow(track)
 
     # ==================== 文件 API ====================
 
@@ -473,14 +501,21 @@ class Backend:
 
     def start_proofread(self, file_paths: list[str], mode_key: str,
                         custom_prompt: str = "",
-                        chunking_preset: str = "balanced",
-                        force_rerun: bool = False) -> dict:
+                        chunking_preset: str = "",
+                        force_rerun: bool = False,
+                        workflow: str = "") -> dict:
         """启动校对任务 (后台线程), 立即返回 task_id.
 
         v4.3.1 (UX #7): 末位加 force_rerun (带默认值, pywebview 按位置传参,
         前端不传时行为不变) — True 时 prepare_tasks 跳过断点缓存强制重跑,
         解决"已完成文件删掉重加被缓存秒标完成、前端无重跑通道"的问题;
         返回 dict 新增 cached_files 字段, 前端据此提示哪些文件命中缓存.
+
+        v5.3.0 (PLAN-workflow-split-v5.3.md §2 D4): 追加第 6 位 workflow
+        ("harness"/"rewrite", 空 = 用当前配置)。**必须追加在 force_rerun 之后** —
+        前 5 个位置参数与老调用保持一一对应。第 4 个 chunking_preset 参数已废弃:
+        它从前写的是 DeAI 专用的兼容字段, 会连带改掉 DeAI 后续的分块 (§5-9),
+        现保留形参只为不破坏老调用, 不再写盘。
 
         v4.1.8.1 (审计修复 H1): 并发重入保护.
         旧实现每次调用都无条件重建 engine + 起新线程, 不检查上一任务是否在跑:
@@ -511,8 +546,12 @@ class Backend:
         self._config.prompt_mode = mode_key
         if custom_prompt:
             self._config.custom_prompt = custom_prompt
-        if chunking_preset in [p["key"] for p in CHUNKING_PRESETS]:
-            self._config.chunking_preset = chunking_preset
+        # v5.3.0: 本次运行的工作流 — 显式参数优先, 否则沿用配置。
+        # 同时写 workflow_mode (唯一真值) 与 harness_enabled (兼容镜像),
+        # 与 set_config 的单向镜像同语义 (PLAN §2 D10)。
+        wf = normalize_workflow(workflow) or effective_workflow(self._config)
+        self._config.workflow_mode = wf
+        self._config.harness_enabled = (wf == WORKFLOW_HARNESS)
         self._config.output_format = "txt"
 
         # v4.1 (M3): task_id 用 uuid 避免硬编码 "1" (并发/多任务时唯一)
@@ -563,6 +602,9 @@ class Backend:
                 "status": status,
                 "audit": list(_eng.file_audits.get(k, [])),
                 "warnings": warnings,
+                # v5.3.0: 本次运行的工作流 — 前端据此显示"结果来源",
+                # 并区分"本轨命中缓存"与"另一轨遗留结果" (PLAN §4-1/§4-11)
+                "workflow": effective_workflow(_eng.config),
             }
 
         engine.on_file_done = lambda k, status: self._push("onFileDone", _file_done_payload(k, status))
@@ -721,7 +763,8 @@ class Backend:
 
     # ==================== 结果导出 ====================
 
-    def export_result(self, file_path: str = "", content: str = "", fmt: str = "txt") -> dict:
+    def export_result(self, file_path: str = "", content: str = "", fmt: str = "txt",
+                      workflow: str = "") -> dict:
         """v4.1.4: 弹原生保存对话框, 默认位置=源文件目录, 默认文件名=<stem>-<YYMMDD>-<HHMMSS>.<ext>.
 
         改法 (vs v4.1.3):
@@ -749,6 +792,12 @@ class Backend:
             # DeAI 导出 或 源文件不存在: 用 home/Documents
             src_dir = str(Path.home() / "Documents")
             stem = "deai_result"
+
+        # v5.3.0 (PLAN §4-5): 默认名带结果来源轨, 避免两个入口同秒导出撞名。
+        # workflow 参数由前端传"这份结果实际的来源轨"; 缺省时退回当前配置轨
+        # (老调用行为: 只多一个后缀)。
+        wf = normalize_workflow(workflow) or effective_workflow(self._config)
+        stem = f"{stem}-{'逐条' if wf == WORKFLOW_HARNESS else '整篇'}"
 
         # 扩展名: 优先用 fmt (md 走 md, 否则继承源文件后缀, 兜底 txt)
         # v4.1.8.2 (审计 B11): 非 \w 扩展名 (如 "c++"/"tf#") 会让 pywebview
@@ -897,8 +946,10 @@ class Backend:
         """deai 后台主循环 (v4.3.0: 分块 + 降级推送 + 可取消).
 
         v4.3.0 设计 (实施前评审结论):
-        - 分块: 按 config.chunking_preset 切块逐块调用; rewrite 纯拼接 (块间注入
-          前块结尾做衔接, 导出文本干净无分隔符); detect/audit 报告按「第 i/N 块」分节.
+        - 分块: 按 rewrite 轨预设 (resolve_chunk_preset(config, "rewrite")) 切块逐块
+          调用 — v5.3.0 起去 AI 味固定走整篇轨, 不受逐条校对档位影响; rewrite 纯拼接
+          (块间注入前块结尾做衔接, 导出文本干净无分隔符); detect/audit 报告按
+          「第 i/N 块」分节.
         - whole_file 兜底 (评审#6): whole_file 预设且文本 > _DEAI_WHOLE_FILE_LIMIT
           时强制回退 large(6000), 否则整本书 = 单次调用必超模型上下文.
         - 降级推送 (评审#1): partial > _DEAI_PUSH_LIMIT 时 onDeaiStream 只推尾部
@@ -934,7 +985,10 @@ class Backend:
             return
 
         # 分块决策 (whole_file 兜底见 docstring)
-        preset = self._config.chunking_preset or DEFAULT_CHUNK_PRESET
+        # v5.3.0 (PLAN §5-13): DeAI 从"读兼容字段 chunking_preset"改为跟随
+        # **整篇校对轨** (chunking_preset_rewrite); harness 专属档 (extra_large)
+        # 由 resolve_chunk_preset 挡在外面, 不会漏进整篇重写式分块。
+        preset = resolve_chunk_preset(self._config, "rewrite")
         preset_info = CHUNKING_PRESETS_MAP.get(preset) or CHUNKING_PRESETS_MAP[DEFAULT_CHUNK_PRESET]
         max_chars = preset_info["max_chars"]
         if max_chars == 0 and len(text) > _DEAI_WHOLE_FILE_LIMIT:
@@ -952,7 +1006,7 @@ class Backend:
             client = AsyncOpenAI(
                 base_url=self._config.api_base,
                 api_key=self._config.api_key,
-                timeout=self._config.timeout,
+                timeout=resolve_request_timeout(self._config, "rewrite"),
                 max_retries=0,
             )
         except Exception as e:
@@ -1578,7 +1632,8 @@ class Backend:
             client = AsyncOpenAI(
                 base_url=self._config.api_base,
                 api_key=self._config.api_key,
-                timeout=max(self._config.timeout, 60),  # 蒸馏 10-30s, 至少 60s
+                # v5.3.0: 蒸馏 timeout 也跟随 rewrite 轨 (PLAN §5-13)
+                timeout=max(resolve_request_timeout(self._config, "rewrite"), 60),
                 max_retries=0,
             )
         except Exception as e:
@@ -1690,6 +1745,8 @@ class Backend:
                     "file_path": str(task.file_path),
                     "status": task.status.value,
                     "result": task.result.to_dict() if task.result else None,
+                    # v5.3.0: 结果来源轨 (与 _file_done_payload 同字段)
+                    "workflow": effective_workflow(eng.config),
                 }
                 # v5.1.0: 附 harness 编辑审计 (会话内存态; onTaskComplete 与
                 # onFileDone 两条推送路径都要带, 前端才不依赖事件到达顺序)
