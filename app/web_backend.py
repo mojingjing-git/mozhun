@@ -1125,19 +1125,36 @@ class Backend:
             return
         finally:
             # I1: 关闭 httpx 连接池, 否则长跑会泄漏 socket
-            try:
-                await client.close()
-            except Exception:
-                pass
+            # v5.4.2 (全量扫描 G1): **只在不再需要 client 时关闭** — 后置管线
+            # (rewrite 的 revise 轮) 还要用同一个 client 发请求。原代码无条件在
+            # 这里 close, revise 轮拿到已关闭的 client → httpx 抛 "Cannot send a
+            # request, as the client has been closed" → 被 revise 的 broad except
+            # 吞成"调用失败, 保留原改写" → revise 功能 100% 静默失效。
+            if not (step == "rewrite" and not cancelled and bool(partial.strip())):
+                try:
+                    await client.close()
+                except Exception:
+                    pass
+                client = None
 
         # ===== v5.0.2: rewrite 步后置处理 (strip 后置 → ai_score → 可选 revise) =====
-        # 检测/评分步不做后置; 主循环已取消或空输出时不进入 (取消后不得再发 LLM 调用)
+        # 检测/评分步不做后置; 主循环已取消或空输出时不进入 (取消后不得再发 LLM 调用)。
+        # v5.4.2: client 可能为 None (上面已关闭) — 此时后置管线只做本地 strip/评分,
+        # revise 需要 LLM, 明确记为"客户端已关闭"而不是伪装成调用失败。
         ai_score_payload = None
         if step == "rewrite" and not cancelled and partial.strip():
             partial, ai_score_payload, revise_cancelled = await self._deai_postprocess_rewrite(
                 task_id, client, system_prompt, partial, cancel_event)
             if revise_cancelled:
                 cancelled = True
+
+        # v5.4.2 (I1 补): 后置管线结束后再关闭 client (上面为 revise 保留过)
+        if client is not None:
+            try:
+                await client.close()
+            except Exception:
+                pass
+            client = None
 
         if cancelled:
             # v4.3.0 (评审#3) + v5.0.2: 主循环或 revise 轮取消 — 结构化取消
@@ -1230,6 +1247,13 @@ class Backend:
                 logger.warning(f"deai {task_id}: ai_score 本地评分失败: {type(e).__name__}: {e}")
 
         if not self._config.deai_revise:
+            return partial, payload, False
+        # v5.4.2 (全量扫描 G1): client 已关闭时无法发 revise 请求 — 明确记日志,
+        # 不再伪装成"调用失败" (旧路径会被 broad except 静默吞掉)
+        if client is None:
+            logger.warning(
+                f"deai {task_id}: 客户端已关闭, revise 跳过 (保留原改写)"
+            )
             return partial, payload, False
         if payload is None:
             logger.info(f"deai {task_id}: revise 需要本地评分, deai_ai_score 已关, 跳过")

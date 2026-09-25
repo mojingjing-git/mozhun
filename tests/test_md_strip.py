@@ -273,6 +273,45 @@ def test_engine_md_local_reports():
     check("md_local total=0 也收集不平衡报告", len(reports) >= 1, str(reports))
 
 
+# === v5.4.2 (全量扫描 G1/G2): CRLF 围栏 + 表格分隔行线性化 ===
+def test_v542_crlf_fence_and_perf():
+    """CRLF 文本的围栏必须能闭合 (Windows .md 默认 CRLF);
+    表格分隔行判定不得有灾难性回溯。"""
+    print("\n--- v5.4.2: CRLF 围栏 / 表格分隔性能 ---")
+    from app.md_strip import strip_markdown, _is_table_sep_line
+    import time
+
+    # 1) CRLF 围栏: 闭围栏匹配 (旧实现在此永不闭合 → 代码内容失去保护)
+    s = "前文\r\n```\r\ncode\r\n```\r\n后文"
+    once = strip_markdown(s)
+    check("CRLF: 围栏标记被剥掉", "```" not in once, repr(once))
+    check("CRLF: 代码内容保留", "code" in once, repr(once))
+    check("CRLF: 前后文保留", once.startswith("前文") and once.endswith("后文"), repr(once))
+    check("CRLF: 换行已归一 (幂等)", strip_markdown(once) == once, repr(once))
+    # 仅 CR (老 Mac) 同样归一 → 换行
+    check("CR 也归一为换行", strip_markdown("a\rb") == "a\nb", repr(strip_markdown("a\rb")))
+
+    # 2) 表格分隔行判定 (形态对照)
+    for line, exp in [("--- | ---", True), ("| --- | :---: |", True),
+                      ("| --- | --- | --- |", True), ("---|---", True),
+                      ("  | :--- | ---: |  ", True),
+                      ("-----", False), ("- - -", False), ("text", False),
+                      ("| a | b |", False)]:
+        check(f"分隔行判定 {line!r}", _is_table_sep_line(line) is exp)
+
+    # 3) 性能: 旧实现嵌套量词 → 3 万空格单行使整篇跑 9.4s
+    line = "-" + " " * 30000
+    t = time.perf_counter()
+    strip_markdown(line)
+    dt = time.perf_counter() - t
+    check("长空白行不触发灾难性回溯 (< 500ms)", dt < 0.5, f"{dt * 1000:.1f}ms")
+    line2 = "| " + " | ".join(["---"] * 200) + " | " + " " * 20000
+    t = time.perf_counter()
+    strip_markdown(line2)
+    dt2 = time.perf_counter() - t
+    check("宽表 + 尾随空格 (< 500ms)", dt2 < 0.5, f"{dt2 * 1000:.1f}ms")
+
+
 def main():
     global passed, failed
     tests = [
@@ -289,6 +328,7 @@ def main():
         test_engine_md_local_reports,
         test_engine_empty_fallback,
         test_config_and_hash,
+        test_v542_crlf_fence_and_perf,   # v5.4.2 全量扫描 G1/G2
     ]
     for t in tests:
         try:

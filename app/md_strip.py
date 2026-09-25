@@ -53,7 +53,12 @@ import re
 # 掩蔽占位符 (punct_fix 同款): NUL 在入口剥离, 不会与用户文本串号
 # v5.0.1 (审计 L-1/L-2): 围栏开/闭分离校验 (同字符同长度); 行内代码等长 run 配对
 _FENCE_OPEN_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})")        # 开: 可带语言标记
-_FENCE_CLOSE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})[ \t]*$")  # 闭: 仅尾随空白
+# v5.4.2 (全量扫描 G1): 闭围栏尾随空白必须认 `\r` — Windows 用户的 .md 默认
+# CRLF, 行尾带 `\r`, 旧正则只认 `[ \t]` 导致**闭围栏永不匹配** → 围栏一直"未
+# 闭合到 EOF", 代码内容失去保护且围栏标记残留 (实测 '前文\r\n```\r\ncode\r\n
+# ```\r\n后文' → '前文\ncode\r\n```\r\n后文')。think_strip 已用 rstrip("\r")
+# 修过同一个坑, 这里同步。
+_FENCE_CLOSE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})[ \t]*\r?$")
 _CODE_SPAN_RE = re.compile(r"(`+)([^`]|[^`][\s\S]*?[^`])\1(?!`)")
 _MD_CHARS = set("*_~`#[]()!|>-+")
 _IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(([^)\s]*)\)")
@@ -64,7 +69,10 @@ _ATX_RE = re.compile(r"^ {0,3}(#{1,6})(\s+(.*?))?\s*#*\s*$")
 _QUOTE_RE = re.compile(r"^ {0,3}> ?")
 _UL_RE = re.compile(r"^ {0,3}[-+*] (.*)$")
 _HR_RE = re.compile(r"^ {0,3}([-_*]\s*){3,}$")
-_TABLE_SEP_RE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$")
+# v5.4.2 (全量扫描 G2): 旧式 `(\|\s*:?-{3,}:?\s*)+` 是嵌套量词, 遇到长空白行会
+# 灾难性回溯 (实测 '-' + 30000 空格 单行使整篇清洗跑 9.4 秒)。改成分段预检:
+# 先按 | 切段 (split 是线性的), 再逐段用**无嵌套量词**的段内正则校验。
+_TABLE_CELL_SEP_RE = re.compile(r"^:?-{3,}:?$")
 _TABLE_ROW_RE = re.compile(r"^\s*\|(.+)\|\s*$")
 _FRONTMATTER_RE = re.compile(r"\A---[ \t]*\n.*?\n---[ \t]*\n?", re.DOTALL)
 _BOLD_RE = re.compile(r"\*\*([^*\n]+?)\*\*")
@@ -164,7 +172,7 @@ def _strip_line(line: str) -> str:
             line = m.group(1)
             continue
         break
-    if _TABLE_SEP_RE.match(line):
+    if _is_table_sep_line(line):
         return ""
     if _REF_DEF_RE.match(line):
         return ""
@@ -191,8 +199,30 @@ def _is_pure_marker_line(ln: str) -> bool:
     """纯标记行 (红线 1b): 整行删除而非替换成空行 — 替换为空行会凭空多出
     段间空行 (水平线/分隔行/引用定义行三种)."""
     return bool(
-        _HR_RE.match(ln) or _TABLE_SEP_RE.match(ln) or _REF_DEF_RE.match(ln)
+        _HR_RE.match(ln) or _is_table_sep_line(ln) or _REF_DEF_RE.match(ln)
     )
+
+
+def _is_table_sep_line(ln: str) -> bool:
+    """表格分隔行判定 (v5.4.2: 线性实现, 替代旧嵌套量词正则).
+
+    形态: 可选首尾竖线, 2 个及以上 `---` / `:---` / `---:` / `:---:` 单元格,
+    单元格之间以 | 分隔, 允许空白。先按 | 切段 (线性), 再逐段校验。
+    """
+    s = ln.strip()
+    if not s or "-" not in s:
+        return False
+    if s.startswith("|"):
+        s = s[1:]
+    if s.endswith("|"):
+        s = s[:-1]
+    cells = s.split("|")
+    if len(cells) < 2:
+        return False
+    for c in cells:
+        if not _TABLE_CELL_SEP_RE.match(c.strip()):
+            return False
+    return True
 
 
 def strip_markdown(text: str) -> str:
@@ -201,6 +231,10 @@ def strip_markdown(text: str) -> str:
         return text
     # 入口剥 NUL (punct_fix P4 同款): 掩蔽占位符含 \x00, 不能与用户文本串号
     text = text.replace("\x00", "")
+    # v5.4.2 (全量扫描 G1): 换行归一 (CRLF / CR → LF)。非代码行的 `rstrip` 本就
+    # 会吃掉行尾 \r, 而围栏内容逐字保留 — 同一份 CRLF 输入里两种行为并存, 导致
+    # **幂等破例** (第一遍输出仍含 \r, 第二遍才剥干净)。入口归一后行为一致。
+    text = re.sub(r"\r\n|\r", "\n", text)
     # YAML frontmatter (AI 生成 md 常见, 评审 P1-7): 仅文件开头, 整块剥离
     text = _FRONTMATTER_RE.sub("", text)
 

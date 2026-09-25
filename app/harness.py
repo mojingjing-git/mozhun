@@ -114,21 +114,27 @@ TOOL_DISCIPLINE = """# 工具使用纪律
 # 通用重试链再试一次 (默认重试 1 次, 耗尽才 FAILED — 宁可失败也不静默放过)。
 _NOOP_CONTENT = "无需修改"
 _EDIT_CONTENT_MARKERS = ("old_text", "new_text")
+# 含"无需修改"的合法回复上限: 超过说明混了大段推理/解释, 不是干净的无修改答复
+_NOOP_CONTENT_MAX_LEN = 40
 
 
 def content_suspicious_noop(content: str) -> bool:
     """content 非 tool_call 回复的"可疑无需修改"判定。
 
-    True = content 含编辑载体 (old_text/new_text) 或非平凡长文本 → 大概率是
-    模型没走工具链, 应重试; False = 合法 "无需修改" / 空回复 / 极短白名单。
+    True = 应重试; False = 合法的"无需修改"答复, 放行。
+
+    判定顺序:
+    1. 空 / 仅空白 → 放行 (模型确实没说话, 走既有 no-op 路径)
+    2. 含编辑载体字面量 (old_text / new_text) → 可疑 (把编辑写进正文)
+    3. 含"无需修改"且长度 <= _NOOP_CONTENT_MAX_LEN → 放行 (含句号/括号等补充说明)
+    4. 其余 (无"无需修改"标记, 或标记混在大段文本里) → 可疑 → 走重试链
     """
     c = (content or "").strip()
     if not c or c == _NOOP_CONTENT:
         return False
     if any(m in c for m in _EDIT_CONTENT_MARKERS):
         return True
-    # "无需修改" 的常见变体 (含句号/括号解释) 放行; 其余长文本视为可疑
-    return len(c) > 8 or _NOOP_CONTENT not in c
+    return not (_NOOP_CONTENT in c and len(c) <= _NOOP_CONTENT_MAX_LEN)
 
 
 # 分块场景附加说明 (_stream_chunked 注入): 上下文只是参照物, 不可编辑。
@@ -238,6 +244,17 @@ def apply_edits(original: str, edits: list[dict]) -> tuple[str, list[dict]]:
         old = e.get("old_text", "")
         new = e.get("new_text", "")
         reason = e.get("reason", "")
+
+        # v5.4.2 (全量扫描 E5): 非字符串参数必须在类型边界上拦住。旧实现直通到
+        # str.count/replace → TypeError 冒出 apply_edits, 违反本模块"apply 不抛
+        # 异常"的契约, 且会在上层被当成通用失败烧掉整文件重试额度。
+        if not isinstance(old, str) or not isinstance(new, str):
+            audit.append(_make_audit(
+                i, "SKIPPED_BAD_ARGS",
+                "old_text / new_text 必须是字符串",
+                str(old)[:PREVIEW_LIMIT], str(new)[:PREVIEW_LIMIT],
+            ))
+            continue
 
         # 边界 4: 空 old / old == new — 无意义调用。
         if not old:

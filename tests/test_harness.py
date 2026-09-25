@@ -446,9 +446,12 @@ def test_content_suspicious_noop_unit():
     check("空串放行", f("") is False)
     check("'无需修改' 放行", f("无需修改") is False)
     check("'无需修改。' 放行", f("无需修改。") is False)
+    check("'无需修改（补充说明）' 放行", f("无需修改（无错别字）") is False)
+    check("'无需修改，原文准确无误。' 放行", f("无需修改，原文准确无误。") is False)
     check("含 old_text 可疑", f("old_text: xxx") is True)
     check("含 new_text 可疑", f("new_text: yyy") is True)
     check("长解释文本可疑", f("这段文字写得很好，没有错误。") is True)
+    check("'无需修改' 混在大段推理里可疑", f("无需修改" + "。" * 60) is True)
 
 
 def test_engine_partial_success_warnings():

@@ -1555,6 +1555,91 @@ def test_v540_deai_think_strip():
             loader_mod.STYLES_DIR = orig_dir
 
 
+# === test_v542_revise_client_not_closed ===
+def test_v542_revise_client_not_closed():
+    """v5.4.2 (全量扫描 G1): revise 轮必须拿到**未关闭**的 client。
+
+    旧 bug: 主循环 finally 无条件 await client.close(), 后置管线再用同一个
+    client 发 revise → httpx 抛 "client has been closed" → 被 broad except 吞成
+    "调用失败, 保留原改写" → revise 功能 100% 静默失效。mock client 不校验
+    is_closed(), 所以既有测试全绿也没能发现。
+    本测试用带 is_closed 语义的 mock: 已关闭时 create 必须抛错, 从而锁住时序。
+    """
+    print("\n--- v5.4.2: revise 轮 client 未被提前关闭 ---", flush=True)
+    import asyncio
+    from unittest.mock import patch, MagicMock, AsyncMock
+    from app.web_backend import Backend
+    from app.ai_score_local import REVISE_THRESHOLD
+
+    b = Backend(window=None)
+    pushes = []
+    b._push = lambda name, data=None: pushes.append((name, data))
+    b._config.deai_ai_score = True
+    b._config.deai_revise = True
+    b._config.deai_strip_after = False
+
+    state = {"closed": False, "revise_attempted": False}
+    calls = {"n": 0, "prompts": []}
+    client = MagicMock()
+
+    class _S:
+        def __init__(self, text):
+            self._pieces = [text[i:i + 50] for i in range(0, len(text), 50)]
+            self._i = 0
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if self._i >= len(self._pieces):
+                raise StopAsyncIteration
+            ev = MagicMock()
+            ev.choices = [MagicMock()]
+            ev.choices[0].delta.content = self._pieces[self._i]
+            self._i += 1
+            return ev
+
+    async def create(**kwargs):
+        # 关键: 已关闭的 client 发请求必须失败 (真 httpx 就是这个行为)
+        if state["closed"]:
+            raise RuntimeError("Cannot send a request, as the client has been closed.")
+        calls["n"] += 1
+        calls["prompts"].append(kwargs["messages"][1]["content"])
+        if calls["n"] == 1:
+            return _S("改写初稿" + "内容" * 100)
+        state["revise_attempted"] = True
+        return _S("改定稿" + "内容" * 100)
+
+    async def close():
+        state["closed"] = True
+
+    client.chat.completions.create = create
+    client.close = close
+
+    seq = [REVISE_THRESHOLD + 10, 1]
+    cnt = {"n": 0}
+
+    def fake_score(text):
+        s = seq[min(cnt["n"], len(seq) - 1)]
+        cnt["n"] += 1
+        return {"score": s,
+                "dims": {"blacklist": {"score": 0, "weight": 1, "detail": "mock"}},
+                "offenders": ([{"text": "出戏句", "reasons": ["mock"]}]
+                              if s >= REVISE_THRESHOLD else [])}
+
+    with patch("app.web_backend.AsyncOpenAI", MagicMock(return_value=client)), \
+            patch("app.web_backend._ai_score_local", fake_score):
+        asyncio.run(b._deai_run("rev1", "rewrite", "原文句子。" * 30, "", "", ""))
+
+    check("revise 轮确实发出了请求 (client 未提前关闭)",
+          state["revise_attempted"] is True)
+    comp = next((d for n, d in pushes if n == "onDeaiComplete"), None)
+    check("走完 revise 且采用改定稿",
+          comp is not None and "改定稿" in comp.get("result", ""),
+          repr(comp.get("result", ""))[:120] if comp else "(无完成事件)")
+    check("client 最终被关闭 (不泄漏 socket)", state["closed"] is True)
+
+
 # ==================== 模块级常量 (v6.0 C1: 跨章节共享) ====================
 
 passed = 0

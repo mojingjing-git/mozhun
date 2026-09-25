@@ -443,22 +443,25 @@ class ProjectConfig:
 
     @classmethod
     def from_dict(cls, d: dict) -> "ProjectConfig":
+        # v5.4.2 (全量扫描 E2): 数值字段一律 `or 默认值` — null / 空串 / 0 都兜住。
+        # 旧实现多个字段裸取 d.get(...), 配置里出现 null 会抛 TypeError; 而
+        # load_config 的 broad except 会因此丢掉**整份配置** (含 API key)。
         return cls(
             api_base=d.get("api_base", ""),
             api_key=_deobf_until_plain(d.get("api_key", "")),
             model=d.get("model", ""),
-            timeout=d.get("timeout", 120),
-            max_retries=d.get("max_retries", 3),
-            concurrency=d.get("concurrency", 2),
+            timeout=int(d.get("timeout") or 120),
+            max_retries=int(d.get("max_retries") or 3),
+            concurrency=int(d.get("concurrency") or 2),
             output_format=d.get("output_format", "txt"),
             prompt_mode=_normalize_legacy_mode(d.get("prompt_mode") or "strict"),
             custom_prompt=d.get("custom_prompt", ""),
-            temperature=d.get("temperature", 0.1),
+            temperature=float(d.get("temperature") if d.get("temperature") is not None else 0.1),
             output_dir=d.get("output_dir", ""),
             chunking_preset=d.get("chunking_preset") or "balanced",
             schema_version=3,  # v5.0.0: 旧文件 (值 2) 加载即升级, to_dict 落盘 3
-            context_max_chars=d.get("context_max_chars", 800),
-            context_max_chunks=d.get("context_max_chunks", 2),
+            context_max_chars=int(d.get("context_max_chars") or 800),
+            context_max_chunks=int(d.get("context_max_chunks") or 2),
             ui_theme=d.get("ui_theme") or "auto",
             ui_skin=d.get("ui_skin") or "ink",
             md_strip_before_llm=bool(d.get("md_strip_before_llm", False)),
@@ -475,7 +478,10 @@ class ProjectConfig:
             # 老字段 chunking_preset / timeout 保留为兜底来源 (C-3 修法: DeAI 视图不失效)
             chunking_preset_harness=d.get("chunking_preset_harness", "large"),
             chunking_preset_rewrite=d.get("chunking_preset_rewrite") or d.get("chunking_preset") or "balanced",
-            harness_request_timeout=int(d.get("harness_request_timeout", 180)),
+            # v5.4.2 (全量扫描 E2): 无条件 int() 遇到 null 会抛 TypeError, 而
+            # load_config 的 broad except 会把**整份配置**丢掉返回默认值 —
+            # 用户手填的 API key 静默清空且不可恢复。数值字段一律 `or 默认值`。
+            harness_request_timeout=int(d.get("harness_request_timeout") or 180),
             rewrite_request_timeout=int(d.get("rewrite_request_timeout") or d.get("timeout") or 120),
             # v5.3.0: 非法/缺失 → "" (走 effective_workflow 派生, 行为与升级前一致)
             workflow_mode=normalize_workflow(d.get("workflow_mode")),

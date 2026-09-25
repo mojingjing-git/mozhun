@@ -4,6 +4,31 @@
 >
 > 当前产品: **墨准 (MoZhun)** v5.4.0 — 本地标点修复 + LLM 批量校对 + 去 AI 味 + 小说切分, 支持任意 OpenAI 兼容 API; 模型思维链一律丢弃。
 
+## v5.4.2 (2026-09-26) — 全量代码扫描修复批次
+
+**依据**: 4 个独立只读 subagent 并行全量扫描 (引擎 / Bridge / 前端 / 规则引擎+测试), 报告见 `.workbuddy/reviews/scan-*-2026-09-26.md` (本地, 不入库)。共报 **41 项** (高危 6), 本批修复已验证高危/中危 **8 项**。
+
+### 高危修复
+1. **DeAI revise 轮 100% 静默失效** (`app/web_backend.py:1126`): 主循环 `finally: await client.close()` 无条件关闭 client, 而后置管线的 revise 轮仍用同一个 client → httpx 抛 "Cannot send a request, as the client has been closed" → 被 revise 的 broad except 吞成"调用失败, 保留原改写"。用户开了「评分超阈值追加一轮改写」却永远拿不到效果、UI 无任何提示。修法: 后置管线需要 client 时不关闭, 用完后统一关闭 (不泄漏 socket); client 为 None 时明确记"客户端已关闭"而非伪装成调用失败。
+2. **配置里任一数值字段为 `null` → 整份配置丢失** (`app/utils.py`): `from_dict` 多个字段裸取 `d.get(...)`, `null` 让 `int()` 抛 `TypeError`, 而 `load_config` 的 broad except 会返回全新默认 —— **用户手填的 API key 静默清空且不可恢复**。修法: 数值字段一律 `or 默认值`。
+3. **分块路径把 `PLACEHOLDER` 字面量当 system prompt 发给 LLM** (`app/processor.py`): `_stream_single` 有占位模式兜底, 但 `_stream_chunked` 为注入跨段上下文**自己重算了一遍**, 漏掉 PLACEHOLDER 判定 → 同一文件内 chunk0 正确回退 strict、后续块拿到 `PLACEHOLDER`。修法: 抽出 `_base_system_prompt()` **单点**, 两处共用。
+4. **`md_strip` 在 CRLF 下围栏永不闭合** (`app/md_strip.py:56`): 闭围栏正则只认 `[ \t]` 不认 `\r`, 而 Windows 用户的 .md 默认就是 CRLF → 围栏未闭合到 EOF, 代码内容失去保护且标记残留。修法: 闭围栏认 `\r?$`; 入口统一归一 CRLF/CR → LF (顺带修掉 CRLF 下的幂等破例)。
+5. **`md_strip` 表格分隔行灾难性回溯**: 旧 `(\|\s*:?-{3,}:?\s*)+` 嵌套量词, 实测 `-` + 30000 空格单行使整篇清洗跑 **9.4 秒**。修法: 改线性实现 (按 `|` 切段 + 段内无嵌套量词校验), 同输入 **1.5ms**, 形态判定与原正则一致。
+6. **流式节流时间兜底 50ms 写成 50 秒** (`app/processor.py:87`): `_STREAM_THROTTLE_MS = 50.0` 与 `time.time()` (秒) 比较 = 50 秒, **时间兜底从未生效**, 慢速模型 (5 token 要几秒) 预览长时间不更新。修法: 改 `_STREAM_THROTTLE_SEC = 0.05`。
+
+### 中危修复
+- **`apply_edits` 对非字符串 `old_text`/`new_text` 抛 TypeError** (`app/harness.py`): 违反模块自身"apply 不抛异常"契约, 且异常冒到上层会被当作通用失败**烧掉整文件重试额度**。修法: 类型边界拦住 → `SKIPPED_BAD_ARGS`。
+- **v5.4.1 守卫误判面收窄** (`app/harness.py`): 原 `len > 8` 会把「无需修改（无错别字）」这类合法的补充说明短回复判为可疑 → 重试耗尽后误标 FAILED。改: 含"无需修改"且 ≤40 字符放行, 长文本 (含"无需修改"混在大段推理里) 才可疑。
+
+### 测试
+- `test_web_backend_deai.py` +1 (`test_v542_revise_client_not_closed`): mock 校验 client 已关闭时 create 必须失败, 锁住 revise 时序 (既有 27 条用 mock 不校验 `is_closed()`, 全绿也没能发现这个 bug)
+- `test_md_strip.py` +16: CRLF 围栏 / 换行归一 / 分隔行形态 9 条 / 性能 2 条
+- `test_harness.py` +3: 守卫放行与可疑边界
+- 全量回归 **1581 通过 / 0 失败**, 冒烟 96 项全绿
+
+### 未修 (记录在扫描报告, 按优先级排)
+前端: 结果来源提示条的重跑按钮闭包串文件 (`_provenanceKey` 缺 fileKey)、`cfg-timeout` 在 index.html 重复定义两处、`window.App` 与 `window.app` 双对象致小说切分视图日志静默退化、快捷键无视图守卫。引擎: `punct_fix` 单引号包英文词误报不平衡、破折号补齐需两遍才到不动点、`_FRONTMATTER_RE` 不校验 `key: value`、`novel_splitter._dedup_same_key` 对 `num=None` 静默删章。测试: 多处恒真断言与 `inspect.getsource` 源码式断言、`run_all_tests.py` 把 unittest 套件只算 1 个 PASS。
+
 ## v5.4.1 (2026-09-26) — 用户烟测双修复 (Q1 no-op 误判 / Q2 模型下拉)
 
 ### Q1: "完成但零改动" — 0 tool_calls 防误报守卫

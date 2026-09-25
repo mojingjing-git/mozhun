@@ -79,12 +79,15 @@ _RETRYABLE_ERRORS = (RateLimitError,)
 
 logger = setup_logging()
 
-# 流式节流：每 5 token 或 50ms (取慢速) emit 一次。
+# 流式节流：每 5 token 或 50ms emit 一次 (两个条件任一满足即 emit)。
 # 设计意图：流式快时由 token 计数触发 (避免 join 风暴), LLM 慢响应时由
 # 时间兜底保证 UI 不卡 (避免长时间无更新)。50ms 是人眼可感知的最小间隔,
 # 既不浪费 CPU 也不让 UI 顿挫。
+# v5.4.2 (全量扫描 E3): 时间常量单位是**秒** (与 time.time() 比较), 旧值 50.0
+# 等于 50 秒 — 时间兜底从未生效, 慢速模型 (5 token 要几秒) 的预览会长时间
+# 不更新。改为 0.05 秒 = 50ms。
 _STREAM_THROTTLE_TOKENS = 5
-_STREAM_THROTTLE_MS = 50.0
+_STREAM_THROTTLE_SEC = 0.05
 
 # 借鉴自 https://github.com/tianhm/ollama-batch-processor (MIT License)
 # 借鉴内容: chunking preset 分档设计思路
@@ -711,6 +714,30 @@ class ProcessingEngine:
         """
         return split_text(text, max_chars, preset=preset)
 
+    def _base_system_prompt(self) -> str:
+        """按 config 派生 base system prompt — **唯一单点**。
+
+        v5.4.2 (全量扫描 E1): 原实现在 _stream_single 与 _stream_chunked 各写一遍
+        派生逻辑, 而分块那份漏了 PLACEHOLDER 判定 → 同一文件内 chunk0 正确回退
+        strict、后续块把 "PLACEHOLDER" 字面量当 system prompt 发给 LLM。
+        两处共用本 helper, 杜绝再漂移。
+        """
+        # v4.1.8.1 (审计 H12): custom_prompt 只在模式显式选"自定义"时生效.
+        # 旧实现 custom_prompt 非空即覆盖任意模式 -> 残留的旧自定义 prompt
+        # 会让 strict/polish 等模式的用户跑在完全不同的 system 下.
+        if self.config.prompt_mode == "custom" and self.config.custom_prompt:
+            return self.config.custom_prompt
+        mode_info = PROMPT_MODES.get(self.config.prompt_mode)
+        # v4.1.8.2 (审计 C4): "deai" 是去AI味视图专用的遗留占位模式, 不该作为
+        # 校对 system prompt (settings 下拉已过滤, 这里兜底历史残留配置)
+        if not mode_info:
+            self._log(f"[警告] 未知校对模式 '{self.config.prompt_mode}'，回退到纯纠错模式")
+            mode_info = PROMPT_MODES["strict"]
+        elif mode_info.get("system") == "PLACEHOLDER":
+            self._log(f"[警告] 校对模式 '{self.config.prompt_mode}' 为占位模式，回退到纯纠错模式")
+            mode_info = PROMPT_MODES["strict"]
+        return mode_info["system"]
+
     async def _stream_single(
         self,
         task_key: str,
@@ -736,22 +763,8 @@ class ProcessingEngine:
         """
         if system_prompt_override is not None:
             system_prompt = system_prompt_override
-        elif self.config.prompt_mode == "custom" and self.config.custom_prompt:
-            # v4.1.8.1 (审计 H12): custom_prompt 只在模式显式选"自定义"时生效.
-            # 旧实现 custom_prompt 非空即覆盖任意模式 -> 残留的旧自定义 prompt
-            # 会让 strict/polish 等模式的用户跑在完全不同的 system 下.
-            system_prompt = self.config.custom_prompt
         else:
-            mode_info = PROMPT_MODES.get(self.config.prompt_mode)
-            # v4.1.8.2 (审计 C4): "deai" 是去AI味视图专用的遗留占位模式, 不该作为
-            # 校对 system prompt (settings 下拉已过滤, 这里兜底历史残留配置)
-            if not mode_info:
-                self._log(f"[警告] 未知校对模式 '{self.config.prompt_mode}'，回退到纯纠错模式")
-                mode_info = PROMPT_MODES["strict"]
-            elif mode_info.get("system") == "PLACEHOLDER":
-                self._log(f"[警告] 校对模式 '{self.config.prompt_mode}' 为占位模式，回退到纯纠错模式")
-                mode_info = PROMPT_MODES["strict"]
-            system_prompt = mode_info["system"]
+            system_prompt = self._base_system_prompt()
 
         # v5.1.0: harness 分支 — 非流式 tool_calls + 本地 apply (无 token 流需求,
         # 解析更简单; 烟测结论协议固定, 不做运行时降级)
@@ -813,7 +826,7 @@ class ProcessingEngine:
                         now = time.time()
                         if (
                             emit_counter % _STREAM_THROTTLE_TOKENS == 0
-                            or (now - last_emit_time) >= _STREAM_THROTTLE_MS
+                            or (now - last_emit_time) >= _STREAM_THROTTLE_SEC
                         ):
                             # v4.1.8.1 (M4): 推单调增长全量 (前缀复用同一 str, 不重复 join)
                             # v5.4: 只推剥后文本 — 思维链不闪现 (take 只在节流点求值)
@@ -1031,15 +1044,9 @@ class ProcessingEngine:
             )
             system_prompt_override: Optional[str] = None
             if context_prefix:
-                # 取 base system prompt (按 _stream_single 的内部逻辑)
-                # v4.1.8.1 (审计 H12): custom_prompt 只在"自定义"模式下生效
-                if self.config.prompt_mode == "custom" and self.config.custom_prompt:
-                    base = self.config.custom_prompt
-                else:
-                    mode_info = PROMPT_MODES.get(self.config.prompt_mode)
-                    if not mode_info:
-                        mode_info = PROMPT_MODES["strict"]
-                    base = mode_info["system"]
+                # v5.4.2 (全量扫描 E1): 走 _base_system_prompt 单点 (含 PLACEHOLDER
+                # 兜底), 不再自己重算一遍 — 旧实现漏了占位判定。
+                base = self._base_system_prompt()
                 system_prompt_override = f"{base}\n\n{context_prefix}"
 
             # v4.1.8.1 (M4): stream_prefix = 已完成块拼接, 让 _stream_single 每次
