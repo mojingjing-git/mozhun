@@ -186,9 +186,15 @@ def _strip_line(line: str) -> str:
         cells = [c.strip() for c in m.group(1).split("|")]
         line = "  ".join(c for c in cells if c)  # 单元格内容同样落入行内规则
     # 行内: 图片先于链接 (![..](..) 含链接形态), 引用式链接随后, 再强调
-    line = _IMAGE_RE.sub(lambda m: m.group(1), line)
-    line = _LINK_RE.sub(lambda m: m.group(1) or m.group(2), line)
-    line = _REF_LINK_RE.sub(r"\1", line)
+    # v5.4.3 (F7): 守卫必须**包住全部三条**正则, 不能只包两条 ——
+    # _IMAGE_RE 同样首段无上界 (实测 50000 个 '![' 单行 4.73s)。
+    # v1 漏掉它没被发现, 是因为测量盲区: 裸 '[' 行上 _IMAGE_RE 跑 0.000s。
+    # 三条正则都必须吃掉字面 ']', 所以行内没有 ']' 时它们**必然零匹配**,
+    # 跳过是语义等价的, 而旧实现是 O(k*n) 二次爆炸 (5 万个 '[' 单行 18.7s)。
+    if "]" in line:
+        line = _IMAGE_RE.sub(lambda m: m.group(1), line)
+        line = _LINK_RE.sub(lambda m: m.group(1) or m.group(2), line)
+        line = _REF_LINK_RE.sub(r"\1", line)
     line = _strip_paired(line, _BOLD_RE)
     line = _strip_paired(line, _STRIKE_RE)
     line = _strip_paired(line, _ITALIC_RE, star=True)

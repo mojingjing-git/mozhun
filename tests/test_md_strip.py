@@ -312,6 +312,132 @@ def test_v542_crlf_fence_and_perf():
     check("宽表 + 尾随空格 (< 500ms)", dt2 < 0.5, f"{dt2 * 1000:.1f}ms")
 
 
+def test_v543_f7_link_regex_guard_and_size_cap():
+    """v5.4.3 (F7): 链接/图片/引用三条正则的 O(n^2) 守卫 + md_local 体积上限。
+
+    根因: 三条正则首段字符类 `[^\]]*` 无上界, 行内没有 `]` 时每个 `[` 起点吃
+    完整行再逐格回退。实测 (旧实现):
+        50000 个 '['   -> _LINK_RE 9.9s + _REF_LINK_RE 8.8s
+        50000 个 '!['  -> _IMAGE_RE 4.7s + _LINK_RE 4.3s
+    比 v5.4.2 G2 (表格嵌套量词) 更严重: md_local 整文件不切块且**无体积上限**,
+    拖进一个巨型日志/JSON, 任务永远不返回。
+
+    守卫必须**包住三条**, 只包两条测不出来 —— v1 就漏了 _IMAGE_RE, 而它之所以
+    没被发现是测量盲区: 裸 '[' 行上 _IMAGE_RE 实测 0.000s。
+    """
+    print("\n--- v5.4.3 (F7): 链接正则守卫 + md_local 上限 ---")
+    from app.md_strip import strip_markdown
+    import time
+
+    # 1) 性能: 三条都必须在毫秒级
+    for label, s, budget in (("50000 个 '['", "[" * 50000, 0.5),
+                             ("8000 个 '!['", "![" * 8000, 0.5),
+                             ("20000 个 '['", "[" * 20000, 0.5)):
+        t = time.perf_counter()
+        strip_markdown(s)
+        dt = time.perf_counter() - t
+        check(f"F7 {label} 不触发二次爆炸 (< 500ms)", dt < budget,
+              f"{dt * 1000:.1f}ms")
+
+    # 2) 语义等价: 守卫只在行内无 ']' 时跳过, 有 ']' 时行为必须原样
+    cases = [
+        ("[abc](x) 和 [ref][1] 和 ![i](y.png)", "abc 和 ref 和 i"),
+        ("[abc", "[abc"),                     # 有 [ 无 ]
+        ("]", "]"),                           # 只有 ]
+        ("[a](b)[c](d)", "ac"),               # 相邻两个链接
+        ("![i](y.png) 单独", "i 单独"),         # 图片
+        ("[ref][1] 引用", "ref 引用"),         # 引用式
+    ]
+    for src, want in cases:
+        got = strip_markdown(src)
+        check(f"F7 语义等价 {src!r}", got == want, f"got={got!r} want={want!r}")
+
+    # 3) 幂等: 守卫不破坏 v5.4.2 的幂等性
+    for src in ("[abc](x) 和 [ref][1] 和 ![i](y.png)", "[" * 100, "![" * 50):
+        once = strip_markdown(src)
+        check(f"F7 幂等 {src[:16]!r}", strip_markdown(once) == once)
+
+
+def test_v543_f7_md_local_size_cap():
+    """v5.4.3 (F7): md_local 超体积上限 -> FAILED 且 error 说清原因。"""
+    print("\n--- v5.4.3 (F7): md_local 体积上限 ---")
+    import asyncio
+    import tempfile
+    from pathlib import Path
+    from unittest.mock import patch
+    from app.processor import ProcessingEngine, MD_LOCAL_MAX_CHARS
+    from app.utils import ProjectConfig, TaskStatus
+
+    check("F7 上限常量是 200 万字", MD_LOCAL_MAX_CHARS == 2_000_000,
+          str(MD_LOCAL_MAX_CHARS))
+
+    # 不改常量, 用 monkeypatch 把上限调到很小, 省得造 200 万字字符串
+    orig = MD_LOCAL_MAX_CHARS
+    with patch("app.processor.MD_LOCAL_MAX_CHARS", 50):
+        tmp = Path(tempfile.mktemp(suffix=".txt"))
+        tmp.write_text("甲" * 200, encoding="utf-8")
+        try:
+            cfg = ProjectConfig(api_base="http://x", api_key="k", model="m",
+                                prompt_mode="md_local", max_retries=0)
+            engine = ProcessingEngine(cfg)
+            engine.prepare_tasks([tmp])
+
+            async def _run():
+                await engine.run_async()
+
+            asyncio.run(_run())
+            task = list(engine.tasks.values())[0]
+            check("F7 超上限 -> FAILED", task.status == TaskStatus.FAILED,
+                  str(task.status))
+            err = (task.result.error or "") if task.result else ""
+            # 类型名取自 type(e).__name__, 这里断言的是**具体**类型而不是笼统的
+            # ValueError —— 界面上要能看出"是体积超限"而不是"某个 ValueError"。
+            check("F7 error 写明类型名 _FileTooLargeError",
+                  "_FileTooLargeError" in err, err[:160])
+            check("F7 error 写明是体积超限", "过大" in err or "上限" in err, err[:160])
+            check("F7 error 给出可操作出路 (改用整篇校对/先拆分)",
+                  "整篇校对" in err or "拆分" in err, err[:160])
+        finally:
+            tmp.unlink(missing_ok=True)
+
+    # 分类验证: 体积超限必须是**不可重试**。
+    # 文件太大不是瞬时故障, 重试几次结果都一样, 白烧时间。
+    # 可观测量 = 日志里"文件过大"出现的次数 (每次 attempt 记一条):
+    #   不可重试 -> 1 次; 可重试 (max_retries=1) -> 2 次。
+    # ⚠ 不能拿"有没有构造 AsyncOpenAI"当可观测量 —— md_local 压根不构造客户端,
+    #   那个计数恒为 0, 断言会空洞通过 (第一版就栽在这)。
+    logs = []
+    tmp2 = Path(tempfile.mktemp(suffix=".txt"))
+    tmp2.write_text("甲" * 200, encoding="utf-8")
+    try:
+        with patch("app.processor.MD_LOCAL_MAX_CHARS", 50):
+            cfg2 = ProjectConfig(api_base="http://x", api_key="k", model="m",
+                                 prompt_mode="md_local", max_retries=1)
+            engine2 = ProcessingEngine(cfg2)
+            engine2.on_log = logs.append
+            engine2.prepare_tasks([tmp2])
+            asyncio.run(engine2.run_async())
+        t2 = list(engine2.tasks.values())[0]
+        check("F7 体积超限仍判 FAILED (max_retries=1)",
+              t2.status == TaskStatus.FAILED, str(t2.status))
+        # 只数 "[清洗] ... 文件过大" 这一条 (每次 attempt 记一条)。
+        # ⚠ 不能只搜 "文件过大": "[不可重试] ... — _FileTooLargeError: 文件过大
+        #   ..." 那行把同一条 msg 嵌进去了, 会把计数翻倍 (第一版就栽在这)。
+        n_attempts = sum(1 for m in logs
+                         if m.startswith("[清洗]") and "文件过大" in m)
+        check("F7 体积超限**不烧重试** (不可重试分类生效)",
+              n_attempts == 1,
+              f"进入体积检查 {n_attempts} 次 (2 = 走了重试路径); "
+              f"日志={logs}")
+        check("F7 走了不可重试分支",
+              any("[不可重试]" in m for m in logs),
+              str([m for m in logs if "不可重试" in m or "文件过大" in m])[:200])
+    finally:
+        tmp2.unlink(missing_ok=True)
+        patch.stopall()
+    assert MD_LOCAL_MAX_CHARS == orig
+
+
 def main():
     global passed, failed
     tests = [
@@ -329,6 +455,8 @@ def main():
         test_engine_empty_fallback,
         test_config_and_hash,
         test_v542_crlf_fence_and_perf,   # v5.4.2 全量扫描 G1/G2
+        test_v543_f7_link_regex_guard_and_size_cap,   # v5.4.3 F7
+        test_v543_f7_md_local_size_cap,               # v5.4.3 F7
     ]
     for t in tests:
         try:

@@ -74,8 +74,19 @@ from app.utils import (
 
 # v3.0 Phase 3 错误分类常量
 # 不可重试错误: 鉴权/权限/资源不存在/请求格式错误, 重试无意义
+# v5.4.3 (F7): md_local 体积超限走"不可重试"通道 — 立即 FAILED, 不烧重试。
+# 文件太大不是瞬时故障, 重试多少次结果都一样, 白白拖时间。
+class _FileTooLargeError(ValueError):
+    """v5.4.3 (F7): md_local 单文件超过体积上限。
+
+    继承 ValueError 只是为了带上类型名; 真正的分类靠下面加进
+    _NON_RETRYABLE_ERRORS。
+    """
+
+
 _NON_RETRYABLE_ERRORS = (
     AuthenticationError, PermissionDeniedError, NotFoundError, BadRequestError,
+    _FileTooLargeError,
 )
 # 可重试错误: 速率限制/超时/网络中断
 _RETRYABLE_ERRORS = (RateLimitError,)
@@ -91,6 +102,13 @@ logger = setup_logging()
 # 不更新。改为 0.05 秒 = 50ms。
 _STREAM_THROTTLE_TOKENS = 5
 _STREAM_THROTTLE_SEC = 0.05
+
+# v5.4.3 (F7): md_local 单文件字符数上限。
+# md_local 是纯本地模式, **整文件不切块** (围栏代码块是跨行状态, 分块会把围栏
+# 切开), 且 v5.4.2 之前没有任何体积上限 —— 拖进一个巨型日志/JSON, 任务长时间
+# 不返回。守卫后 strip_markdown 已是线性, 但这个体量仍是秒级, 必须先挡住。
+# ⚠ 2_000_000 是**初始拍定值, 未做真实样本校准** (AGENTS.md §34 口径)。
+MD_LOCAL_MAX_CHARS = 2_000_000
 
 # 借鉴自 https://github.com/tianhm/ollama-batch-processor (MIT License)
 # 借鉴内容: chunking preset 分档设计思路
@@ -1157,6 +1175,27 @@ class ProcessingEngine:
         # strip 为纯 regex 无调用限制, 整文件对任意体量都安全. 标点修复开关在此
         # 链式生效 (皆本地零成本, 选项不静默失效; md 先剥标记, 标点上下文更准).
         if self.config.prompt_mode == "md_local":
+            # v5.4.3 (F7): 体积上限。md_local 整文件不切块且**无上限**,
+            # 拖进一个巨型日志/JSON 就会长时间不返回。守卫后 strip_markdown
+            # 本身已是线性, 但 200 万字仍是秒级 —— 必须先挡住。
+            # ⚠ MD_LOCAL_MAX_CHARS = 2_000_000 是**初始拍定值, 未做真实样本校准**
+            # (AGENTS.md §34 口径)。放宽前请重新标注。
+            #
+            # 取消粒度说明: strip_markdown 是**单次同步调用**, 这里不做块内即时
+            # 取消 —— 实际可取消点是"单次 strip_markdown 之间"。200 万字在守卫
+            # 后仍是秒级, 用户可感知的等待窗口就这一次; 块内即时取消列入延后。
+            if len(text) > MD_LOCAL_MAX_CHARS:
+                name = (self.tasks[task_key].file_path.name
+                        if task_key in self.tasks else task_key)
+                msg = (f"文件过大 ({len(text):,} 字符), 超过 md_local 上限 "
+                       f"{MD_LOCAL_MAX_CHARS:,} 字符; md_local 整文件处理不切块, "
+                       f"请改用「整篇校对」或先拆分文件")
+                self._log(f"[清洗] {name}: {msg}")
+                # 抛不可重试错误, 由调用方的既有 except 分支统一收尾
+                # (立即 FAILED, 不烧重试)。**不**在这里自己调 _finalize_failed
+                # 再 return —— _call_api_stream 的返回契约是三元组, 返回 None
+                # 会让调用方的解包炸掉 (实测 TypeError: cannot unpack NoneType)。
+                raise _FileTooLargeError(msg)
             cleaned = strip_markdown(text)
             if self.config.punct_fix:
                 cleaned, punct_stats = fix_punctuation_ex(cleaned, self._punct_options())
