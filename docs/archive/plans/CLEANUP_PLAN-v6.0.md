@@ -217,7 +217,7 @@ test_web_backend.py: 779 pass
 
 **风险**: 🟢 低 — 改动小且边界清晰
 **耗时**: 15-30 min
-**状态**: ✅ 完成 (commit `9e0c0a4` 2026-09-08; 2026-09-27 核对回填 — `tests/` 与 `tools/` 目录均已就位)
+**状态**: ✅ 完成 (commit `8d26baf` 2026-09-08; 2026-09-27 核对回填 — 11 个 `test_*.py` 进 `tests/`, 2 个 `.md` 进 `docs/`, 改动 17 文件)
 
 ### Phase C1: 拆 `test_web_backend.py`
 
@@ -243,7 +243,7 @@ test_web_backend.py: 779 pass
 
 **风险**: 🟢 低 — 拆完重跑,出问题好定位
 **耗时**: 1-2 h
-**状态**: ✅ 完成 (commit `9e0c0a4` 2026-09-08, 拆为 7 个 `test_web_backend_*.py`; 2026-09-27 核对回填 — 当前 master 上为 6 个, 后经 v5.3/v5.4 增补)
+**状态**: ✅ 完成 (commit `9e0c0a4` 2026-09-08, 拆为 7 个 `test_web_backend_*.py`; 2026-09-27 核对回填 — 当前 master 上仍是这 7 个, 自 C1 起未增减)
 
 ### Phase C2: 拆 `web/app.js`
 
