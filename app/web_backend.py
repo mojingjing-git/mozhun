@@ -106,7 +106,7 @@ _DEAI_REVISE_LIMIT = 20000
 # 业务层 + 前端层统一从 utils 导入, 避免 label/max_chars 漂移。
 
 # ====== 事件推送通道参数 (v5.4.3 F8 / D-10) ======
-# ⚠ 以下**五个**数均为**初始拍定值, 未做真实样本校准** (AGENTS.md §34 口径)。
+# ⚠ 以下**六个**数均为**初始拍定值, 未做真实样本校准** (AGENTS.md §34 口径)。
 #    严禁在文档/注释里编造"实测平均 N"之类不存在的校准数据来源。
 #
 # flush 节流间隔: 33ms (30 FPS), 沿用 v4.1.4 起的不变值, F8 不改。
@@ -1942,22 +1942,28 @@ class Backend:
         若失败的正是最后一批 (onTaskComplete), 之后再无 _push, 事件永不送达,
         正是本项要修的 bug。调用方必须已持锁 (本方法不自己加锁, 避免同线程死锁)。
 
-        状态更新严格排在 Timer 建好之后, 且 start 失败会回滚 _push_pending ——
+        状态更新一律包在 try 里, 任何异常都回滚 _push_pending ——
         维持不变量「_push_pending 为 True <=> 确实有一个 Timer 在飞」。
-        顺序写反 (先置 True 再求值参数) 时, 参数求值一旦抛异常, 通道会被永久
-        焊死: 之后每个 _push 都在 _push_pending 短路, 事件只进 buffer 永不投递,
-        且全程零日志。这个顺序是 16b016d 的 BLOCKER B2, 已加回归锁死。
+        这是 16b016d 的 BLOCKER B2: 当时是"先置 True 再求值 Timer 参数"且无
+        守卫, 参数求值一旦抛异常 (streak 极大时 2**over 溢出), 通道被永久焊死:
+        之后每个 _push 都在 _push_pending 短路, 事件只进 buffer 永不投递,
+        且全程零日志。
+        两层防线: ① 指数钳位让 _flush_interval 不可能抛 (治本);
+        ② 这里的回滚保证 arm 路径上**任何**异常都不会留下半更新状态 (兜底)。
+        求值排在建 Timer 之前是第三层, 但不是承重墙 —— 删了它行为不变,
+        所以不单独给它写断言 (那只会制造"看起来有覆盖"的假象)。
         """
         if self._push_pending:
             return          # 已有 Timer 在飞, 不能再起一个, 否则双重 flush
-        interval = self._flush_interval()      # 先求值: 抛异常则状态纹丝不动
         self._push_pending = True
-        self._last_push_time = time.time()
         try:
+            interval = self._flush_interval()
+            self._last_push_time = time.time()
             threading.Timer(interval, self._flush).start()
         except Exception as e:
-            self._push_pending = False         # 回滚: 绝不能停在"已 arm 但无 Timer"
-            logger.error(f"[push] flush Timer 启动失败, 通道保持可用: "
+            # 绝不能停在"已 arm 但无 Timer"的状态 —— 那等于永久焊死通道
+            self._push_pending = False
+            logger.error(f"[push] arm flush Timer 失败, 已回滚 (通道保持可用): "
                          f"{type(e).__name__}: {e}")
 
     def _trim_push_buffer_locked(self):

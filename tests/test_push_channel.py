@@ -420,51 +420,6 @@ def test_f8_backoff_never_overflows():
     check("B2 指数钳位常量是 32", _PUSH_BACKOFF_EXP_MAX == 32, str(_PUSH_BACKOFF_EXP_MAX))
 
 
-def test_f8_pending_never_stuck_on_arm_failure():
-    """不变量: _push_pending 为 True <=> 确实有一个 Timer 在飞。
-
-    arm 路径上一旦抛异常又没回滚, 通道就永久焊死 (B2 的机理)。
-    这里让 Timer.start() 直接抛, 检查 _push 仍能继续 arm、事件仍能送出。
-    """
-    from app.web_backend import Backend
-
-    b = Backend(window=None)
-    calls = {}
-    b._window = make_ok_window(calls)
-
-    import threading as _t
-    real_timer = _t.Timer
-    boom = {"on": True}
-
-    class BoomTimer(real_timer):
-        def start(self):
-            if boom["on"]:
-                raise RuntimeError("无法起线程")
-            super().start()
-
-    b._push_fail_streak = 5000        # 退避深处, 确保会走 arm
-    import app.web_backend as wbmod
-    orig = wbmod.threading.Timer
-    wbmod.threading.Timer = BoomTimer
-    try:
-        boom["on"] = True
-        b._push("onLog", "arm-失败")
-        check("B2 arm 抛异常后 _push_pending 已回滚", b._push_pending is False,
-              f"pending={b._push_pending} (True = 通道焊死)")
-        check("B2 arm 抛异常后事件仍在 buffer (没被吞)", len(b._push_buffer) == 1,
-              str(b._push_buffer))
-        boom["on"] = False            # 恢复正常
-        b._push_fail_streak = 0       # 退出退避, 让 flush 很快发生
-        b._push("onTaskComplete", {"task_id": "AFTER"})
-        check("B2 恢复后能重新 arm", b._push_pending is True, str(b._push_pending))
-    finally:
-        wbmod.threading.Timer = orig
-    time.sleep(0.3)
-    check("B2 恢复后事件真的送达",
-          calls["count"] >= 1 and '"AFTER"' in calls["js"][-1],
-          f"count={calls['count']}")
-
-
 def test_f8_arm_is_idempotent():
     """L7: arm 幂等守卫要有**定向**断言, 不能只靠 buffer 上限用例顺带撞到。
 
@@ -504,6 +459,54 @@ def test_f8_arm_is_idempotent():
           f"累计建了 {len(built)} 个 Timer (2 = 幂等守卫失效, 同一批会被两个 Timer 各投一次)")
     check("L7 B 仍留在 buffer 等这一轮一起送",
           b._push_buffer == [("onLog", "A"), ("onLog", "B")], str(b._push_buffer))
+
+
+def test_f8_arm_is_exception_safe():
+    """B2 兜底层: arm 路径上**任何**异常都不得把通道留在半更新状态。
+
+    不变量: _push_pending 为 True <=> 确实有一个 Timer 在飞。
+    16b016d 的 BLOCKER 就是破坏它 —— "先置 pending 再求值 Timer 参数"且无守卫,
+    参数求值抛异常 (streak 极大时 2**over 溢出) 时通道被永久焊死, 零日志。
+
+    两处注入点各测一遍: ① _flush_interval 求值抛 (B2 原始触发方式)
+    ② Timer.start() 抛 (线程起不来的极端情况)。第三轮复审纠正了我上一轮
+    "顺序不可观测所以不覆盖"的说法: 用实例属性桩即可让这条路径可观测。
+    """
+    from app.web_backend import Backend
+
+    for where in ("interval", "start"):
+        b = Backend(window=None)
+        calls = {}
+        b._window = make_ok_window(calls)
+
+        import app.web_backend as wbmod
+        orig_timer = wbmod.threading.Timer
+        if where == "interval":
+            def boom():
+                raise OverflowError("模拟退避计算抛异常")
+            b._flush_interval = boom
+        else:
+            class BoomTimer(orig_timer):
+                def start(self):
+                    raise RuntimeError("模拟线程起不来")
+            wbmod.threading.Timer = BoomTimer
+        try:
+            b._push("onLog", "arm-炸")
+            check(f"B2({where}) arm 抛异常后 _push_pending 已回滚",
+                  b._push_pending is False,
+                  f"pending={b._push_pending} (True = 通道焊死)")
+            check(f"B2({where}) arm 抛异常后事件仍在 buffer (没被吞)",
+                  b._push_buffer == [("onLog", "arm-炸")], str(b._push_buffer))
+            if where == "interval":
+                del b._flush_interval
+            wbmod.threading.Timer = orig_timer
+            b._push("onTaskComplete", {"task_id": f"RECOVER-{where}"})
+        finally:
+            wbmod.threading.Timer = orig_timer
+        time.sleep(0.3)
+        check(f"B2({where}) 恢复后事件真的送达",
+              calls["count"] >= 1 and f"RECOVER-{where}" in calls["js"][-1],
+              f"count={calls['count']}")
 
 
 def test_f8_backoff_not_hard_disable():
