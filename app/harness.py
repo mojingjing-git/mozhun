@@ -114,31 +114,46 @@ TOOL_DISCIPLINE = """# 工具使用纪律
 # 背景: MiniMax 等推理模型走 tools 调用时仍会消耗上万思维链 token, 偶发不产出
 # tool_calls 而是在 content 里自答 "无需修改" —— 但真实原因是它把整轮推理都
 # 放进了 content, 工具链根本没被触发。若一律判成功, 用户看到 "完成但零改动"。
-# 守卫: content 若包含编辑载体特征或明显不是 "无需修改", 判可疑 → raise 让
-# 通用重试链再试一次 (默认重试 1 次, 耗尽才 FAILED — 宁可失败也不静默放过)。
-_NOOP_CONTENT = "无需修改"
+#
+# v5.4.3 (F10) 口径变更: 从「白名单精确匹配」改为「编辑载体拦截 + 长度阈值」。
+# 旧实现只认字面量 _NOOP_CONTENT 且要求它出现在 content 里、且总长 <= 40。
+# 实测模型用任何**别的措辞**报告"没找到错误"都会被判可疑:
+#   '我已仔细检查全文，未发现需要修改之处。'      -> 旧判据 True (误判)
+#   '全文检查完毕，没有发现问题。'               -> 旧判据 True (误判)
+#   '经过逐句核查，这篇文章没有明显的错别字或标点错误。' -> 旧判据 True (误判)
+#   '好的。'                                -> 旧判据 True (误判)
+# 后果: 本该零改动的文件 -> raise -> 烧重试 -> **整文件 FAILED**。
+# 而"全文无错"恰是逐条校对轨最该成功的结局。
+# 短语白名单作废的另一个理由: "没有错"不是"没有**明显的**错别字"的子串, 补
+# 词表补不完 —— 模型的措辞空间远大于任何能穷举的短语表。
 _EDIT_CONTENT_MARKERS = ("old_text", "new_text")
-# 含"无需修改"的合法回复上限: 超过说明混了大段推理/解释, 不是干净的无修改答复
+# 短答复长度上限: 超过说明混了大段推理/解释, 不是干净的"无需修改"答复。
 _NOOP_CONTENT_MAX_LEN = 40
+# ⚠ 40 = 初始拍定值, 未做真实样本校准 (AGENTS.md §34 口径)。放宽需重新标注。
 
 
 def content_suspicious_noop(content: str) -> bool:
-    """content 非 tool_call 回复的"可疑无需修改"判定。
+    """content 非 tool_call 回复的"可疑无需修改"判定。 (v5.4.3 F10 改判据)
 
     True = 应重试; False = 合法的"无需修改"答复, 放行。
 
-    判定顺序:
+    判定顺序 (F10 新口径):
     1. 空 / 仅空白 → 放行 (模型确实没说话, 走既有 no-op 路径)
-    2. 含编辑载体字面量 (old_text / new_text) → 可疑 (把编辑写进正文)
-    3. 含"无需修改"且长度 <= _NOOP_CONTENT_MAX_LEN → 放行 (含句号/括号等补充说明)
-    4. 其余 (无"无需修改"标记, 或标记混在大段文本里) → 可疑 → 走重试链
+    2. 含编辑载体字面量 (old_text / new_text) → **一律可疑**, 无论多长
+       (v5.4.1 的核心防线, 保留)
+    3. 其余: 长度 > _NOOP_CONTENT_MAX_LEN → 可疑 (混了大段推理);
+       短于等于 → **放行**, 不再查任何短语
+
+    短答复一律放行是有意的取舍: 一旦靠短语表判断, 漏一种措辞就误判 FAILED,
+    而误判的代价 (用户看到红色失败 + 真实结果被丢弃) 远大于放行一个可疑空结果。
+    长文本 (混大段推理) 仍会被拦, 所以 v5.4.1 要消灭的"推理倾倒"没有漏网。
     """
     c = (content or "").strip()
-    if not c or c == _NOOP_CONTENT:
+    if not c:
         return False
     if any(m in c for m in _EDIT_CONTENT_MARKERS):
         return True
-    return not (_NOOP_CONTENT in c and len(c) <= _NOOP_CONTENT_MAX_LEN)
+    return len(c) > _NOOP_CONTENT_MAX_LEN
 
 
 # 分块场景附加说明 (_stream_chunked 注入): 上下文只是参照物, 不可编辑。

@@ -2065,6 +2065,10 @@ const App = {
       SKIPPED_BAD_ARGS: '参数无效',
       WARN_EDIT_CAP: '建议数超限',
       WARN_RATIO: '改动比例异常',
+      // v5.4.3 (F10): 模型连续未走工具链、已放行不判失败。
+      // 不补这条的话 `STATUS_LABEL[st] || st` 会把裸英文串渲染给用户。
+      // 样式无需另改: 上面 `st.indexOf('WARN') === 0` 已经自动进 audit-warn。
+      WARN_NOOP_SUSPICIOUS: '未走工具链（已放行）',
     };
     const rows = audit.map(e => {
       const st = e.status || '';

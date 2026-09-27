@@ -39,6 +39,8 @@ from app.md_strip import strip_markdown
 from app.think_strip import ThinkFilter, count_reasoning_fields, has_think_residue
 # v5.1.0: harness 化 — Edit 工具链 (LLM 返回编辑建议, 客户端精确匹配应用)
 from app.harness import (
+    PREVIEW_LIMIT as _PREVIEW_LIMIT,   # v5.4.3 (F10): 放行告警的 note 截断长度
+    _make_audit,
     content_suspicious_noop,
     CHUNK_SCOPE_NOTE,
     EDIT_TOOLS,
@@ -153,6 +155,11 @@ class ProcessingEngine:
         # v5.3.0: 本会话内被模型输出上限截断的文件 (finish_reason="length")。
         # 与 file_audits 同层: 会话内存态, 不落断点; 每次 _call_api_stream 重建。
         self.truncated_keys: set[str] = set()
+        # v5.4.3 (F10): 每文件的"可疑无 tool_calls"计数 (file_key -> 已可疑次数)。
+        # 用来实现"可疑 -> 重试一次 -> 仍可疑则放行"的兜底层。
+        # ⚠ 必须按 task_key 索引, **不能用引擎级布尔** —— 否则并发校对多个文件时,
+        #   文件 B 会继承文件 A 已经用掉的预算, 首次可疑就直接放行 (等于没有兜底)。
+        self._harness_suspect: dict[str, int] = {}
 
         self.on_file_done: Optional[Callable[[str, str], None]] = None
         self.on_file_start: Optional[Callable[[str], None]] = None
@@ -525,6 +532,13 @@ class ProcessingEngine:
         # v4.1.8.2 (审计 E6): max_retries<0 会让 range() 为空 → 函数静默返回,
         # 无状态/无断点/无回调, UI 永远"处理中". 输入侧已钳制, 引擎兜底.
         max_retries = max(0, int(self.config.max_retries or 0))
+
+        # v5.4.3 (F10): 每文件重跑前清空可疑计数。
+        # ⚠ 位置要紧 —— 必须在 `for attempt` **之前**, 且**不能**放
+        # _call_api_stream 入口: 那里每个 attempt 都会执行一次, 会把计数抹成 0,
+        # 导致"第二次仍可疑则放行"这条分支**永不可达** (v3 设计的这个错误)。
+        # 语义 = 「每文件 N 次预算」, 而不是「每 chunk N 次」。
+        self._harness_suspect.pop(key, None)
 
         for attempt in range(max_retries + 1):
             # v4.1.8.1 (审计 B2): attempt 顶部的取消点同样走完整收尾, 不再裸置状态
@@ -959,21 +973,54 @@ class ProcessingEngine:
         # v5.4.1 (用户烟测 Q1): 0 tool_calls 防误报守卫 — 推理模型偶发不产
         # tool_calls 而把推理/答复写进 content。守卫判可疑 → raise 走通用重试链
         # (默认重试 1 次后 FAILED), 而不是静默判 "无需修改"。
+        # tool_calls 而把推理/答复写进 content。
+        #
+        # v5.4.3 (F10): 可疑**不直接 FAILED** —— 记一次可疑, 走一轮重试;
+        # 重试后仍可疑则**放行** (落 corrected = text 的正常无修改路径)。
+        # 理由: "全文无错"是逐条校对最常见的正常结局, 因措辞不匹配判 FAILED 的
+        # 代价 (用户看到红色失败 + 真实结果被丢弃) 远大于放行一个可疑空结果的成本。
+        noop_audit: Optional[dict] = None      # v5.4.3 (F10) 放行时的告警条目
         if not edits:
             _content = getattr(message, "content", None) or ""
             if content_suspicious_noop(_content):
                 preview = _content.strip().replace("\n", " ")[:80]
+                # 重试预算 = 实际可用的重试次数。
+                # ⚠ 计划 v2 这里写的是 max(1, max_retries) —— 那样 max_retries=0
+                # 时首轮仍会 raise, 而**根本没有第二次机会**, 结果必然 FAILED,
+                # 正是 F10 要消除的那份危害。取 max(0, ...) 才是"有几次重试就
+                # 拦几次, 之后放行"。
+                retry_budget = max(0, int(self.config.max_retries or 0))
+                suspect_times = self._harness_suspect.get(task_key, 0)
+                if suspect_times < retry_budget:
+                    self._harness_suspect[task_key] = suspect_times + 1
+                    self._log(
+                        f"[harness] {name}: 模型未产出编辑但 content 非空 "
+                        f"({len(_content)} 字符, 疑似未走工具链), "
+                        f"第 {suspect_times + 1} 次可疑 → 重试. 预览: {preview}"
+                    )
+                    raise ValueError(
+                        f"harness 模型未走工具链 (content {len(_content)} 字符, "
+                        f"无 tool_calls) — 疑似推理模型把答复写进了正文"
+                    )
+                # 预算耗尽 → 放行, 落入下方 corrected = text 的正常无修改路径
                 self._log(
-                    f"[harness] {name}: 模型未产出编辑但 content 非空 "
-                    f"({len(_content)} 字符, 疑似未走工具链) → 重试. 预览: {preview}"
+                    f"[harness] {name}: 连续 {suspect_times} 次可疑无 tool_calls, "
+                    f"放行 (不判定为失败) — 预览: {preview}"
                 )
-                raise ValueError(
-                    f"harness 模型未走工具链 (content {len(_content)} 字符, "
-                    f"无 tool_calls) — 疑似推理模型把答复写进了正文"
+                # ⚠ 必须写 audit 条目: 否则 chunk_audit 为空 → file_audits[key]
+                # 为空 → audit_has_warnings 为 False → 前端 renderAuditPanel 直接
+                # panel.hidden=true, 用户只看到绿色"完成、零告警" ——
+                # 恰是 v5.4.1 要消灭的失败态。
+                noop_audit = _make_audit(
+                    -1, "WARN_NOOP_SUSPICIOUS",
+                    f"模型连续 {suspect_times} 次未产出 tool_calls 且 content 非空, "
+                    f"已放行不判失败", note=preview[:_PREVIEW_LIMIT],
                 )
 
         # 本块 audit = 参数解析失败条目 + apply 回执 (重编号保证 index 连续)
         chunk_audit: list[dict] = list(parse_audit)
+        if noop_audit:            # v5.4.3 (F10): 放行告警必须进 audit, 否则前端
+            chunk_audit.append(noop_audit)   # 会 panel.hidden=true 藏掉整件事
         if edits:
             corrected, round_audit = apply_edits(text, edits)
             chunk_audit.extend(round_audit)

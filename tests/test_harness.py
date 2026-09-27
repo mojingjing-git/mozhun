@@ -439,12 +439,23 @@ def test_engine_empty_edits_noop_success():
 
 
 def test_engine_suspicious_noop_content_retries():
-    """v5.4.1 (用户烟测 Q1): 推理模型 0 tool_calls + content 长文本 → 判可疑,
-    raise 走重试链 (max_retries=0 → FAILED), 不再静默判"无需修改"成功."""
-    print("\n--- 引擎可疑 no-op content 守卫 ---")
+    """v5.4.1 (Q1) + v5.4.3 (F10): 推理模型 0 tool_calls + 长 content → 可疑。
+
+    **语义在 F10 变过一次** (这是本用例第二次改):
+    - v5.4.1: 可疑 → raise → 重试链耗尽 → FAILED ("宁可失败也不静默放过")
+    - v5.4.3: 可疑 → 重试一轮 → 仍可疑则**放行**, 并落一条
+      WARN_NOOP_SUSPICIOUS 到 audit。
+    放行不等于"静默放过": 前端 renderAuditPanel 在 audit 非空时**会显示**面板
+    ("未走工具链（已放行）" + 预览), 恰恰是 v5.4.1 想让用户看见的那件事。
+    代价对比: 因措辞不匹配判 FAILED = 用户看到红色失败 + 真实结果被丢弃。
+    """
+    print("\n--- 引擎可疑 no-op content 守卫 (F10 放行兜底) ---")
     from app.utils import ProjectConfig, TaskStatus
 
-    long_reasoning = "经过仔细检查，这段文字在语法和用词上都没有问题，因此不需要进行任何修改，可以直接使用。"
+    long_reasoning = ("经过仔细检查，这段文字在语法和用词上都没有问题，"
+                      "因此不需要进行任何修改，可以直接使用。")
+
+    # 场景 A: max_retries=0 -> 没有重试机会, **首轮即放行** (不 raise, 不 FAILED)
     client = _FakeHarnessClient([
         _FakeCompletion(tool_calls=[], content=long_reasoning),
     ])
@@ -452,17 +463,94 @@ def test_engine_suspicious_noop_content_retries():
                         prompt_mode="strict", max_retries=0)
     engine, done, key = _run_engine(cfg, "他表视很好。", client)
     task = engine.tasks[key]
-    check("可疑 content → FAILED (不静默成功)", task.status == TaskStatus.FAILED,
-          str(task.status))
-    check("error 含工具链语义", "工具链" in (task.result.error or ""), task.result.error)
+    check("F10 max_retries=0: 可疑 content 不再 FAILED",
+          task.status == TaskStatus.COMPLETED, str(task.status))
+    check("F10 max_retries=0: 只调了 1 次 API (没有重试)",
+          len(client.calls) == 1, f"calls={len(client.calls)}")
+    check("F10 放行后 corrected = 原文", task.result.corrected == "他表视很好。")
+    audit = engine.file_audits.get(key, [])
+    check("F10 放行必须落一条 WARN_NOOP_SUSPICIOUS 审计",
+          any(e["status"] == "WARN_NOOP_SUSPICIOUS" for e in audit),
+          str([e["status"] for e in audit]))
+    check("F10 放行审计非空 -> 前端会显示面板 (不是静默放过)",
+          len(audit) > 0 and task.result.warnings is True,
+          f"audit={len(audit)} warnings={task.result.warnings}")
 
-    # 对照: 真正的 "无需修改" 仍判成功
+    # 场景 B: max_retries=1 -> 先 raise 重试一次, 第二次仍可疑则放行
+    client_b = _FakeHarnessClient([
+        _FakeCompletion(tool_calls=[], content=long_reasoning),
+        _FakeCompletion(tool_calls=[], content=long_reasoning),
+    ])
+    cfg_b = ProjectConfig(api_base="http://x", api_key="k", model="m",
+                          prompt_mode="strict", max_retries=1)
+    engine_b, _, key_b = _run_engine(cfg_b, "他表视很好。", client_b)
+    task_b = engine_b.tasks[key_b]
+    check("F10 max_retries=1: 重试一次后放行, 不 FAILED",
+          task_b.status == TaskStatus.COMPLETED, str(task_b.status))
+    check("F10 max_retries=1: 确实重试过一次", len(client_b.calls) == 2,
+          f"calls={len(client_b.calls)}")
+
+    # 对照: 真正的 "无需修改" 仍判成功且零审计
     client2 = _FakeHarnessClient([
         _FakeCompletion(tool_calls=[], content="无需修改"),
     ])
     engine2, done2, key2 = _run_engine(cfg, "完美文本。", client2)
     task2 = engine2.tasks[key2]
     check("真'无需修改'仍判成功", task2.status == TaskStatus.COMPLETED, str(task2.status))
+    check("真'无需修改'不产生可疑告警",
+          engine2.file_audits.get(key2, []) == [],
+          str(engine2.file_audits.get(key2)))
+
+
+def test_v543_f10_suspect_budget_is_per_file():
+    """v5.4.3 (F10): 可疑计数按 task_key 索引 —— 并发文件各自有独立预算。
+
+    若用引擎级布尔/计数, 文件 B 会继承文件 A 已用掉的预算, 首次可疑就直接放行
+    (等于没有兜底)。本用例并发跑 2 个文件, 断言**两文件各自都真的重试过一次**。
+    """
+    print("\n--- v5.4.3 (F10): 可疑预算按文件隔离 ---")
+    from app.utils import ProjectConfig, TaskStatus
+
+    long_reasoning = ("经过逐句核查, 全文没有发现错别字或者标点方面的错误, "
+                      "因此判定无需任何修改, 保持原样提交即可。")
+    check("可疑夹具过阈值", len(long_reasoning) > 40, f"len={len(long_reasoning)}")
+
+    client = _FakeHarnessClient([
+        _FakeCompletion(tool_calls=[], content=long_reasoning),
+        _FakeCompletion(tool_calls=[], content=long_reasoning),
+        _FakeCompletion(tool_calls=[], content=long_reasoning),
+        _FakeCompletion(tool_calls=[], content=long_reasoning),
+    ])
+    cfg = ProjectConfig(api_base="http://x", api_key="k", model="m",
+                        prompt_mode="strict", max_retries=1, concurrency=2)
+    tmp_a, tmp_b = _make_tmp("他表视很好。"), _make_tmp("在再开会。")
+
+    async def _run():
+        with patch("app.processor.AsyncOpenAI", return_value=client):
+            from app.processor import ProcessingEngine
+            engine = ProcessingEngine(cfg)
+            engine.prepare_tasks([tmp_a, tmp_b])
+            await engine.run_async()
+        return engine
+
+    try:
+        engine = asyncio.run(_run())
+        statuses = {str(t.file_path): t.status for t in engine.tasks.values()}
+        check("F10 并发 2 文件都放行成功 (无 FAILED)",
+              all(s == TaskStatus.COMPLETED for s in statuses.values()),
+              str({Path(k).name: str(v) for k, v in statuses.items()}))
+        # 每文件各 2 次尝试 (首发 raise + 重试放行) = 共 4 次
+        check("F10 每文件各有独立预算: 共 4 次调用",
+              len(client.calls) == 4,
+              f"calls={len(client.calls)} (引擎级共享预算只会发 3 次)")
+        audits = [engine.file_audits.get(k, []) for k in engine.file_audits]
+        check("F10 两个文件各自都落了放行告警",
+              len(audits) == 2 and all(
+                  any(e["status"] == "WARN_NOOP_SUSPICIOUS" for e in a) for a in audits),
+              str([[e["status"] for e in a] for a in audits]))
+    finally:
+        tmp_a.unlink(missing_ok=True)
+        tmp_b.unlink(missing_ok=True)
 
 
 def test_content_suspicious_noop_unit():
@@ -476,8 +564,26 @@ def test_content_suspicious_noop_unit():
     check("'无需修改，原文准确无误。' 放行", f("无需修改，原文准确无误。") is False)
     check("含 old_text 可疑", f("old_text: xxx") is True)
     check("含 new_text 可疑", f("new_text: yyy") is True)
-    check("长解释文本可疑", f("这段文字写得很好，没有错误。") is True)
+    # v5.4.3 (F10 / D-11): 旧断言 "长解释文本可疑" 的夹具只有 14 字, 用例叫"长"
+    # 但内容不长, **本就名不副实**。新口径下短文本一律放行, 该断言必然红。
+    # 处置是改夹具 (不是改判据): 换成真正的 >40 字推理文本, 并重命名。
+    long_reasoning = (
+        "我逐句检查了全文的错别字与标点使用, 没有发现任何需要修改的地方, "
+        "因此判定无需调整, 保持原样提交。"
+    )
+    check("长推理文本 (>40字, 无编辑载体) 可疑", f(long_reasoning) is True)
+    check("长推理文本夹具真的过阈值 (否则断言空洞通过)",
+          len(long_reasoning) > 40, f"len={len(long_reasoning)}")
     check("'无需修改' 混在大段推理里可疑", f("无需修改" + "。" * 60) is True)
+
+    # v5.4.3 (F10): 短语白名单作废, 短自然措辞一律放行。
+    # 旧判据下下面 4 条**全部**判可疑 → raise → 烧重试 → 整文件 FAILED,
+    # 而"全文无错"恰是逐条校对轨最该成功的结局。
+    for s in ("好的。", "看起来没问题。", "全文检查完毕，没有发现问题。",
+              "我已仔细检查全文，未发现需要修改之处。"):
+        check(f"短自然措辞放行: {s[:12]}", f(s) is False, repr(s))
+    # 编辑载体字面量无论长短一律可疑 (v5.4.1 核心防线)
+    check("短文本含 old_text 仍可疑", f("old_text:甲") is True)
 
 
 def test_engine_partial_success_warnings():
@@ -799,6 +905,7 @@ def main():
         test_engine_strict_harness_happy_path,
         test_engine_empty_edits_noop_success,
         test_engine_suspicious_noop_content_retries,
+        test_v543_f10_suspect_budget_is_per_file,
         test_content_suspicious_noop_unit,
         test_engine_partial_success_warnings,
         test_engine_all_failed_failed,

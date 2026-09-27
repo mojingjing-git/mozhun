@@ -632,6 +632,50 @@ def _check_dialog_keyboard(page, out: Path) -> None:
     page.screenshot(path=str(out / "1440x900-9-dialog-keyboard.png"))
 
 
+def _check_audit_labels(page, out: Path) -> None:
+    """v5.4.3 (F10): 改动清单的状态标签必须有人话, 不能渲染裸英文 status。
+
+    STATUS_LABEL 漏一个词, `STATUS_LABEL[st] || st` 就会把裸 status 串直接
+    显示给用户 (e.g. WARN_NOOP_SUSPICIOUS)。这条只能在前端验 —— Python 门禁
+    看不见 app.js 的字面量表, 少了就是零覆盖。
+    """
+    print("\n--- v5.4.3: 改动清单状态标签 ---", flush=True)
+    labels = page.evaluate("""() => {
+      // 直接从 App 的渲染函数里取不到常量表 (它是函数内局部变量),
+      // 所以走真实渲染: 造一条 audit 渲染面板, 读回面板文本。
+      App.workspaceTrack = 'harness';
+      App.tasks = [{path: '/tmp/审计标签冒烟.txt', status: 'completed',
+                    original: '原文一行', corrected: '改后一行', error: '',
+                    workflow: 'harness', warnings: true,
+                    audit: [
+                      {index: 0, status: 'OK', reason: '修正错别字',
+                       old_preview: '表视', new_preview: '表示', note: ''},
+                      {index: -1, status: 'WARN_NOOP_SUSPICIOUS',
+                       reason: '模型连续 2 次未产出 tool_calls 且 content 非空, 已放行不判失败',
+                       old_preview: '', new_preview: '', note: '看起来没问题。'},
+                    ]}];
+      App.selectedFileKey = null;
+      App.renderFileList();
+      App.setView('home');
+      App.selectFile('/tmp/审计标签冒烟.txt');
+      const panel = document.getElementById('audit-panel');
+      const list = document.getElementById('audit-list');
+      return {hidden: panel ? panel.hidden : null,
+              text: list ? list.textContent : '',
+              html: list ? list.innerHTML : ''};
+    }""")
+    check("审计面板在有 audit 时显示", labels["hidden"] is False, str(labels["hidden"]))
+    check("WARN_NOOP_SUSPICIOUS 渲染为中文标签",
+          "未走工具链（已放行）" in labels["text"],
+          labels["text"][:200])
+    check("裸英文 status 没有漏到界面上",
+          "WARN_NOOP_SUSPICIOUS" not in labels["text"],
+          labels["text"][:200])
+    check("WARN_ 开头自动进告警样式 (无需另改 CSS)",
+          "audit-warn" in labels["html"], labels["html"][:200])
+    check("OK 条目仍是成功样式", "audit-ok" in labels["html"], labels["html"][:200])
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="墨准 v5.3 前端三视口冒烟")
     parser.add_argument("--out", default=str(ROOT / ".local" / "smoke-ui-v5.3"),
@@ -672,6 +716,7 @@ def main() -> int:
                 _check_api_panel(page, out)
                 _check_splitter_progress(page, out)
                 _check_dialog_keyboard(page, out)
+                _check_audit_labels(page, out)
                 check("页面无 JS 异常", not errs, str(errs[:3]))
             finally:
                 browser.close()
