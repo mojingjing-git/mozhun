@@ -237,16 +237,33 @@ const App = {
     iconEl.className = 'nav-icon' + (danger ? ' icon-error' : (icon === 'info' ? ' icon-info' : ''));
     btnP.className = 'dialog-primary' + (danger ? ' dialog-danger' : '');
     root.hidden = false;
+    // v5.4.3 (F12): 记住打开前的焦点, 关闭时归还。
+    // 顺序要紧: 必须在 btnP.focus() **之前**捕获 —— 之后捕获到的是刚被移过去的
+    // 主按钮, "归还"就变成了原地不动 (第一版就错在这, smoke_ui 照了出来)。
+    // 不归还的话, 点对话框正文空白处会让焦点落到 body, 此后 Enter 完全无响应
+    // (原生按钮激活需要焦点在按钮上), 用户会以为对话框坏了。
+    const prevFocus = document.activeElement;
     btnP.focus();
     return new Promise((resolve) => {
       const close = (result) => {
         root.hidden = true;
         document.removeEventListener('keydown', onKey, true);
+        // 归还焦点要在 resolve 之前, 且要防 prevFocus 已经从 DOM 移除
+        // (如对话框正是由它打开、而它自身已被清空), 否则 focus() 静默无效。
+        if (prevFocus && prevFocus.focus && document.contains(prevFocus)) {
+          try { prevFocus.focus(); } catch (e) { /* 元素已失效, 放弃归还 */ }
+        }
         resolve(result);
       };
       const onKey = (e) => {
         if (e.key === 'Escape') { e.stopPropagation(); close(false); }
-        else if (e.key === 'Enter') { e.stopPropagation(); close(true); }
+        // v5.4.3 (F12): 删掉 Enter -> close(true) 分支。
+        // 原实现在**捕获阶段**无条件解析为主按钮, 于是焦点在哪个按钮都执行主
+        // 按钮: Tab 到「取消」按 Enter 仍会清空全部文件 (clearFiles 的主按钮是
+        // danger), 焦点在「替换现有内容」按 Enter 却执行「追加到末尾」
+        // (_applyDroppedText 的三命令), 且第三按钮键盘永远选不中。
+        // 改由 <button> 原生激活处理焦点所在按钮 —— Enter 只作用于 focus 元素。
+        // 已确认 web/ 全仓无第二个 Enter 监听器, 删掉 stopPropagation 不会泄漏快捷键。
       };
       btnP.onclick = () => close(true);
       btnS.onclick = () => close(false);

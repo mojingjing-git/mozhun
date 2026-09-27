@@ -552,6 +552,86 @@ def _check_splitter_progress(page, out: Path) -> None:
     page.screenshot(path=str(out / "1440x900-8-splitter-progress.png"))
 
 
+def _check_dialog_keyboard(page, out: Path) -> None:
+    """v5.4.3 (F12): Enter 只作用于焦点所在按钮, 且关闭后归还焦点。
+
+    修复前 onKey 在**捕获阶段**无条件 close(true): Tab 到「取消」按 Enter 仍会
+    执行主按钮 (clearFiles 的主按钮是 danger —— 清空全部文件),
+    _applyDroppedText 的第三按钮「替换现有内容」键盘永远选不中。
+
+    用例用 page.focus() 直接把焦点放到目标按钮, **不用 Tab**:
+    DOM 顺序是 secondary -> close -> primary, btnP.focus() 落在最后一个,
+    Tab 会把焦点直接移出对话框, 断言就落空了 (计划 v1 的用例就错在这)。
+    """
+    print("\n--- v5.4.3: 对话框键盘可达性 ---", flush=True)
+    page.set_viewport_size({"width": 1440, "height": 900})
+    page.evaluate("() => { window.__dlg = null; }")
+
+    def open_dialog():
+        page.evaluate("""() => {
+          window.__dlg = App.showConfirmDialog({
+            title: 'F12 键盘', body: '正文',
+            primaryText: '主按钮', closeText: '第三按钮', secondaryText: '次按钮',
+            icon: 'info',
+          });
+        }""")
+        page.wait_for_selector("#dialog-root:not([hidden])", timeout=5000)
+
+    # 焦点在 secondary + Enter -> 必须走 secondary (false), 不能是主按钮
+    open_dialog()
+    page.focus("#dialog-btn-secondary")
+    page.keyboard.press("Enter")
+    page.wait_for_function("() => window.__dlg !== null", timeout=5000)
+    check("焦点在次按钮按 Enter -> 执行次按钮", page.evaluate("() => window.__dlg") is False,
+          repr(page.evaluate("() => window.__dlg")))
+
+    # 焦点在第三按钮 + Enter -> 第三按钮必须键盘可达
+    open_dialog()
+    page.focus("#dialog-btn-close")
+    page.keyboard.press("Enter")
+    page.wait_for_function("() => window.__dlg !== null", timeout=5000)
+    check("第三按钮键盘可达 (Enter 生效)",
+          page.evaluate("() => window.__dlg") == "close",
+          repr(page.evaluate("() => window.__dlg")))
+
+    # 焦点在 primary + Enter -> 走主按钮
+    open_dialog()
+    page.focus("#dialog-btn-primary")
+    page.keyboard.press("Enter")
+    page.wait_for_function("() => window.__dlg !== null", timeout=5000)
+    check("焦点在主按钮按 Enter -> 执行主按钮",
+          page.evaluate("() => window.__dlg") is True,
+          repr(page.evaluate("() => window.__dlg")))
+
+    # Escape 行为不变
+    open_dialog()
+    page.keyboard.press("Escape")
+    page.wait_for_function("() => window.__dlg !== null", timeout=5000)
+    check("Escape 仍然关闭并返回 false", page.evaluate("() => window.__dlg") is False,
+          repr(page.evaluate("() => window.__dlg")))
+
+    # 焦点归还: 打开前焦点在某个按钮上, 关闭后应回到它
+    restored = page.evaluate("""async () => {
+      // 触发元素必须**可聚焦**: disabled 的 button 拿不到焦点 (第一版用
+      // #btn-start 就是这么翻车的, before 直接 False)。侧栏 nav-item 常驻可见。
+      const btn = document.querySelector('.nav-item[data-nav-key="api"]');
+      btn.focus();
+      const before = document.activeElement === btn;
+      const p = App.showConfirmDialog({title: '焦点归还', body: '正文',
+        primaryText: '好', closeText: '', secondaryText: '取消', icon: 'info'});
+      // 模拟"点了对话框正文空白处"——焦点离开按钮落到 body
+      document.body.focus();
+      document.getElementById('dialog-btn-secondary').click();
+      await p;
+      return {before, after: document.activeElement === btn,
+              active: document.activeElement && document.activeElement.id};
+    }""")
+    check("打开前焦点确实在触发按钮上", restored["before"] is True, str(restored))
+    check("对话框关闭后焦点归还给触发按钮",
+          restored["after"] is True, str(restored))
+    page.screenshot(path=str(out / "1440x900-9-dialog-keyboard.png"))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="墨准 v5.3 前端三视口冒烟")
     parser.add_argument("--out", default=str(ROOT / ".local" / "smoke-ui-v5.3"),
@@ -591,6 +671,7 @@ def main() -> int:
                 _check_think_strip_stream(page, out)
                 _check_api_panel(page, out)
                 _check_splitter_progress(page, out)
+                _check_dialog_keyboard(page, out)
                 check("页面无 JS 异常", not errs, str(errs[:3]))
             finally:
                 browser.close()
