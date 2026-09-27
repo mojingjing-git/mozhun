@@ -2,7 +2,64 @@
 
 > **曾用名**: 新时代校对大师 (v3.0 — v4.4.2 期间, 2024 → 2026-09 改名为墨准)。历史 CHANGELOG 条目保留原名, 详见 README.md 与 AGENTS.md。
 >
-> 当前产品: **墨准 (MoZhun)** v5.4.0 — 本地标点修复 + LLM 批量校对 + 去 AI 味 + 小说切分, 支持任意 OpenAI 兼容 API; 模型思维链一律丢弃。
+> 当前产品: **墨准 (MoZhun)** v5.4.3 — 本地标点修复 + LLM 批量校对 + 去 AI 味 + 小说切分, 支持任意 OpenAI 兼容 API; 模型思维链一律丢弃。
+
+## v5.4.3 (2026-09-27/28) — 缺陷治理批次 0 / 1 / 2a / 2b
+
+**依据**: 全量扫描 + `docs/PLAN-defect-fix-2026-09-27.md` (v4, 经 4 路独立复审定稿)。本批共修复 **19 项** (门禁 2 + F1~F15 中的 17 项)，全部经**步间独立复核**（批次 2a 复核三轮、批次 2b 复核两轮）。期间复核方共抓出 **5 个 BLOCKER**，其中 3 个是实施过程中**新引入**的，全部已修。
+
+### 批次 0 — 门禁与测试隔离（前置）
+- **门禁计数失真**：文档记 1581，实测 1677（差 96 = 两个 unittest 套件的每个 test 方法各被折算成 1 个 PASS）。改为从套件自报汇总行里**直接读括号数字**，并用 unittest 的 `Ran N` 交叉校验
+- **测试污染用户目录**：补 `import test_isolate`（重定向 `~/.proofreader` 到临时目录）+ 子进程 env 预置 `PROOFREADER_HOME`，每套件独立 home + try/finally
+
+### 批次 1 — 8 项数据正确性修复
+- **F1** `harness.py` CRLF 位置映射多吃一个字符（孤立 CR 被当 CRLF，**静默删字**而 audit 仍报 OK）
+- **F2** `punct_fix.py` 直角引号转换吞撇号（`‘good’` 会被改写）
+- **F3** `novel_splitter.py` 去重 key 不含 title → 不同特章碰撞；key 改 `(volume, num, title.strip())`
+- **F4** `processor.py` 引擎复用可变 config → 加 `replace(config)` 快照
+- **F5** `app.js` 流式内容跨文件串（进 B 的预览拿到 A 的流）+ 重跑不清 streamingContent
+- **F13** 结果来源提示条 key 缺 fileKey（跨文件串台）
+- **D3** `_renderProvenance` 在 `selectedFileKey` 守卫之前渲染
+- **F14** `_AD_STRONG` 是混合表 → 拆 `_AD_PURE`（站点水印，无条件删）/ `_AD_COLLO`（正文可撞，走句末标点护栏）/ `_AD_WEAK`
+
+### 批次 2a — 事件通道与视图委派
+- **F15** `novel-splitter.js` 用 `window.App`，而 `app.js` 只写 `window.app` → 切分日志与 toast 的 `typeof` 守卫**恒假**，永久走 console 分支（`build.spec console=False`，用户什么都看不到）。6 处成对改；连带让 `window.app.splitter` 成为真注册点
+- **F9** `MULTI_ALLOWED` 漏 3 个离散事件。其中 `onSplitterProgress` 是**死事件**（后端推 2 处、前端无 case），切分进度条只能 0% 跳 100%。前端**不加 case**，改为 splitter 提供 `onEvent` 通用入口 + `app.js` `default:` 分支委派（保持 app.js 零 splitter 知识）
+- **F8** `_flush` 丢事件：先 `clear()` 再序列化、`json.dumps` 在 `try` 之外 → 丢 `onTaskComplete` 时前端 `isProcessing` 永不复位、开始按钮永久禁用。四件事一起做：失败后重新 arm Timer / 重试预算 2 次 / 序列化失败的毒丸批次直接丢弃不回灌 / buffer 上限 2000 条
+  - 复审另抓两处：取走重投槽时不为残留 buffer 补 arm（最后一批事件永久滞留，**相对修复前是回归**）；硬熔断无复位点 → 改**指数退避**（永不放弃重试）
+  - 再复审又抓：退避指数在 streak≥1028 抛 `OverflowError`，而 arm 先置 `_push_pending=True` 再求值 → 通道永久焊死且零日志。钳位指数 + arm 路径整体异常安全
+- **F8 衍生** `_NO_RETRY_EVENTS`：`evaluate_js` 抛异常时无法区分「JS 没跑」和「JS 跑完但回传失败」，`onDeaiTextDrop` 重投会造成**静默文本损坏**（同一段文本出现两遍），这类事件宁可丢也不重投
+
+### 批次 2b — 启动器 / 对话框 / harness 判据 / 本地引擎
+- **F11** `start.py` 的 `find_python()` 前两分支返回 str、第三分支返回 `"py -3"` → 下游找一个**名叫 `py -3` 的可执行文件**。三分支统一返回 list + 入口 `_as_cmd` 归一化（str 会被逐字符拆开，把 venv 启动路径改坏）；版本闸门从 `startswith("(3,")` 换成 `>= (3,10)`；`deps_ok` 补 `FileNotFoundError`
+- **F12** ContentDialog 的 `Enter` 在**捕获阶段**无条件 `close(true)`：Tab 到「取消」按 Enter 仍会**清空全部文件**（`clearFiles` 主按钮是 danger），三命令对话框第三按钮键盘不可达。删该分支改由 `<button>` 原生激活 + 关闭时归还焦点（须在 `btnP.focus()` **之前**捕获）
+- **F6** 边界 10 指标 `abs(len(corrected)-len(original))/len(original)` 在**等长整体重写**下恒为 0 —— 而那正是它唯一要拦的场景（模型无视工具纪律把半篇塞进一条 tool_call）。改 `max(old_len for OK) / len(original)`，audit 增 `old_len`，并加 200 字下限（短文本占比无意义）
+- **F10** 「0 tool_calls」守卫只认字面量「无需修改」，模型换任何措辞报告「没找到错误」都判可疑 → **本该零改动的文件整文件 FAILED**。短语白名单作废，改「编辑载体拦截 + 长度 40」；再叠兜底层：可疑 → 重试一轮 → 仍可疑则放行并落 `WARN_NOOP_SUSPICIOUS` 审计（放行不等于静默放过，前端会显示面板）
+- **F7** 链接/图片/引用三条正则首段无上界，行内无 `]` 时 O(n²) 爆炸（实测 5 万个 `[` 要 18.7s）；`md_local` 整文件不切块且**无体积上限** → 拖进巨型日志任务不返回。加 `if "]" in line` 守卫（50000 个 `[` → 0.0012s）+ 200 万字上限（走不可重试通道，立即 FAILED 不烧重试）
+
+### 测试
+- 新增 `tests/test_start.py` (30)、`tests/test_push_channel.py` (97) 两个套件；`test_harness.py` 127→162、`test_md_strip.py` 106→126
+- `tools/smoke_ui.py` 96→117：切分进度事件 + 命名空间 (9)、对话框键盘可达性 + 焦点归还 (6)、改动清单状态标签 (5)
+- 全量回归 **1900 通过 / 0 失败**（21 套件；本批起点 1677，**+223**）
+- 门禁对用户 `~/.proofreader/*.log` **零污染**（多轮跑前后 size + mtime + SHA256 逐字节一致）
+- 每个修复都做了「撤掉修复 → 确认用例变红」的变异自检，跑完校验文件按 SHA256 字节还原。**这抓出了 9 处自己写的恒绿/无区分度断言**（详见计划 §7）
+
+### ⚠ 未校准的拍定值（`AGENTS.md` §34 口径）
+以下阈值均为**初始拍定值，未做真实样本校准**，严禁在任何文档/注释里编造「实测平均 N」之类的数据来源：
+- 推送通道：重试预算 2 次 / buffer 上限 2000 条 / 退避阈值 5 次 / 退避上限 2.0s / 退避指数钳位 32 / flush 间隔 0.033s
+- harness：覆盖率告警阈值 0.5 / 告警下限 200 字 / 短答复放行上限 40 字
+- `md_local` 体积上限 2,000,000 字符
+- （沿用旧值）`REVISE_THRESHOLD=50` 与 `ai_score_local` 六维权重
+
+**这是当前最大的已知风险敞口**：阈值是否合适需要真实样本回归来验证，不是单元测试能回答的问题。
+
+### 未做（记录）
+- 批次 0.5 用户目录清理（`~/.proofreader` 下测试期累积的约 1.7MB 日志 + `%TEMP%` 孤儿断点）—— 等用户确认后再动
+- `md_local` 块内即时取消（当前取消粒度 = 单次 `strip_markdown` 之间）
+- F6 的「精确位置映射法」覆盖率指标（O(n×edits)≈0.2s，比 `max` 更准，侵入性中等，延后到 v5.4.4）
+- §34 拍定值的真实样本校准
+
+---
 
 ## v5.4.2 (2026-09-26) — 全量代码扫描修复批次
 
@@ -25,6 +82,7 @@
 - `test_md_strip.py` +16: CRLF 围栏 / 换行归一 / 分隔行形态 9 条 / 性能 2 条
 - `test_harness.py` +3: 守卫放行与可疑边界
 - 全量回归 **1581 通过 / 0 失败**, 冒烟 96 项全绿
+  > **v5.4.3 更正**: 上面这个 1581 是**失真值**。门禁把两个 unittest 套件的每个 test 方法各折算成 1 个 PASS，少记 96 条。v5.4.3 批次 0 修好计数后，同一份代码的真实基线是 **1677**。本行保留原样以存档，勿作基线引用。
 
 ### 未修 (记录在扫描报告, 按优先级排)
 前端: 结果来源提示条的重跑按钮闭包串文件 (`_provenanceKey` 缺 fileKey)、`cfg-timeout` 在 index.html 重复定义两处、`window.App` 与 `window.app` 双对象致小说切分视图日志静默退化、快捷键无视图守卫。引擎: `punct_fix` 单引号包英文词误报不平衡、破折号补齐需两遍才到不动点、`_FRONTMATTER_RE` 不校验 `key: value`、`novel_splitter._dedup_same_key` 对 `num=None` 静默删章。测试: 多处恒真断言与 `inspect.getsource` 源码式断言、`run_all_tests.py` 把 unittest 套件只算 1 个 PASS。
