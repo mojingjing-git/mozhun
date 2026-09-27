@@ -624,11 +624,15 @@ def test_v414_throttle_constants():
     check("节流间隔常量是 0.033 秒 (33ms)", _PUSH_FLUSH_INTERVAL == 0.033,
           str(_PUSH_FLUSH_INTERVAL))
     arm_src = inspect.getsource(Backend._arm_push_timer_locked)
+    iv_src = inspect.getsource(Backend._flush_interval)
     push_src = inspect.getsource(Backend._push)
-    # Timer 仍被真正接线, 且用的是那个常量 (常量不能被孤立成一个没人用的数字)
+    # 链路: _push -> _arm_push_timer_locked -> _flush_interval -> 常量。
+    # 三处都要查, 否则常量可能变成一个没人用的死数字 (F8 复审时正是这样
+    # 把 Timer 抽成了单独的方法, 只查 _push 源码会漏)。
     check("arm 点用 threading.Timer 延时 flush", "threading.Timer(" in arm_src, arm_src)
-    check("arm 点用的是节流间隔常量",
-          "_PUSH_FLUSH_INTERVAL" in arm_src, arm_src)
+    check("arm 点的间隔取自 _flush_interval",
+          "self._flush_interval()" in arm_src, arm_src)
+    check("间隔计算走节流常量", "_PUSH_FLUSH_INTERVAL" in iv_src, iv_src)
     check("_push 经 arm 点接线", "_arm_push_timer_locked()" in push_src, push_src)
     # 旧 100ms 不得复活 (源码 + 常量两头都查)
     check("无 0.1 (旧 100ms)",

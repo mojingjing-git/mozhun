@@ -33,6 +33,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 WEB_DIR = ROOT / "web"
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "tests"))
+# v5.4.3 (复审 L3): 本脚本会 import app.templates / app.utils / app.think_strip,
+# 而 app.utils 在 import 期就建目录并接上 logger —— 不隔离的话每跑一次 smoke_ui
+# 就往用户真实的 ~/.proofreader/app-debug.log 追加几百字节 (实测 806202 -> 806614)。
+# 与门禁的 F0-② 同源问题, 这里补上同一个隔离样板。必须在任何 app.* import 之前。
+import test_isolate  # noqa: E402,F401  测试隔离: 重定向 ~/.proofreader 到临时目录
 
 VIEWPORTS = ((1440, 900), (1280, 720), (1000, 760))
 NAV_KEYS = ("harness", "rewrite", "deai", "styles", "splitter",
@@ -528,6 +534,21 @@ def _check_splitter_progress(page, out: Path) -> None:
       return seen;
     }""")
     check("F9 未知事件仍告警 (未被静默吞)", "未知事件" in (warned or ""), repr(warned))
+
+    # 反向: 已认领的事件**不得**再告警 —— 这一条专门锁 onEvent 的 return true 契约。
+    # (只删 return true 会让渲染照旧发生, 差别仅是多一条 console.warn,
+    #  所以必须 spy console.warn 才测得出来。)
+    warned2 = page.evaluate("""() => {
+      const orig = console.warn;
+      const seen = [];
+      console.warn = (...a) => seen.push(String(a[0]));
+      try { window.app.handleEvent('onSplitterProgress',
+        {stage: 'processing', current: 2, total: 4, book_name: '认领本'}); }
+      finally { console.warn = orig; }
+      return seen;
+    }""")
+    check("F9 已认领事件不告警 (onEvent 返回 true 被消费)",
+          warned2 == [], repr(warned2))
     page.screenshot(path=str(out / "1440x900-8-splitter-progress.png"))
 
 

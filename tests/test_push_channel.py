@@ -132,8 +132,8 @@ def test_f8_reraises_timer_on_failure():
           repr(b._push_retry_slot))
     check("F8 超出预算后重试计数停在预算上限",
           b._push_retry_count == 2, f"retry_count={b._push_retry_count}")
-    check("F8 未误熔断 (重试预算是 2, 熔断阈值 5)",
-          b._push_disabled is False, f"disabled={b._push_disabled}")
+    check("F8 未误触发退避 (3 次失败 < 阈值 5)",
+          b._flush_interval() == 0.033, str(b._flush_interval()))
     # 每一轮都带上了完整的 task_id —— 说明回灌的是同一批, 不是新造的空批
     check("F8 每轮都带 onTaskComplete",
           all('"onTaskComplete"' in p for p in att["payloads"]),
@@ -225,26 +225,228 @@ def test_f8_buffer_cap_drops_oldest_when_no_logs():
           b._push_buffer[0][1] == {"i": 5}, str(b._push_buffer[0]))
 
 
-def test_f8_circuit_breaker_on_repeated_failure():
-    """连续失败达阈值 → 熔断本会话推送, 不再无界堆积。"""
-    from app.web_backend import Backend, _PUSH_FAIL_STREAK_MAX
+def test_f8_retry_slot_does_not_strand_buffer():
+    """B1: 取走重投槽时, 残留 buffer 必须被补一次 arm。
 
-    check("F8 熔断阈值常量是 5", _PUSH_FAIL_STREAK_MAX == 5, str(_PUSH_FAIL_STREAK_MAX))
+    这是 F8 自己的 bug 换了个形态回来 (复审 B1)。触发时序:
+      1. 批次 A 的 evaluate_js 阻塞, 期间又 _push 了事件 B (B 自己 arm 了一个 Timer)
+      2. A 抛异常 -> 重投槽 = [A]; B 的 Timer 已在飞, 不再补 arm
+      3. B 的 Timer 触发 -> 本轮取走的是 [A] 这个重投槽, **B 留在 buffer 里**
+      4. [A] 再失败 -> 预算耗尽 -> 丢弃, 不 arm
+      => B 永久滞留, _push_pending 已归零, 再无 Timer。
+    丢的若是 onTaskComplete, 就是"开始按钮永久禁用" —— 与 F8 修复目标逐字相同,
+    且相对修复前 (buffer[:0] = events) 是**回归**: 旧版会把 A 和 B 一起送出。
+
+    为排除时序运气, 本用例**关掉自动 arm 并手工驱动 _flush**, 让"有没有 Timer
+    在飞"成为确定的事实。
+    """
+    from app.web_backend import Backend
 
     b = Backend(window=None)
     att = {}
     b._window = make_failing_window(att, lambda: RuntimeError("dead"))
-    # 每轮: 首发 1 次 + 重试 2 次 = 3 次失败 → streak 累到 3; 再一轮即触发熔断
-    for _ in range(2):
+    # 拦掉真 Timer (否则 sleep 里会乱序), 但保留 arm 的**可观测效果**:
+    # arm 成功即 pending=True, 于是"有没有为残留 buffer 补 arm"成为确定事实。
+    b._arm_push_timer_locked = lambda: setattr(b, "_push_pending", True)
+
+    b._push("onLog", "A")
+    b._flush()                                    # 首发 A 失败 -> 重投槽 = [A]
+    check("B1 首刷后重投槽装的是 A",
+          b._push_retry_slot == [("onLog", "A")], repr(b._push_retry_slot))
+
+    # 关键: 第二轮让投递**成功**。若投递失败, 失败路径末尾的重投 arm 也会把
+    # pending 置回 True, 断言就没有区分度了 (这正是本用例第一版的毛病 ——
+    # 撤掉 B1 修复后它依然 69/0 全绿, 等于零覆盖)。
+    # 投递成功时 pending 唯一可能被置位的地方就是 B1 修复那一行。
+    ok = {}
+    b._window = make_ok_window(ok)
+    b._push("onTaskComplete", {"task_id": "FINAL"})   # 新事件到达 (与 A 同窗口)
+    b._flush()                                    # 取走重投槽 [A] 并投递成功
+    check("B1 修复后取走重投槽时为残留 buffer 补 arm",
+          b._push_pending is True,
+          f"FINAL 滞留 buffer={b._push_buffer} pending={b._push_pending}")
+
+    b._flush()                                    # 补上那次 arm 兑现: 投 FINAL
+    check("B1 修复后 FINAL 真的送达",
+          ok["count"] == 2 and '"FINAL"' in ok["js"][-1],
+          f"count={ok['count']} last={ok['js'][-1] if ok['js'] else ''}")
+    check("B1 修复后 buffer 排空", b._push_buffer == [], str(b._push_buffer))
+
+
+def test_f8_exhausted_budget_does_not_wipe_concurrent_slot():
+    """预算耗尽时不得清空重投槽 —— 槽里若是并发的另一轮放进去的, 清掉即丢一整批。
+
+    本批审查追查 B1 时发现的第二个丢事件路径。交错点在 evaluate_js 期间:
+    本轮已把自己的批次取走, 正等在 evaluate_js 里, 另一轮 _flush 趁机把它的
+    批次放进了重投槽; 本轮随后失败并耗尽预算 —— 此时**只能丢自己那一批**,
+    一旦顺手写 `self._push_retry_slot = None`, 就把别人的批次一并抹掉。
+
+    单线程调不动这个交错 (本轮失败路径执行时槽已被自己取空), 所以让
+    evaluate_js 自己去装那一份来模拟"并发的另一轮", 从而让断言可判定。
+    """
+    from app.web_backend import Backend
+
+    b = Backend(window=None)
+    b._arm_push_timer_locked = lambda: None
+    b._push("onLog", "OWN")           # 本轮自己的那一批
+
+    class ConcurrentInjector:
+        """模拟: evaluate_js 期间另一轮 _flush 把自己的批次放进了重投槽, 随后本轮失败。
+
+        两个必须:
+        - 装完槽**再抛** —— 只装不抛则投递算成功, 失败分支根本走不到 (恒绿)
+        - 只在第 3 次注入 —— 预算耗尽分支要求已试满 1+预算 次
+        """
+
+        def __init__(self):
+            self.n = 0
+
+        def evaluate_js(self, js):
+            self.n += 1
+            if self.n >= 3:            # 这一次本轮将耗尽预算
+                b._push_retry_slot = [("onLog", "CONCURRENT")]
+            raise RuntimeError("dead")
+
+    w = ConcurrentInjector()
+    b._window = w
+    b._flush()                        # 首发 OWN 失败 -> 重投
+    b._flush()                        # 重投 OWN 失败 -> 重试计数到上限
+    b._flush()                        # OWN 预算耗尽 -> 走 else 分支
+    check("确实走到了预算耗尽分支", w.n == 3, f"attempts={w.n}")
+    check("预算耗尽不误清并发放进去的重投槽",
+          b._push_retry_slot == [("onLog", "CONCURRENT")],
+          f"slot={b._push_retry_slot} (None = 被误清, 并发那批被凭空丢掉)")
+
+
+def test_f8_new_batch_gets_fresh_budget():
+    """某批耗尽预算后, **下一个新批次**必须拿到完整预算, 而不是只剩 1 次。
+
+    这是实现过程中被回归用例测出来的真缺陷: 取新批次时若漏了
+    `self._push_retry_count = 0`, 计数会停在上限 2 不动, 于是此��本会话
+    每个新批次都只投递 1 次 —— WebView 偶发瞬时异常再也得不到重试机会,
+    通道事实上退化成"只试一次就丢"。
+    """
+    from app.web_backend import Backend, _PUSH_RETRY_BUDGET
+
+    b = Backend(window=None)
+    att = {}
+    b._window = make_failing_window(att, lambda: RuntimeError("dead"))
+    b._arm_push_timer_locked = lambda: None       # 手工驱动, 排除时序
+
+    b._push("onLog", "A")
+    for _ in range(6):
+        b._flush()                                 # 远超预算, 早已丢弃
+    check("第一批只试 1+预算 次就收手", att["n"] == 1 + _PUSH_RETRY_BUDGET,
+          f"attempts={att['n']}")
+    check("第一批耗尽后计数停在预算上限", b._push_retry_count == _PUSH_RETRY_BUDGET,
+          f"retry_count={b._push_retry_count}")
+
+    n0 = att["n"]
+    b._push("onTaskComplete", {"task_id": "B"})     # 全新批次
+    for _ in range(6):
+        b._flush()
+    check("新批次拿到完整重试预算 (不是只剩 1 次)",
+          att["n"] - n0 == 1 + _PUSH_RETRY_BUDGET,
+          f"新批次只试了 {att['n'] - n0} 次 (期望 {1 + _PUSH_RETRY_BUDGET})")
+
+
+def test_f8_no_retry_for_corrupting_events():
+    """M2: 不可重投事件投递失败时必须**丢弃**, 绝不放回重投槽。
+
+    evaluate_js 抛异常时无法区分"JS 没跑"和"JS 跑完但返回值回传失败",
+    重投就有真实概率把同一事件投两遍。onDeaiTextDrop 的 handler
+    _applyDroppedText 会再读一次文件、再追加一遍 -> 同一段文本凭空出现两遍,
+    静默且用户极难察觉。宁可丢 (重新拖一次) 也不能投第二遍。
+    """
+    from app.web_backend import Backend, _NO_RETRY_EVENTS
+
+    check("onDeaiTextDrop 属不可重投集合", "onDeaiTextDrop" in _NO_RETRY_EVENTS,
+          str(sorted(_NO_RETRY_EVENTS)))
+    check("onTaskComplete 仍可重投 (丢了会按钮永久禁用)",
+          "onTaskComplete" not in _NO_RETRY_EVENTS, str(sorted(_NO_RETRY_EVENTS)))
+
+    # 纯 onDeaiTextDrop 批次 -> 整批丢弃, 不进重投槽
+    b = Backend(window=None)
+    att = {}
+    b._window = make_failing_window(att, lambda: RuntimeError("dead"))
+    b._arm_push_timer_locked = lambda: None
+    b._push("onDeaiTextDrop", {"target": "deai", "paths": ["p1"]})
+    b._flush()
+    check("纯不可重投批次失败后不进重投槽", b._push_retry_slot is None,
+          repr(b._push_retry_slot))
+    check("纯不可重投批次不再重试", att["n"] == 1, f"attempts={att['n']}")
+
+    # 混合批次 -> 只保留可重投的那部分, 不可重投的被剔除
+    b2 = Backend(window=None)
+    att2 = {}
+    b2._window = make_failing_window(att2, lambda: RuntimeError("dead"))
+    b2._arm_push_timer_locked = lambda: None
+    b2._push("onTaskComplete", {"task_id": "t1"})        # 默认覆盖类, 同名只留一条
+    b2._push("onFileDone", {"file_key": "f1"})
+    b2._push("onDeaiTextDrop", {"target": "deai", "paths": ["p1"]})
+    b2._flush()
+    names = [n for n, _ in (b2._push_retry_slot or [])]
+    check("混合批次重投时剔除不可重投事件",
+          "onDeaiTextDrop" not in names and "onFileDone" in names, str(names))
+
+
+def test_f8_backoff_not_hard_disable():
+    """连续失败进**退避**, 不是硬熔断 —— 通道必须能自愈。
+
+    旧设计 (_push_disabled) 一旦触发就无任何复位点, pywebview 在窗口最小化/
+    后台切换时可能抛一次瞬时异常, 连续几次抖动就让本会话推送永久静默,
+    用户侧是"按钮永久禁用且无解释"。退避既挡风暴又保证恢复后自动补投。
+    """
+    from app.web_backend import (Backend, _PUSH_FLUSH_INTERVAL, _PUSH_BACKOFF_MAX,
+                                 _PUSH_FAIL_STREAK_MAX)
+
+    check("退避阈值常量是 5", _PUSH_FAIL_STREAK_MAX == 5, str(_PUSH_FAIL_STREAK_MAX))
+    check("退避上限常量是 2.0 秒", _PUSH_BACKOFF_MAX == 2.0, str(_PUSH_BACKOFF_MAX))
+
+    b = Backend(window=None)
+    b._arm_push_timer_locked = lambda: None      # 手工驱动
+
+    check("F8 失败 0 次间隔 = 33ms", b._flush_interval() == _PUSH_FLUSH_INTERVAL,
+          str(b._flush_interval()))
+    for n in range(1, 5):
+        b._push_fail_streak = n
+        check(f"F8 失败 {n} 次仍在 33ms (阈值前)", b._flush_interval() == _PUSH_FLUSH_INTERVAL,
+              str(b._flush_interval()))
+    b._push_fail_streak = _PUSH_FAIL_STREAK_MAX
+    iv = b._flush_interval()
+    check("F8 到阈值后开始退避", iv > _PUSH_FLUSH_INTERVAL, str(iv))
+    b._push_fail_streak = _PUSH_FAIL_STREAK_MAX + 20
+    check("F8 退避封顶不超上限", b._flush_interval() == _PUSH_BACKOFF_MAX,
+          str(b._flush_interval()))
+    check("F8 退避有上限, 不是无限增长", b._flush_interval() < 60,
+          str(b._flush_interval()))
+
+    # 关键: 反复失败**不会**永久禁用通道, WebView 恢复后照常投递
+    att = {}
+    b._window = make_failing_window(att, lambda: RuntimeError("dead"))
+    for _ in range(4):                 # 远超阈值, 共 12 次失败
         b._push("onLog", "boom")
-        time.sleep(0.4)
-    check("F8 连续失败后已熔断", b._push_disabled is True,
-          f"disabled={b._push_disabled} streak={b._push_fail_streak}")
-    before = att["n"]
-    b._push("onLog", "after breaker")
-    time.sleep(0.3)
-    check("F8 熔断后不再投递", att["n"] == before, f"{before} -> {att['n']}")
-    check("F8 熔断后不攒 buffer", b._push_buffer == [], str(b._push_buffer))
+        b._flush()
+        b._flush()
+        b._flush()
+    check("F8 反复失败后没有硬熔断开关",
+          not hasattr(b, "_push_disabled"), "代码里仍有 _push_disabled 硬熔断")
+    check("F8 反复失败后已退避到上限",
+          b._flush_interval() == _PUSH_BACKOFF_MAX, str(b._flush_interval()))
+
+    calls = {}
+    b._window = make_ok_window(calls)   # WebView 恢复
+    del b._arm_push_timer_locked         # 交还真 arm, 让真 Timer 跑起来
+    b._push("onTaskComplete", {"task_id": "AFTER-RECOVERY"})
+    # 此刻通道处于退避态 (间隔已是 _PUSH_BACKOFF_MAX=2s), 所以必须等超过 2s
+    # 才能证明"退避只拖慢、不阻断" —— 这正是旧版硬熔断做不到的地方。
+    time.sleep(_PUSH_BACKOFF_MAX + 0.6)
+    check("F8 WebView 恢复后事件自动补投 (自愈)",
+          calls["count"] >= 1 and '"AFTER-RECOVERY"' in calls["js"][0],
+          f"count={calls['count']}")
+    check("F8 恢复后失败计数归零", b._push_fail_streak == 0, str(b._push_fail_streak))
+    check("F8 恢复后退避解除", b._flush_interval() == _PUSH_FLUSH_INTERVAL,
+          str(b._flush_interval()))
 
 
 def test_f8_normal_path_three_classes_unchanged():

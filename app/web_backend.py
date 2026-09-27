@@ -118,10 +118,27 @@ _PUSH_RETRY_BUDGET = 2
 # buffer 上限 (条)。超出时优先丢最旧的 onLog (纯日志, 丢一两条无伤);
 # 全是离散事件时丢最旧的一条并 logger.error 留痕。
 _PUSH_MAX_BUFFER = 2000
-# 连续 flush 失败达此次数即熔断本会话的推送通道 (替代旧版不可达的
-# `self._window is None` 守卫 —— 真实故障态是"window 还在但 WebView 已死",
-# evaluate_js 持续抛异常)。熔断后 _push 直接丢弃, 只在首次记 error。
+# 连续 flush 失败达此次数后进入**退避**模式 (不是熔断)。
+# 单批在预算 2 下会产生 3 次失败 (首发 + 2 重试), 所以 5 次失败 ≈ 1.67 批。
+# 退避后重试**永不放弃** —— 旧版设计在此处踩了坑: 硬熔断 (_push_disabled)
+# 一旦触发就无任何复位点, pywebview 窗口最小化/后台切换都可能抛一次瞬时异常,
+# 6 次瞬时抖动就会让本会话的推送永久静默, 用户侧表现为"按钮永久禁用且无解释",
+# 与本项要修的 bug 一模一样。退避同时满足两个要求: 挡住 33ms 重试风暴,
+# 又保证 WebView 恢复后事件自动补投。
 _PUSH_FAIL_STREAK_MAX = 5
+# 退避后的 flush 间隔上限 (秒)。33ms -> 66 -> 132 ... 到顶后按此频率慢速重试。
+_PUSH_BACKOFF_MAX = 2.0
+
+# 重复投递即损坏、**不可重投**的事件 (v5.4.3 复审 M2)。
+# evaluate_js 抛异常时无法区分"JS 根本没跑"和"JS 跑完了、只是返回值回传失败",
+# 所以重投有真实概率把同一事件投递两次。下列 handler 非幂等, 两次 = 静默损坏:
+#   onDeaiTextDrop -> _applyDroppedText 会再读一次文件、再追加一遍,
+#                     同一段文本在文本框里凭空出现两遍 (用户很难察觉)。
+# 取舍: 宁可丢 (用户重新拖一次, 有明确反馈) 也不重投 (静默改数据)。
+# 其余一次性事件不在此列 —— 重复投递多一条日志/一次 toast, 而**丢失**
+# onTaskComplete/onFileDone 会让 isProcessing 永不复位、开始按钮永久禁用,
+# 两害相权明显偏向重投。
+_NO_RETRY_EVENTS = {"onDeaiTextDrop"}
 
 
 class Backend:
@@ -147,8 +164,7 @@ class Backend:
         # 混回会让新事件排在旧事件前面, 且 buffer 随每次重试单调增长 (O(n²))。
         self._push_retry_slot: list[tuple[str, object]] | None = None
         self._push_retry_count = 0      # 当前批次已重试次数
-        self._push_fail_streak = 0      # 连续失败次数 (熔断用)
-        self._push_disabled = False     # 熔断后不再推送 (本会话)
+        self._push_fail_streak = 0      # 连续失败次数 (驱动退避)
         # DeAI 3 步工作流任务跟踪
         self._deai_tasks: dict[str, dict] = {}
         self._deai_lock = threading.Lock()
@@ -1887,10 +1903,6 @@ class Backend:
         (见 _PUSH_MAX_BUFFER 的口径注释)。
         """
         with self._push_throttle_lock:
-            if self._push_disabled:
-                # 熔断中: evaluate_js 已连续失败到上限, WebView 基本已死。
-                # 继续攒 buffer 只会无界增长 (每次 flush 失败又把批次塞回来)。
-                return
             self._push_buffer.append((event_name, data))
             if len(self._push_buffer) > _PUSH_MAX_BUFFER:
                 self._trim_push_buffer_locked()
@@ -1899,6 +1911,18 @@ class Backend:
             # 不变量), 且分支体内持非重入锁调 _flush() 会同线程自死锁. 统一走
             # Timer 延迟 flush, 行为不变, 拆掉死锁地雷.
             self._arm_push_timer_locked()
+
+    def _flush_interval(self) -> float:
+        """当前该用多快的 flush 间隔 (v5.4.3 F8 复审 B1 修法配套).
+
+        正常 33ms; 连续失败达 _PUSH_FAIL_STREAK_MAX 起按 2 的幂退避, 到
+        _PUSH_BACKOFF_MAX 封顶。**永不放弃重试** —— 见常量处的口径说明:
+        硬熔断会让一次瞬时异常永久静默整条通道。
+        """
+        if self._push_fail_streak < _PUSH_FAIL_STREAK_MAX:
+            return _PUSH_FLUSH_INTERVAL
+        over = self._push_fail_streak - _PUSH_FAIL_STREAK_MAX + 1
+        return min(_PUSH_BACKOFF_MAX, _PUSH_FLUSH_INTERVAL * (2 ** over))
 
     def _arm_push_timer_locked(self):
         """在**已持有** _push_throttle_lock 时 arm 一次 flush Timer (幂等).
@@ -1912,7 +1936,7 @@ class Backend:
             return          # 已有 Timer 在飞, 不能再起一个, 否则双重 flush
         self._push_pending = True
         self._last_push_time = time.time()
-        threading.Timer(_PUSH_FLUSH_INTERVAL, self._flush).start()
+        threading.Timer(self._flush_interval(), self._flush).start()
 
     def _trim_push_buffer_locked(self):
         """buffer 超上限时裁剪 (在**已持有** _push_throttle_lock 时调用).
@@ -1982,7 +2006,14 @@ class Backend:
             if self._push_retry_slot is not None:
                 events = self._push_retry_slot
                 self._push_retry_slot = None
-                # 重投: 沿用同一批的重试计数, **不**在此归零
+                # 重投: 沿用同一批的重试计数, **不**在此归零。
+                # v5.4.3 复审 (B1): 取走重投槽时**必须为残留 buffer 补一次 arm**。
+                # 触发时序: 批次 A 的 evaluate_js 阻塞期间又 _push 了事件 B, B 自己
+                # arm 的那个 Timer 正是本轮 —— 本轮取走的是 A 的重投槽, B 留在 buffer
+                # 里没人管, _push_pending 已归零 => B 永久滞留 (丢的若是 onTaskComplete
+                # 就是"开始按钮永久禁用", 与本项要修的 bug 逐字相同)。
+                if self._push_buffer:
+                    self._arm_push_timer_locked()
             else:
                 if not self._push_buffer:
                     self._last_push_time = 0.0
@@ -2050,25 +2081,32 @@ class Backend:
             # 开始按钮永久禁用, 正是本项要修的 bug。
             with self._push_throttle_lock:
                 self._push_fail_streak += 1
-                if self._push_fail_streak >= _PUSH_FAIL_STREAK_MAX:
-                    # 连续失败到上限: WebView 基本已死, 熔断本会话的推送,
-                    # 避免重试槽 + buffer 无限打转。重启应用自然恢复。
-                    self._push_disabled = True
-                    self._push_retry_slot = None
-                    self._push_buffer.clear()
-                    logger.error(
-                        f"[push] 连续 {_PUSH_FAIL_STREAK_MAX} 次投递失败, "
-                        f"熔断本会话事件推送 (最后一次: {type(e).__name__}: {e})"
-                    )
-                    return
                 if self._push_retry_count < _PUSH_RETRY_BUDGET:
-                    self._push_retry_slot = events
+                    # 先剔除不可重投的事件 (见 _NO_RETRY_EVENTS): 重复投递
+                    # 对它们等于静默改数据, 宁可丢也不能投第二遍。
+                    retry = [e for e in events if e[0] not in _NO_RETRY_EVENTS]
+                    dropped = len(events) - len(retry)
+                    if dropped:
+                        logger.warning(
+                            f"[push] 投递失败, 丢弃 {dropped} 条不可重投事件 "
+                            f"(重复投递会静默改数据): "
+                            f"{sorted({e[0] for e in events if e[0] in _NO_RETRY_EVENTS})}"
+                        )
+                    if not retry:
+                        logger.error(
+                            f"[push] 该批全是不可重投事件, 直接丢弃: {type(e).__name__}: {e}"
+                        )
+                        return
+                    self._push_retry_slot = retry
                     self._push_retry_count += 1
                     # 关键: 回灌后必须重新 arm, 否则失败的若是最后一批
                     # (onTaskComplete), 之后再无 _push -> 事件永不送达
                     self._arm_push_timer_locked()
                 else:
-                    self._push_retry_slot = None
+                    # 只丢自己这一批。注意**不能**在这里写
+                    # `self._push_retry_slot = None` —— 本批的重投槽在函数开头
+                    # 就已取走, 此刻槽里若非空, 那是并发的另一轮 _flush 刚放进去的,
+                    # 清掉它等于凭空丢一整批 (v5.4.3 复审 B1 追查时发现)。
                     logger.error(
                         f"[push] 投递失败已达重试预算 {_PUSH_RETRY_BUDGET}, "
                         f"丢弃该批 {len(events)} 条事件: {type(e).__name__}: {e}"
