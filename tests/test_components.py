@@ -493,6 +493,51 @@ def test_v500_legacy_mode_migration():
     check("PROMPT_MODES 精简后 7 条目 (6 可见 + deai 隐藏)", len(PROMPT_MODES) == 7)
 
 
+def test_v543_f4_engine_config_snapshot():
+    """v5.4.3 (F4): 引擎必须持有 config **快照**, 不能是 Backend._config 的引用.
+
+    旧版 `self.config = config` 持引用, 而 set_config 与每次 start_proofread
+    都就地改同一对象, 引擎又逐块现场读 (_harness_active / temperature /
+    _base_system_prompt) → ① 跑一半切入口得两种协议混合拼接
+    ② compute_prompt_hash 只在 prepare_tasks 算一次, 落盘断点 hash 与真实
+    生成条件不符, 下次当合法缓存复用。
+
+    附带: _file_done_payload / _collect_results 的 effective_workflow(eng.config)
+    随之锁定为"本次实际运行的轨" (呼应 AGENTS §41)。
+    """
+    from app.processor import ProcessingEngine
+    from app.utils import ProjectConfig, effective_workflow, compute_prompt_hash_for_config
+
+    cfg = ProjectConfig(prompt_mode="strict", workflow_mode="harness")
+    eng = ProcessingEngine(cfg)
+
+    # 建引擎后外部改配置, 引擎侧必须纹丝不动
+    cfg.prompt_mode = "punct_local"
+    cfg.temperature = 1.9
+    cfg.workflow_mode = "rewrite"
+    cfg.harness_enabled = False
+    check("快照: prompt_mode 不受外部改写", eng.config.prompt_mode == "strict",
+          repr(eng.config.prompt_mode))
+    check("快照: temperature 不受外部改写", eng.config.temperature == 0.1,
+          repr(eng.config.temperature))
+    check("快照: 派生轨仍是 harness",
+          effective_workflow(eng.config) == "harness",
+          repr(effective_workflow(eng.config)))
+    check("快照: 引擎仍走工具链", eng._harness_active() is True)
+    check("快照: config 不是同一对象", eng.config is not cfg)
+
+    # 断点指纹必须与"若配置未被改"时一致 (否则落盘断点 hash 撒谎)。
+    # 用 engine.config 算, 而非 eng._current_prompt_hash ——
+    # 后者由 prepare_tasks() 设置 (:281), 刚构造的引擎没有该属性。
+    pristine = ProjectConfig(prompt_mode="strict", workflow_mode="harness")
+    check("快照: 指纹与未改配置的指纹一致",
+          compute_prompt_hash_for_config(eng.config)
+          == compute_prompt_hash_for_config(pristine),
+          f"{compute_prompt_hash_for_config(eng.config)} vs "
+          f"{compute_prompt_hash_for_config(pristine)}")
+
+
+
 def main():
     print("=" * 60)
     print("  组件测试 + 冒烟测试 (v4.0+ 已脱离 PySide6 UI 依赖)")
@@ -501,6 +546,7 @@ def main():
     # v4.1.8.2 (审计 K12): per-test try/except — 旧版裸调, 一个用例抛异常
     # 即中断后续全部用例, 覆盖静默缩水 (与 test_web_backend/test_bugs 同款模式)
     all_tests = [
+        test_v543_f4_engine_config_snapshot,
         test_v500_legacy_mode_migration,
         test_smoke_config_roundtrip,
         test_smoke_engine_lifecycle,

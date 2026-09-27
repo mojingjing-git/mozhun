@@ -749,6 +749,98 @@ class TestE2EPreviewSave(unittest.TestCase):
 # 主入口
 # ============================================================
 
+
+# ============================================================
+# v5.4.3 批次 1: F3 特章去重 / F14 广告行护栏
+# ============================================================
+
+
+class TestV543F3SpecialChapterDedup(unittest.TestCase):
+    """F3: 同号去重不得删除特章 (序章/楔子/番外/引子/尾声) 的正文.
+
+    去重 key 是 (volume, num), 而特章的 num 恒为 None (抽不出数字),
+    同卷内所有短特章共享 key (None, None) -> 组内任一章 >=5000 字
+    就会把组内所有 <1000 字的**正文**整块删掉。
+    实测 序章6000/楔子500/番外300/第一章3000 -> 只剩 2 章, 800 字静默消失
+    (触发条件"序章在卷首之前"是中文小说常态)。
+    """
+
+    @staticmethod
+    def _mk(idx, title, wc, num, vol=None):
+        return ChapterBlock(index=idx, title=title, content="字" * wc,
+                            word_count=wc, volume=vol, volume_index=1,
+                            num=num, is_special=(num is None))
+
+    def test_special_chapters_all_kept(self):
+        """原 bug 场景: 4 章只应剩 2 章, 修好后应全保留"""
+        blocks = [self._mk(0, "序章", 6000, None), self._mk(1, "楔子", 500, None),
+                  self._mk(2, "番外", 300, None), self._mk(3, "第一章", 3000, 1, "第一卷")]
+        kept, n = _dedup_same_key(blocks)
+        self.assertEqual(len(kept), 4, f"特章被误删, 保留 {len(kept)}: "
+                                       f"{[b.title for b in kept]}")
+        self.assertEqual(n, 0, f"dedup_count 应为 0, 实际 {n}")
+        self.assertEqual([b.title for b in kept], ["序章", "楔子", "番外", "第一章"])
+
+    def test_real_duplicate_still_deduped(self):
+        """真同号去重不得被误伤 (本项不能整体关掉去重)"""
+        blocks = [self._mk(0, "第一章", 6000, 1, "第一卷"), self._mk(1, "第一章", 500, 1, "第一卷")]
+        kept, n = _dedup_same_key(blocks)
+        self.assertEqual(len(kept), 1)
+        self.assertEqual(n, 1)
+
+    def test_mixed_special_and_duplicate(self):
+        """特章 + 真同号混合: 特章保留, 同号仍去重"""
+        blocks = [self._mk(0, "楔子", 500, None), self._mk(1, "第一章", 6000, 1, "第一卷"),
+                  self._mk(2, "第一章", 500, 1, "第一卷")]
+        kept, n = _dedup_same_key(blocks)
+        self.assertEqual(len(kept), 2, [b.title for b in kept])
+        self.assertEqual(kept[0].title, "楔子", "特章必须排在同号章之前保留")
+        self.assertEqual(n, 1)
+
+    def test_all_special_no_dedup(self):
+        """全是特章时不得有任何去重"""
+        blocks = [self._mk(0, "序章", 6000, None), self._mk(1, "楔子", 500, None),
+                  self._mk(2, "番外", 300, None)]
+        kept, n = _dedup_same_key(blocks)
+        self.assertEqual(len(kept), 3)
+        self.assertEqual(n, 0)
+
+    def test_cn_two_hundred(self):
+        """F3 顺带: 口语数字「两」必须两端都改 ——
+        只补 _CN_DIGIT_MAP 无效, 正则字符类不含「两」时根本匹配不到 '第两百章'"""
+        self.assertEqual(cn_to_int("两"), 2)
+        self.assertEqual(cn_to_int("两百"), 200)
+        self.assertEqual(_extract_chapter_num("第两百章"), 200,
+                         "正则字符类未加「两」, 补映射表走不到")
+
+
+class TestV543F14AdLineProseGuard(unittest.TestCase):
+    """F14: 强词表是**混合**的 —— 水印标记 + 会出现在正文里的短语。
+
+    旧实现对强词只设 200 字上限, 于是任何含强词的叙述句被整行删除
+    (实测「他每天去楼下投喂那只流浪猫。」/「他翻开书友群里的聊天记录。」
+    /「手机阅读体验更好。」全判 True)。
+
+    修法用**句末标点**判散文, 不用长度下限 (会让 3 字的「笔趣阁」漏网),
+    也不用「，」 (真实广告行常含逗号, 本身就该删)。
+    """
+
+    def test_prose_sentences_with_strong_words_kept(self):
+        for src in ["他每天去楼下投喂那只流浪猫。",
+                    "他翻开书友群里的聊天记录。",
+                    "手机阅读体验更好。",
+                    "最新章节发布啦。",
+                    "本章说他有点难过。",
+                    "她顺手投喂了那只流浪猫。"]:
+            self.assertFalse(_is_ad_line(src), f"正常叙述句被当广告删除: {src!r}")
+
+    def test_watermarks_still_removed(self):
+        for src in ["求月票啦求订阅", "本书首发起点中文网", "笔趣阁", "txt下载",
+                    "无弹窗", "最新章节推荐票 求支持 点一下投给作者",
+                    "作者新书《某某》首发，精彩不断", "天才一秒记住手机阅读地址"]:
+            self.assertTrue(_is_ad_line(src), f"水印/广告行未被识别: {src!r}")
+
+
 if __name__ == "__main__":
     # 兼容 run_all_tests.py: 输出 [PASS]/[FAIL] 关键字供 glob 统计.
     loader = unittest.TestLoader()

@@ -163,6 +163,32 @@ def test_boundary_10_ratio_warn():
     check("小改动无告警", not any(e["status"] == "WARN_RATIO" for e in audit2))
 
 
+def test_v543_f1_crlf_orphan_cr():
+    """v5.4.3 (F1): CRLF 归一位置映射不得多吃一个字符.
+
+    旧实现 `orig_end = orig_last + (2 if corrected[orig_last]=="\r" else 1)`
+    假定该 \r 必是 \r\n, 但 _crlf_map 对**孤立 CR** 是 1:1 映射 ——
+    结果 '甲\r\n乙\r丙丁' + '甲\n乙\r' 变成 'ZZ丁' (「丙」被静默删除),
+    而 audit 仍报 OK + note "换行归一后匹配", 用户与审阅者都看不出来。
+    """
+    from app.harness import apply_edits
+    # 核心回归: 匹配区以孤立 CR 结尾 -> 下一个字符必须保留
+    c1, a1 = apply_edits("甲\r\n乙\r丙丁", [{"old_text": "甲\n乙\r", "new_text": "ZZ"}])
+    check("孤立CR结尾: 下一个字符不丢", c1 == "ZZ丙丁", repr(c1))
+    check("孤立CR结尾: 状态为 OK", any(e["status"] == "OK" for e in a1))
+    # 真 CRLF 路径仍 +2 (不能矫枉过正把 \r\n 当成孤立 CR)
+    c2, _ = apply_edits("a\r\nb", [{"old_text": "a\n", "new_text": "ZZ"}])
+    check("真CRLF: 仍按 \\r\\n 计 2 格", c2 == "ZZb", repr(c2))
+    # 常规归一 (不涉及 CRLF 尾) 不回归
+    c3, _ = apply_edits("甲\r\n乙\n丙", [{"old_text": "甲\n乙", "new_text": "ZZ"}])
+    check("常规归一: 行为不变", c3 == "ZZ\n丙", repr(c3))
+    # 幂等: 对已修正文本再跑一次, 不应再产生任何编辑
+    _, a4 = apply_edits(c1, [{"old_text": "甲\n乙\r", "new_text": "ZZ"}])
+    check("幂等: 再跑不产生新编辑", all(e["status"] != "OK" for e in a4),
+          repr([e["status"] for e in a4]))
+
+
+
 def test_boundary_11_all_failed_caller_semantics():
     """边界 11: 全失败由调用方判 (corrected==original 且 edits 非空).
 
@@ -660,6 +686,7 @@ def main():
         test_boundary_4_noop,
         test_boundary_5_7_multiline_fence,
         test_boundary_8_crlf_normalize,
+        test_v543_f1_crlf_orphan_cr,
         test_boundary_10_ratio_warn,
         test_boundary_11_all_failed_caller_semantics,
         test_boundary_12_partial_success,

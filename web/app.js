@@ -1397,6 +1397,15 @@ const App = {
         lastPartialLen: 0, renderedHTML: '', renderedOriginalLen: 0,
         rafScheduled: false, mode: 'streaming',
       };
+      // v5.4.3 (F5): 清掉上一轮的流式暂存 ——
+      // streamingContent 只在「清空列表」/「移除单文件」时清, 新一轮任务从不清,
+      // 而 punct_local / md_local 两种本地模式**全程不发 onStream**
+      // (processor.py:1100-1115 / :1127-1139), 于是 renderCompare 的
+      // `this.streamingContent[fileKey] || t.corrected` 会一直取到上一轮的残留,
+      // 而复制/导出走的是 `t.corrected || ...` (优先级相反) ——
+      // 结果是**右栏显示上一轮文本, 复制出来却是本轮文本**。
+      // 与 renderState 同生命周期, 就在这个已经在重建的循环里做。
+      delete this.streamingContent[p];
     }
     // v4.1 (I6) / v4.1.8.2 (审计 F1): watchdog 改活动型 — 有校对事件就续期
     // (dispatch 里 _armProofreadWatchdog), 只在真正无响应 60s 时兜底复位
@@ -1838,7 +1847,13 @@ const App = {
     const mismatch = !!(t && t.status === 'completed' && t.workflow && t.workflow !== cur);
     // 流式期间 renderCompare 每帧都会调到这里 — 内容没变就不动 DOM
     // (否则每帧重建 innerHTML + 重绑按钮监听, 30 FPS 下纯浪费)
-    const key = mismatch ? `${t.workflow}|${cur}` : '';
+    // v5.4.3 (F13): key **必须含 fileKey** ——
+    // 旧 key 只由 workflow + 当前轨决定, 于是同轨的两个文件 key 相同:
+    // 在文件 A 上渲染过提示条后切到文件 B, key 未变 → 早退 →
+    // 提示条文案仍是 A 的, 按钮闭包(:1857)也仍持有 A 的 fileKey,
+    // 用户在 B 上点「用整篇重跑」实际重跑并覆盖的是 **A**, 且 confirmOverride:false
+    // 跳过二次确认。
+    const key = mismatch ? `${fileKey}|${t.workflow}|${cur}` : '';
     if (key === this._provenanceKey) return;
     this._provenanceKey = key;
     if (!mismatch) {
@@ -1858,8 +1873,6 @@ const App = {
   },
 
   renderCompare(fileKey) {
-    // v5.3.0: 来源提示条先刷新 (空态/错误态也要收掉上一条)
-    this._renderProvenance(fileKey);
     const originalEl = document.getElementById('compare-original');
     const revisedEl = document.getElementById('compare-revised');
     if (!originalEl || !revisedEl) return;
@@ -1869,6 +1882,9 @@ const App = {
       originalEl.innerHTML = '<div class="type-emptystate">选择文件查看原文</div>';
       // v4.3.1 (UX #16): 术语统一 — "流式"是内部实现词, 用户视角叫"校对输出"
       revisedEl.innerHTML = '<div class="type-emptystate">校对输出将在这里实时显示</div>';
+      // v5.4.3 (D3): 空态也要收掉来源提示条 —— 移到了「!fileKey 早退」之后,
+      // 故此处必须显式调用 (旧版在函数第一行无条件调, 才能覆盖空态)
+      this._renderProvenance(fileKey);
       return;
     }
 
@@ -1876,12 +1892,20 @@ const App = {
     if (!t) {
       originalEl.innerHTML = '<div class="type-emptystate">选择文件查看原文</div>';
       revisedEl.innerHTML = '<div class="type-emptystate">校对输出将在这里实时显示</div>';
+      this._renderProvenance(fileKey);
       return;
     }
 
     // v4.1.8.2 (审计 F2): 兜底守卫 — 非当前选中文件的渲染请求直接丢弃
     // (RAF 回调可能在用户切换文件后才执行)
     if (fileKey !== this.selectedFileKey) return;
+
+    // v5.3.0: 来源提示条刷新
+    // v5.4.3 (D3): 从函数第一行**移到守卫之后** —— 旧版在守卫之外调用,
+    // 于是「切文件后仍为上一个文件排队的 RAF 回调」会把提示条按旧 fileKey 重新打开,
+    // 让用户看到 A 的来源文案 + 指向 A 的重跑按钮, 而右栏正文却是 B 的。
+    // 位置与紧随其后的 renderAuditPanel 一致 (两处都需守卫保护)。
+    this._renderProvenance(fileKey);
 
     // v5.1.0: harness 改动清单面板 (放守卫后 — 错误态/空态分支也要刷新,
     // 避免切换文件后残留上一文件的清单)
@@ -1921,7 +1945,11 @@ const App = {
 
     // 4. 右栏: D 方案 (流式) 或 diff_main (全量)
     const state = this._initRenderState(fileKey);
-    const partial = this.streamingContent[fileKey] || t.corrected || '';
+    // v5.4.3 (F5): 优先取本轮结果 ——
+    // streamingContent 是**流式期**的暂存, 而 punct_local / md_local 两种本地模式
+    // 不发 onStream, 其残留值会盖掉本轮 t.corrected (见 :1399 的清理说明)。
+    // 运行期 (status==='running') 仍优先取流式文本, 保持 LLM 模式的打字机效果不变。
+    const partial = (t.status === 'running' ? this.streamingContent[fileKey] : '') || t.corrected || '';
 
     // 4a. 全量模式: 用户点"查看增删标记"后, 用 diff_main 重渲染
     if (state.mode === 'full') {

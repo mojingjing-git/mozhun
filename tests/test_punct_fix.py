@@ -292,11 +292,55 @@ def test_engine_punct_local_reports():
     check("报告含行号与文件名", any("a" not in r or "第 1 行" in r for r in reports), str(reports))
 
 
+def test_v543_f2_rect_keeps_english_apostrophe():
+    """v5.4.3 (F2): 直角引号风格不得把英文撇号变成闭引号.
+
+    _fix_quotes 已正确区分三类撇号并把缩略/属格规范为 ’,
+    但 _apply_rect_quote_style 旧版无条件把 ’ 映射成 』/』 ——
+    rect 模式下实测 don't -> don\u201d\t / James' -> James\u201d\u300d。
+
+    判据必须用 isalpha 逐字复刻 _fix_quotes 的两条规则: 用 isalnum 会把
+    'a' / 'I' (中文引号对里包 ASCII) 和 1980'1990' (数字成对) 误判为撇号,
+    前者产出**落单直角引号**, 后者把成对引号拆成不对等。
+    """
+    from app.punct_fix import fix_punctuation_ex
+
+    def rect(t, **kw):
+        return fix_punctuation_ex(t, {"quote_style": "rect", **kw})[0]
+
+    # 原 bug: 英文撇号必须保留 ’
+    out = rect("中文里夹英文 don't touch it, 还有 James' 的书。")
+    check("rect 保留 don\u2019 (字母夹缝)", "don\u2019" in out, repr(out))
+    check("rect 保留 James\u2019 (属格)", "James\u2019" in out, repr(out))
+    check("rect 不产生 don\u300dt", "don\u300dt" not in out, repr(out))
+
+    # 不得破坏「中文单引号对里包 ASCII」的配对 (v1 的 isalnum 方案在此产出入单)
+    for src in ("他说 'a' 好", "他说 'I' 好"):
+        o = rect(src)
+        check(f"{src!r} 直角引号配对", o.count("\u300c") == o.count("\u300d"), repr(o))
+
+    # 数字成对不得被拆成不对等
+    o = rect("生于1980'1990'1991'1992年")
+    check("数字成对直角化后配对", o.count("\u300c") == o.count("\u300d"), repr(o))
+
+    # 常规直角 / 嵌套直角不回归
+    check("常规直角不回归", rect("他说\u201c好。\u201d") == "他说\u300c好。\u300d",
+          repr(rect("他说\u201c好。\u201d")))
+    check("嵌套直角不回归", rect("\u300c他说\u2018好\u2019\u300d") == "\u300c他说\u300e好\u300f\u300d",
+          repr(rect("\u300c他说\u2018好\u2019\u300d")))
+
+    # 组合用例: repeat_compress 会缩短行, 早期方案靠传 apos_idx 下标实现 (会错位)
+    o = rect("他说\u201cdon't 真的吗\uff1f\uff01\u201d", repeat_compress=True)
+    check("repeat_compress 组合下 don\u2019 仍保留", "don\u2019" in o, repr(o))
+
+
+
 def main():
     print("=" * 60)
     print("  本地标点修复测试 (app/punct_fix.py + 引擎接线)")
     print("=" * 60)
     tests = [
+        test_v543_f2_rect_keeps_english_apostrophe,
         test_quote_pairing,
         test_single_quote_apostrophe,
         test_ascii_punct_context,
