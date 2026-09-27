@@ -17,6 +17,7 @@ import asyncio
 import re
 import threading
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -115,7 +116,18 @@ class ProcessingEngine:
     """异步流式 LLM 校对引擎。"""
 
     def __init__(self, config: ProjectConfig):
-        self.config = config
+        # v5.4.3 (F4): 配置快照 — 旧版只做 `self.config = config`(引用), 而
+        # Backend 全程只持有一个 self._config, set_config(web_backend.py:195) 与
+        # 每次 start_proofread(:568-577) 都**就地改同一对象**, 无锁无快照。
+        # 引擎又逐块现场读 (_stream_single:771 _harness_active / :786 temperature /
+        # :767 _base_system_prompt), 于是运行中改设置或切入口会:
+        #   ① 逐条轨跑一半切整篇轨 → 前 N 块 Edit 工具链 + 后 N 块整篇重写, 混合拼接
+        #   ② compute_prompt_hash 在 prepare_tasks(:281) 算一次就固定, 落盘断点的
+        #      hash 与真实生成条件不符, 下次当合法缓存复用
+        # 32 个字段全为标量, dataclasses.replace 浅拷贝即充分。
+        # 附带收益: _file_done_payload(:629) / _collect_results(:1833) 的
+        # effective_workflow(eng.config) 随之锁定为"本次实际运行的轨"。
+        self.config = replace(config)
         self.tasks: dict[str, FileTask] = {}
         self.stats = ProcessStats()
         self._cancel_event = threading.Event()

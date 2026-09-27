@@ -307,6 +307,35 @@ def _apply_rect_quote_style(chars: list[str], count: list[int]) -> None:
             chars[i] = "『" if in_span else "「"
             count[0] += 1
         elif c == "\u2019":
+            # v5.4.3 (F2): 英文拾号 (don't / James') 不参与直角化 ——
+            # 字形已由 _fix_quotes 规范为 ’ (:205/:225), 但旧版这里无条件映射成
+            # 『/』, 把 v4.3.4 评审 P1 的成果整段推翻 (rect 模式下
+            # don't → don」t / James' → James」)。
+            #
+            # 判据**严格复刻 _fix_quotes 的两条拾号规则** (:201-228), 用 isalpha
+            # 而非 isalnum:
+            #   规则1 两侧均为 ASCII 字母      → 字母夹缝缩略 (don't)
+            #   规则2 前邻 ASCII 字母串长度>=2 且后邻非 ASCII 字母 → 属格 (James')
+            # 用 isalnum 会把「中文单引号对里包 ASCII」('a' / 'I') 和「数字成对」
+            # (1980'1990') 误判为拾号 —— 实测前者产出落单直角引号, 后者把成对
+            # 引号拆成不对等。故此处逐字对齐 _fix_quotes。
+            prev_ch = chars[i - 1] if i > 0 else ""
+            next_ch = chars[i + 1] if i + 1 < len(chars) else ""
+            if (
+                prev_ch.isascii() and prev_ch.isalpha()
+                and next_ch.isascii() and next_ch.isalpha()
+            ):
+                continue                      # 规则1: 字母夹缝缩略
+            if prev_ch.isascii() and prev_ch.isalpha() and not (
+                next_ch.isascii() and next_ch.isalpha()
+            ):
+                j = i - 1
+                run_len = 0
+                while j >= 0 and chars[j].isascii() and chars[j].isalpha():
+                    run_len += 1
+                    j -= 1
+                if run_len >= 2:
+                    continue                  # 规则2: 属格/复数所有格
             chars[i] = "』" if in_span else "」"
             count[0] += 1
 

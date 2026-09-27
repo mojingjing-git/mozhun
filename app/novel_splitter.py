@@ -139,6 +139,11 @@ _CN_DIGIT_MAP = {
     "零": 0, "〇": 0, "一": 1, "壹": 1, "二": 2, "贰": 2, "三": 3, "叁": 3,
     "四": 4, "肆": 4, "五": 5, "伍": 5, "六": 6, "陆": 6, "七": 7, "柒": 7,
     "八": 8, "捌": 8, "九": 9, "玖": 9,
+    # v5.4.3 (F3 顺带): 补口语中文数字「两」。⚠ 必须与 :332 的字符类**同时**改 ——
+    # 只补本表无效: 正则 `[零〇一...仟\d]+` 不含「两」时根本匹配不到 "第两百章",
+    # 补表走不到 (实测 cn_to_int('两百') 原本 None, 补表后 _extract_chapter_num
+    # 仍返回 None, F3 的碰撞面一点没缩小)。
+    "两": 2,
 }
 _CN_UNIT_MAP = {"十": 10, "拾": 10, "百": 100, "佰": 100, "千": 1000, "仟": 1000}
 _CN_BIG_UNIT = {"万": 10000, "亿": 100000000}
@@ -329,7 +334,9 @@ def _extract_chapter_num(title: str) -> Optional[int]:
         return None
     t = title.strip()
 
-    m = re.search(r"第\s*([零〇一二三四五六七八九十百千万亿壹贰叁肆伍陆柒捌玖拾佰仟\d]+)\s*[章回节集卷部篇]", t)
+    # v5.4.3 (F3 顺带): 字符类补「两」, 与 _CN_DIGIT_MAP 的 "两": 2 配套 ——
+    # 两处缺一则 "第两百章" 要么正则不匹配, 要么匹配了但 cn_to_int 返回 None。
+    m = re.search(r"第\s*([零〇一二三四五六七八九十百千万亿壹贰叁肆伍陆柒捌玖拾佰仟两\d]+)\s*[章回节集卷部篇]", t)
     if m:
         n = cn_to_int(m.group(1))
         if n is not None:
@@ -643,6 +650,15 @@ def _dedup_same_key(blocks: List[ChapterBlock]) -> Tuple[List[ChapterBlock], int
     for key, indices in groups.items():
         if len(indices) <= 1:
             continue
+        # v5.4.3 (F3): num is None = 特章 (序章/楔子/番外/引子/尾声) ——
+        # _extract_chapter_num 抽不出数字, 同卷内所有短特章共享 key (None, None),
+        # 于是"组内有一章 >= REAL_THRESHOLD"就会把组内所有 < TOC_THRESHOLD 的
+        # **正文**整块删掉 (实测 序章6000/楔子500/番外300/第一章3000 → 只剩 2 章,
+        # 800 字正文静默消失, 无异常无 warning)。与下方 min_words 过滤
+        # (:773 的 `or b.num is None` 显式保护特章) 口径统一。
+        indices = [i for i in indices if blocks[i].num is not None]
+        if len(indices) <= 1:
+            continue
         real_indices = [i for i in indices if blocks[i].word_count >= REAL_THRESHOLD]
         if not real_indices:
             continue
@@ -827,8 +843,24 @@ def _is_ad_line(line: str) -> bool:
     if len(s) > 200:
         return False
     if any(k in s for k in _AD_STRONG):
+        # v5.4.3 (F14): 强词表是**混合**的 ——
+        #   水印/站点标记 (笔趣阁/八一中文/txt下载/防盗章/无弹窗/请收藏...) 几乎不可能
+        #     出现在正文, 见到即删 (无任何长度下限, 否则 3 字的「笔趣阁」会漏);
+        #   但「投喂/书友群/读者群/最新章节/本章说/手机阅读/作者新书」这类
+        #     **会出现在正常叙述里**的短语不能无条件删 ——
+        #     旧实现对强词只设 200 字上限, 于是任何 <=200 字的命中行被整行删除
+        #     (实测「他每天去楼下投喂那只流浪猫。」(14字)/「他翻开书友群里的聊天记录。」(13字)
+        #     /「手机阅读体验更好。」(9字) 全部判 True, 静默删正文)。
+        #
+        # 判据 = **该行是否读起来像一句叙述**: 小说正文里的完整句子必带句末标点,
+        # 而标题/水印/广告残片不会。故以句末标点(。！？!? 及半角变体)为散文信号 ——
+        # 刻意**不**用「，」: 真实广告行常含逗号
+        # (如「作者新书《某某》首发，精彩不断」本身就该删)。
+        if any(p in s for p in "。！？!?"):
+            return False                      # 带句末标点 → 宁漏勿误, 视为正文保留
         return True
     if any(k in s for k in _AD_WEAK):
+        # 弱词沿用原双重护栏 (len<=40 且无任何句中标点) —— 未改动
         return len(s) <= 40 and not any(p in s for p in "，。！？；：,;!?")
     return False
 

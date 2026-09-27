@@ -287,7 +287,17 @@ def apply_edits(original: str, edits: list[dict]) -> tuple[str, list[dict]]:
             norm_start = cur_map[norm_cur.index(norm_old)]
             last = norm_cur.index(norm_old) + len(norm_old) - 1
             orig_last = cur_map[last]
-            orig_end = orig_last + (2 if corrected[orig_last] == "\r" else 1)
+            # v5.4.3 (F1): 必须确认下一个字符确实是 \n 才能 +2。
+            # 旧实现只判 corrected[orig_last] == "\r" 就 +2, 但 _crlf_map 对
+            # **孤立 CR** 是 1:1 映射 (harness.py:171-178 的 else 分支), 多推进一格
+            # 会把匹配区外的下一个字符一起吃进替换区 (实测 '甲\r\n乙\r丙丁' + '甲\n乙\r'
+            # → 'ZZ丁', 「丙」静默删除, 而 audit 仍报 OK)。
+            _is_crlf = (
+                corrected[orig_last] == "\r"
+                and orig_last + 1 < len(corrected)
+                and corrected[orig_last + 1] == "\n"
+            )
+            orig_end = orig_last + (2 if _is_crlf else 1)
             replaced_region = corrected[norm_start:orig_end]
             # 新文本换行风格跟随被替换区域: 区域含 \r\n 则新文本 \n → \r\n。
             norm_new = _norm_crlf(new)
