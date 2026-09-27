@@ -579,6 +579,64 @@ _WEB_DIR = Path(__file__).parent.parent / "web"  # v6.0: 修正为项目根 (tes
 _STYLE_CSS = _WEB_DIR / "style.css"
 _ICONS_DIR = _WEB_DIR / "icons"
 
+# ==================== v5.4.3 批次 1: F5 / F13 / D3 前端回归 ====================
+# 三项均为纯前端渲染/状态缺陷, 静态源码断言在此锁定其**存在性**;
+# 行为级覆盖另见 tools/smoke_ui.py 的 _check_provenance / _check_local_mode_display。
+
+
+def test_v543_f5_local_mode_stale_streaming_cleared():
+    """F5: 本地模式 (punct_local/md_local) 不发 onStream, 残留 streamingContent
+    会让右栏显示上一轮文本, 而复制/导出取的是本轮 t.corrected。
+
+    两处缺一不可:
+      ① _runProofread 的 renderState 重建循环里 delete streamingContent (运行期清理)
+      ② renderCompare 取值时按 t.status 判断 (终态兜底)
+    """
+    js = _read_app_js()
+    check("F5: 启动时清 streamingContent",
+          "delete this.streamingContent[p];" in js)
+    check("F5: renderCompare 按 status 决定流式/结果优先级",
+          "t.status === 'running' ? this.streamingContent[fileKey]" in js)
+    # 负向断言必须看**代码语句**而不是全文子串 ——
+    # 修复时写的说明注释里就含 `this.streamingContent[fileKey] || t.corrected`
+    # 这段字面量, 用全文匹配会误判成"旧写法仍在"。
+    _lines = [ln.strip() for ln in js.splitlines()]
+    check("F5: 无遗留的 streamingContent 无条件优先赋值",
+          not any(ln.startswith("const partial = this.streamingContent")
+                  for ln in _lines))
+
+
+def test_v543_f13_provenance_key_includes_filekey():
+    """F13: _provenanceKey 只由 workflow+当前轨决定 -> 同轨两文件 key 相同 ->
+    切到 B 时早退, 提示条文案与按钮闭包仍指向上一个文件 ->
+    用户在 B 上点「用整篇重跑」实际重跑并覆盖 A (且 confirmOverride:false 跳确认)。
+    """
+    js = _read_app_js()
+    check("F13: provenance key 含 fileKey",
+          "${fileKey}|${t.workflow}|${cur}" in js)
+    check("F13: 旧的只含 workflow+cur 的 key 已移除",
+          "`${t.workflow}|${cur}`" not in js)
+
+
+def test_v543_d3_provenance_after_selected_guard():
+    """D3: _renderProvenance 必须在 fileKey !== selectedFileKey 守卫**之后**调用。
+
+    旧版在 renderCompare 第一行无条件调用, 而 scheduleRender 用 RAF 排队,
+    切文件后仍为上一个文件排队的回调会把提示条按旧 fileKey 重新打开 ——
+    右栏是 B 的正文, 提示条却是 A 的来源 + 指向 A 的重跑按钮。
+    """
+    js = _read_app_js()
+    i_body = js.find("renderCompare(fileKey) {")
+    i_guard = js.find("if (fileKey !== this.selectedFileKey) return;")
+    i_prov = js.find("this._renderProvenance(fileKey);", i_guard)
+    check("D3: renderCompare 存在", i_body >= 0)
+    check("D3: 选中守卫存在", i_guard >= 0)
+    check("D3: _renderProvenance 出现在守卫之后",
+          i_prov > i_guard > i_body >= 0,
+          f"body={i_body} guard={i_guard} prov={i_prov}")
+
+
+
 # ==================== 入口 (v6.0 C1: 自动发现本文件所有 test_xxx) ====================
 
 if __name__ == "__main__":

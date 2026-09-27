@@ -332,6 +332,12 @@ def test_v543_f2_rect_keeps_english_apostrophe():
     # 组合用例: repeat_compress 会缩短行, 早期方案靠传 apos_idx 下标实现 (会错位)
     o = rect("他说\u201cdon't 真的吗\uff1f\uff01\u201d", repeat_compress=True)
     check("repeat_compress 组合下 don\u2019 仍保留", "don\u2019" in o, repr(o))
+    # 原文已是全角 U+2019 (don’) 时 rect 不得改写它 ——
+    # _fix_quotes 只看半角 ', 已是 U+2019 的会漏过分类; 新规则按邻接兜住。
+    # 这是本次改动带来的、未被前述用例覆盖的行为。
+    o = rect("他说 don’ touch it")
+    check("原文已含 U+2019 时不被直角化",
+          "don’" in o and "don」t" not in o, repr(o))
 
 
 

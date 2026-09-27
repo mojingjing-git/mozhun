@@ -114,15 +114,31 @@ VOLUME_PATTERNS: List[Tuple[str, str]] = [
     ("英文卷全", r"^[Bb]ook\s+(?:the\s+)?(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|[IVXLCDM]+)[\.\s]?(?:--|\s|$)?"),
 ]
 
-# ---- 广告/水印行 (强弱两级) ----
-_AD_STRONG = [
-    "求月票", "求收藏", "求推荐", "求订阅", "求票", "月票推荐票", "求评价票",
-    "求鲜花", "投喂", "催更", "上架感言", "作者感言", "完本感言", "书友群",
-    "读者群", "qq群", "q群", "公众号", "作者新书", "笔趣阁", "八一中文",
-    "本章说", "防盗章", "防复制", "无弹窗", "最新章节", "章节错误", "请报告",
-    "手机阅读", "本书首发", "更新最快", "请收藏", "天才一秒记住", "一秒记住",
-    "txt下载", "全文阅读", "顶点小说", "思路客",
+# ---- 广告/水印行 (三档) ----
+# v5.4.3 (F14 review): 原 _AD_STRONG 是**混合**表 —— 纯站点/水印标记
+# (笔趣阁/txt下载/防盗章/无弹窗/求收藏!) 几乎不可能出现在正文, 而
+# 「投喂/书友群/读者群/手机阅读/最新章节/本章说/作者新书/催更」这类
+# **会出现在正常叙述里**。原实现对整张表一视同仁: 命中即删, 于是
+# 「他每天去楼下投喂那只流浪猫。」被整行删除; 改成「带句末标点即视为正文」
+# 又反过来把「本书由笔趣阁提供，最新章节已更新。」这类真水印放过。
+# 故按"是否可能出现在正文"分档:
+#   _AD_PURE  站点/水印标记 —— 无条件删 (它就是水印本身)
+#   _AD_COLLO 会出现正文的短语 —— 需句末标点护栏 (见 _is_ad_line)
+#   _AD_WEAK  弱标记 + 原有双重护栏 (len<=40 且无任何句中标点)
+_AD_PURE = [
+    "笔趣阁", "八一中文", "txt下载", "全文阅读", "顶点小说", "思路客",
+    "无弹窗", "防盗章", "防复制", "天才一秒记住", "一秒记住",
+    "章节错误", "请报告", "更新最快", "请收藏", "本书首发",
+    "qq群", "q群", "公众号",
+    "求月票", "求收藏", "求推荐", "求订阅", "求票", "月票推荐票",
+    "求评价票", "求鲜花",
 ]
+_AD_COLLO = [
+    "投喂", "催更", "上架感言", "作者感言", "完本感言",
+    "书友群", "读者群", "作者新书", "本章说", "最新章节", "手机阅读",
+]
+# 兼容旧名 (外部/测试可能引用 _AD_STRONG)
+_AD_STRONG = _AD_PURE + _AD_COLLO
 _AD_WEAK = [
     "月票", "推荐票", "打赏", "赏金", "感言", "微信", "下载", "新书",
     "ps：", "ps:", "p.s", "enjoyment",
@@ -631,7 +647,7 @@ def _strip_gutenberg_header(content: str) -> str:
 
 
 def _dedup_same_key(blocks: List[ChapterBlock]) -> Tuple[List[ChapterBlock], int]:
-    """同号去重: 同 (volume, num) 出现多次时, 仅删除字数 < 阈值的疑似 TOC 条目.
+    """同号去重: 同 (volume, num, title) 出现多次时, 仅删除字数 < 阈值的疑似 TOC 条目.
 
     保守策略:
       - 仅当某条 word_count < 1000 且同 key 存在 word_count >= 5000 的章节时才删
@@ -642,21 +658,21 @@ def _dedup_same_key(blocks: List[ChapterBlock]) -> Tuple[List[ChapterBlock], int
         return blocks, 0
     groups: Dict[Tuple, List[int]] = {}
     for i, blk in enumerate(blocks):
-        key = (blk.volume, blk.num)
+        # v5.4.3 (F3): key 必须含 title —— 特章 (序章/楔子/番外/引子/尾声) 的
+        # num 恒为 None (抽不出数字), 故同卷内**所有**特章共享 key (volume, None);
+        # 组内任意一章 >=5000 字就会把组内所有 <1000 字的整块删掉。
+        # 旧 key (volume, num) 下实测 序章6000/楔子500/番外300/第一章3000
+        # 只剩 2 章, 800 字正文静默消失 (无异常无 warning), 而
+        # "序章在卷首之前"是中文小说常态。
+        # 带上 title 后: 序章/楔子/番外 各自成组, 互不碰撞; 而**同一**特章的
+        # 目录残行 (序章 9字) 与正文章 (序章 6000字) 仍在同组, 去重照常生效
+        # (这正是本函数存在的目的)。
+        key = (blk.volume, blk.num, blk.title.strip())
         groups.setdefault(key, []).append(i)
     to_remove: set = set()
     TOC_THRESHOLD = 1000
     REAL_THRESHOLD = 5000
     for key, indices in groups.items():
-        if len(indices) <= 1:
-            continue
-        # v5.4.3 (F3): num is None = 特章 (序章/楔子/番外/引子/尾声) ——
-        # _extract_chapter_num 抽不出数字, 同卷内所有短特章共享 key (None, None),
-        # 于是"组内有一章 >= REAL_THRESHOLD"就会把组内所有 < TOC_THRESHOLD 的
-        # **正文**整块删掉 (实测 序章6000/楔子500/番外300/第一章3000 → 只剩 2 章,
-        # 800 字正文静默消失, 无异常无 warning)。与下方 min_words 过滤
-        # (:773 的 `or b.num is None` 显式保护特章) 口径统一。
-        indices = [i for i in indices if blocks[i].num is not None]
         if len(indices) <= 1:
             continue
         real_indices = [i for i in indices if blocks[i].word_count >= REAL_THRESHOLD]
@@ -842,23 +858,12 @@ def _is_ad_line(line: str) -> bool:
         return False
     if len(s) > 200:
         return False
-    if any(k in s for k in _AD_STRONG):
-        # v5.4.3 (F14): 强词表是**混合**的 ——
-        #   水印/站点标记 (笔趣阁/八一中文/txt下载/防盗章/无弹窗/请收藏...) 几乎不可能
-        #     出现在正文, 见到即删 (无任何长度下限, 否则 3 字的「笔趣阁」会漏);
-        #   但「投喂/书友群/读者群/最新章节/本章说/手机阅读/作者新书」这类
-        #     **会出现在正常叙述里**的短语不能无条件删 ——
-        #     旧实现对强词只设 200 字上限, 于是任何 <=200 字的命中行被整行删除
-        #     (实测「他每天去楼下投喂那只流浪猫。」(14字)/「他翻开书友群里的聊天记录。」(13字)
-        #     /「手机阅读体验更好。」(9字) 全部判 True, 静默删正文)。
-        #
-        # 判据 = **该行是否读起来像一句叙述**: 小说正文里的完整句子必带句末标点,
-        # 而标题/水印/广告残片不会。故以句末标点(。！？!? 及半角变体)为散文信号 ——
-        # 刻意**不**用「，」: 真实广告行常含逗号
-        # (如「作者新书《某某》首发，精彩不断」本身就该删)。
-        if any(p in s for p in "。！？!?"):
-            return False                      # 带句末标点 → 宁漏勿误, 视为正文保留
-        return True
+    if any(k in s for k in _AD_PURE):
+        return True                       # 站点/水印标记: 它本身就是水印, 无条件删
+    if any(k in s for k in _AD_COLLO):
+        # 会出现正文的短语 —— 带句末标点即视为叙述句, 宁漏勿误保留。
+        # 刻意**不**用「，」: 真实广告行常含逗号, 排掉它会让本档形同虚设。
+        return not any(p in s for p in "。！？!?")
     if any(k in s for k in _AD_WEAK):
         # 弱词沿用原双重护栏 (len<=40 且无任何句中标点) —— 未改动
         return len(s) <= 40 and not any(p in s for p in "，。！？；：,;!?")

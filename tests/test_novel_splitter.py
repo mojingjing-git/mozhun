@@ -767,9 +767,15 @@ class TestV543F3SpecialChapterDedup(unittest.TestCase):
 
     @staticmethod
     def _mk(idx, title, wc, num, vol=None):
+        # v5.4.3 (F3 review): **不要**设 is_special=(num is None) ——
+        # is_special 在生产代码里从未被赋值 (app/novel_splitter.py:295 只有
+        # dataclass 默认 False), 只有测试夹具在这里造它。设了它会让
+        # "过滤 num is None" 与 "过滤 is_special" 两种写法在测试里必然等价,
+        # 于是有人把生产代码误写成后者时门禁全绿而 bug 复发 (reviewer 实测盲区)。
+        # 保持生产默认值, 两种写法的差异才会被用例分出来。
         return ChapterBlock(index=idx, title=title, content="字" * wc,
                             word_count=wc, volume=vol, volume_index=1,
-                            num=num, is_special=(num is None))
+                            num=num)
 
     def test_special_chapters_all_kept(self):
         """原 bug 场景: 4 章只应剩 2 章, 修好后应全保留"""
@@ -812,6 +818,36 @@ class TestV543F3SpecialChapterDedup(unittest.TestCase):
         self.assertEqual(cn_to_int("两百"), 200)
         self.assertEqual(_extract_chapter_num("第两百章"), 200,
                          "正则字符类未加「两」, 补映射表走不到")
+
+    def test_same_special_title_toc_residue_still_deduped(self):
+        """**同一**特章的目录残行仍须去重 —— 这是 key 带 title 的核心价值.
+
+        修 F3 时若走"把 num is None 整组排除"这条路, 特章的目录残行
+        (序章 9字 / 楔子 0字 / 番外 0字) 会全部留存, 下游 min_words 过滤
+        (novel_splitter.py:789 的 `or b.num is None`) 与 _merge_tiny
+        (`:872` 的 `and blk.num is not None`) 都显式豁免特章, 救不回来 ——
+        变成 6 个 0~12 字的空壳"章节"文件。带 title 的 key 避免了这个副作用。
+        """
+        blocks = [self._mk(0, "序章", 9, None),        # 目录残行
+                  self._mk(1, "楔子", 0, None),        # 目录残行 (空)
+                  self._mk(2, "序章", 6000, None),     # 正文章
+                  self._mk(3, "楔子", 5000, None)]     # 正文章
+        kept, n = _dedup_same_key(blocks)
+        titles = [b.title for b in kept]
+        self.assertEqual(n, 2, f"两条目录残行应被去重, kept={titles}")
+        self.assertEqual(len(kept), 2, titles)
+        # 保留的必须是**长正文**那两条, 不是 9 字/0 字的残行
+        for b in kept:
+            self.assertGreaterEqual(b.word_count, 5000,
+                                    f"保留了目录残行: {b.title}/{b.word_count}")
+
+    def test_different_special_titles_do_not_collide(self):
+        """不同特章互不碰撞 (key 带 title 的另一半价值)"""
+        blocks = [self._mk(0, "序章", 6000, None), self._mk(1, "楔子", 500, None),
+                  self._mk(2, "番外", 300, None), self._mk(3, "引子", 100, None)]
+        kept, n = _dedup_same_key(blocks)
+        self.assertEqual(len(kept), 4, [b.title for b in kept])
+        self.assertEqual(n, 0)
 
 
 class TestV543F14AdLineProseGuard(unittest.TestCase):
