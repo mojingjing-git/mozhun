@@ -17,6 +17,12 @@ from pathlib import Path
 # 让 tests/ 能 import app/
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+# v5.4.3 (F0-②): 测试隔离必须在任何 import app.* 之前 ——
+# app/logger.py:14 / app/utils.py:595 在 import 期把 PROOFREADER_HOME 冻成模块常量,
+# 漏这一行则隔离静默失效, 测试会污染用户真实 ~/.proofreader。
+# run_all_tests.py 现已同时预置 env 作为第二道防线。
+import test_isolate  # noqa: F401
+
 from app.utils import (
     ProjectConfig,
     compute_prompt_hash,
@@ -478,6 +484,9 @@ if __name__ == "__main__":
     total = result.testsRun
     failed = len(result.failures) + len(result.errors)
     passed = total - failed
+    # v5.4.3 (F0-①): 0 用例必须判失败 —— unittest.wasSuccessful() 对空 suite 返回 True,
+    # 会打印 [PASS] (0/0) 且 exit 0, 门禁静默绿灯。类名写错 / 用例被误改名即触发。
+    assert total > 0, "test_harness_split 收集到 0 个用例 (类名/方法名被误改?)"
     if result.wasSuccessful():
         print(f"[PASS] test_harness_split ({passed}/{total})")
     else:
