@@ -608,16 +608,32 @@ def test_v414_throttle_33ms():
 
 # === test_v414_throttle_constants ===
 def test_v414_throttle_constants():
-    """v4.1.4: _push 节流常量是 0.033 秒 (33ms), 跟 Timer(0.033) 一致."""
+    """v4.1.4: _push 节流间隔是 0.033 秒 (33ms), 不是旧版 0.1 (100ms).
+
+    v5.4.3 (F8) 修订: 旧版断言的是 `_push` **源码文本**里出现
+    `threading.Timer(0.033` —— 那是文本位置断言, 不是不变量断言。
+    F8 把 Timer 的创建抽到 `_arm_push_timer_locked` (回灌路径必须共用同一个
+    arm 点, 否则失败的若是最后一批就没人再 arm), 文本位置自然变了, 但
+    "节流间隔 = 33ms" 这条不变量一个字都没动。
+    → 改为直接断言间隔常量本身 + 校验 Timer 仍被真正接线 (常量没被孤立)。
+    """
     print("\n--- v4.1.4: _push 节流常量 ---", flush=True)
-    from app.web_backend import Backend
+    from app.web_backend import Backend, _PUSH_FLUSH_INTERVAL
     import inspect
 
-    src = inspect.getsource(Backend._push)
-    # v4.1.8.2 (审计 B5): 同步 flush 死分支已删, 节流常量走 Timer(0.033)
-    check("含 Timer(0.033) 节流", "threading.Timer(0.033" in src)
-    check("Timer(0.033) 启动", "Timer(0.033" in src)
-    check("无 0.1 (旧 100ms)", "0.1" not in src and "0,1" not in src)
+    check("节流间隔常量是 0.033 秒 (33ms)", _PUSH_FLUSH_INTERVAL == 0.033,
+          str(_PUSH_FLUSH_INTERVAL))
+    arm_src = inspect.getsource(Backend._arm_push_timer_locked)
+    push_src = inspect.getsource(Backend._push)
+    # Timer 仍被真正接线, 且用的是那个常量 (常量不能被孤立成一个没人用的数字)
+    check("arm 点用 threading.Timer 延时 flush", "threading.Timer(" in arm_src, arm_src)
+    check("arm 点用的是节流间隔常量",
+          "_PUSH_FLUSH_INTERVAL" in arm_src, arm_src)
+    check("_push 经 arm 点接线", "_arm_push_timer_locked()" in push_src, push_src)
+    # 旧 100ms 不得复活 (源码 + 常量两头都查)
+    check("无 0.1 (旧 100ms)",
+          "0.1" not in push_src and "0.1" not in arm_src
+          and _PUSH_FLUSH_INTERVAL != 0.1)
 
 # === test_v414_export_user_cancelled ===
 def test_v414_export_user_cancelled():

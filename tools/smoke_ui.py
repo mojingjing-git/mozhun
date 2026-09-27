@@ -462,6 +462,75 @@ def _check_api_panel(page, out: Path) -> None:
     page.screenshot(path=str(out / "1280x760-6-api-panel.png"))
 
 
+def _check_splitter_progress(page, out: Path) -> None:
+    """v5.4.3 (F9 / F15): 切分进度事件真的渲染 + splitter 日志真的落到 UI。
+
+    F9 修之前后端推 onSplitterProgress, 但 app.js 的 dispatch 没有对应 case,
+    事件落 `default: console.warn` —— 进度条只能 0% 直接跳 100%。
+    修法是走 default: 分支委派给 splitter.onEvent, 所以这里从
+    App.handleEvent 注入, 验的是**真实委派链路**而不是直接调 splitter 方法。
+    """
+    print("\n--- v5.4.3: 切分进度事件 + splitter 命名空间 ---", flush=True)
+    page.click('.nav-item[data-nav-key="splitter"]')
+    page.wait_for_timeout(150)
+
+    check("F15 splitter 挂在 window.app 上 (不是大写孤儿对象)",
+          page.evaluate("() => !!(window.app && window.app.splitter)"))
+    check("F15 大写 window.App 不再被创建",
+          page.evaluate("() => typeof window.App === 'undefined'"))
+
+    # processing 形态: 宽度非 0 且非 100% (夹具 3 本, current=1 → 33%)
+    page.evaluate("""() => window.app.handleEvent('onSplitterProgress',
+        {stage: 'processing', current: 1, total: 3, book_name: '第一本'})""")
+    st = page.evaluate("""() => {
+      const box = document.getElementById('splitter-progress');
+      const fill = document.getElementById('splitter-progress-fill');
+      const stats = document.getElementById('splitter-progress-stats');
+      return {hidden: box ? box.hidden : null,
+              width: fill ? fill.style.width : '',
+              stats: stats ? stats.textContent : ''};
+    }""")
+    check("F9 processing 事件让进度条显形", st["hidden"] is False, str(st))
+    check("F9 processing 宽度非 0 且非 100%", st["width"] not in ("", "0%", "100%"),
+          f"width={st['width']}")
+    check("F9 processing 显示当前书名与计数", "第一本" in st["stats"] and "1/3" in st["stats"],
+          st["stats"])
+
+    # done 形态: 固定 100% + 成功/失败统计 (不能用 current/total, 否则失败本会拉不满)
+    page.evaluate("""() => window.app.handleEvent('onSplitterProgress',
+        {stage: 'done', current: 3, total: 3, success: 2, fail: 1})""")
+    st = page.evaluate("""() => {
+      const fill = document.getElementById('splitter-progress-fill');
+      const stats = document.getElementById('splitter-progress-stats');
+      return {width: fill ? fill.style.width : '',
+              stats: stats ? stats.textContent : ''};
+    }""")
+    check("F9 done 事件宽度 100%", st["width"] == "100%", f"width={st['width']}")
+    check("F9 done 事件显示 2 成功 / 1 失败",
+          "2" in st["stats"] and "1" in st["stats"] and "成功" in st["stats"],
+          st["stats"])
+
+    # F15: splitter.log / toast 必须真的走到 App, 而不是恒假的守卫
+    before = page.evaluate("() => document.getElementById('log-output').textContent")
+    page.evaluate("() => window.app.splitter.log('冒烟日志行')")
+    after = page.evaluate("() => document.getElementById('log-output').textContent")
+    check("F15 splitter.log 真的写进 #log-output",
+          after != before and "[小说切分] 冒烟日志行" in after,
+          f"新增={after[len(before):]!r}")
+
+    # 未认领的事件仍落 console.warn, 不能被委派分支静默吞掉
+    warned = page.evaluate("""() => {
+      const orig = console.warn;
+      let seen = null;
+      console.warn = (...a) => { if (seen === null) seen = String(a[0]); };
+      try { window.app.handleEvent('onSomethingUnknown', {}); }
+      finally { console.warn = orig; }
+      return seen;
+    }""")
+    check("F9 未知事件仍告警 (未被静默吞)", "未知事件" in (warned or ""), repr(warned))
+    page.screenshot(path=str(out / "1440x900-8-splitter-progress.png"))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="墨准 v5.3 前端三视口冒烟")
     parser.add_argument("--out", default=str(ROOT / ".local" / "smoke-ui-v5.3"),
@@ -500,6 +569,7 @@ def main() -> int:
                 _check_whole_file_warning(page, out)
                 _check_think_strip_stream(page, out)
                 _check_api_panel(page, out)
+                _check_splitter_progress(page, out)
                 check("页面无 JS 异常", not errs, str(errs[:3]))
             finally:
                 browser.close()

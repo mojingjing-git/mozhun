@@ -420,7 +420,16 @@ const App = {
       case 'onFilesDropped':   this.handleFilesDropped(data); break;
       // v4.3.0: DeAI textarea 文件拖入 (Python read_file_text 编码兜底)
       case 'onDeaiTextDrop':   this.handleDeaiTextDrop(data); break;
-      default: console.warn('未知事件:', event, data);
+      default:
+        // v5.4.3 (F9): 通用委派 — 视图级事件交回对应视图自处理, 本文件保持零
+        // splitter 知识 (不新增 case、不硬编码 'onSplitterProgress')。未消费的
+        // 事件照旧落 console.warn, 不静默吞掉。
+        if (window.app && window.app.splitter
+            && typeof window.app.splitter.onEvent === 'function'
+            && window.app.splitter.onEvent(event, data)) {
+          break;
+        }
+        console.warn('未知事件:', event, data);
     }
   },
 

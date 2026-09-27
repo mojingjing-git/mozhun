@@ -250,20 +250,65 @@
       return parts[parts.length - 1] || p;
     },
 
+    // v5.4.3 (F15): 统一用小写 window.app。app.js 顶层语句 `window.app = App`
+    // (app.js:3487) 只写小写, 旧版这里自建大写 window.App 空对象 → 两个
+    // typeof 守卫恒假, 切分日志与 toast 永久走 console 分支 (build.spec console=False,
+    // 用户什么都看不到)。守卫与调用点必须成对改: 只改守卫会让分支为真后
+    // 在调用点抛 TypeError, 比现状更糟。
     log(msg) {
-      if (window.App && typeof window.App.appendLog === 'function') {
-        window.App.appendLog('[小说切分] ' + msg);
+      if (window.app && typeof window.app.appendLog === 'function') {
+        window.app.appendLog('[小说切分] ' + msg);
       } else {
         console.log('[小说切分] ' + msg);
       }
     },
 
     toast(msg, type) {
-      if (window.App && typeof window.App.showToast === 'function') {
-        window.App.showToast(msg, type || 'info');
+      if (window.app && typeof window.app.showToast === 'function') {
+        window.app.showToast(msg, type || 'info');
       } else {
         console.log('[toast]', type || 'info', msg);
       }
+    },
+
+    // ====== 事件 (v5.4.3 F9) ======
+    // 通用事件入口: app.js 的 dispatch 走 default: 分支把不认识的事件原样委派过来,
+    // 这样 app.js 保持零 splitter 知识 (不新增 case, 不硬编码事件名)。
+    // 返回 true = 已消费; false/未定义 = 不认识, 由 app.js 回落到 console.warn。
+    onEvent(name, data) {
+      if (name === 'onSplitterProgress') {
+        this.handleProgress(data);
+        return true;
+      }
+      return false;
+    },
+
+    // 进度条渲染。后端在 batch_splitter 的 await 期间按本推 (web_backend.py:2031),
+    // 终态在返回前推 (web_backend.py:2050) —— 两路写者目标一致 (都收在 100% +
+    // 成功/失败统计), 故交错无碍。
+    handleProgress(data) {
+      if (!data) return;
+      const box = document.getElementById('splitter-progress');
+      const fill = document.getElementById('splitter-progress-fill');
+      const stats = document.getElementById('splitter-progress-stats');
+      if (!box || !fill || !stats) return;
+      box.hidden = false;
+      const total = Number(data.total) || 0;
+      const current = Number(data.current) || 0;
+      if (data.stage === 'done') {
+        // 终态固定 100% —— 若用 current/total 算, 失败本多时宽度不足 100% 会误导
+        fill.style.width = '100%';
+        stats.textContent = `完成: ${Number(data.success) || 0} 成功 / ${Number(data.fail) || 0} 失败`;
+        return;
+      }
+      // processing 阶段: current 是 1-based (后端 enumerate(..., start=1)),
+      // 即「正在切第 1 本」→ 1/total, 不需要 -1 修正。
+      const pct = total > 0 ? Math.min(100, Math.round(current / total * 100)) : 0;
+      fill.style.width = pct + '%';
+      const book = data.book_name ? String(data.book_name) : '';
+      stats.textContent = book
+        ? `切分中 ${current}/${total}: ${book}`
+        : `切分中 ${current}/${total}`;
     },
   };
 
@@ -273,9 +318,12 @@
     }[c]));
   }
 
-  // 暴露到 App.splitter (供主 app.js 引用)
-  if (!window.App) window.App = {};
-  window.App.splitter = splitter;
+  // 暴露到 app.splitter (供 app.js 的 default: 事件委派 + 外部引用)
+  // v5.4.3 (F15): 改挂小写 window.app —— 旧挂 window.App (大写) 是只写不读的
+  // 孤儿对象。app.js 在 index.html:659 先加载且 window.app = App 是顶层语句,
+  // 这里不会把已有实例覆盖成空对象 (index.html:661 在其后)。
+  if (!window.app) window.app = {};
+  window.app.splitter = splitter;
 
   // DOMContentLoaded 自动 init
   if (document.readyState === 'loading') {

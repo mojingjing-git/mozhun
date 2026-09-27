@@ -105,6 +105,24 @@ _DEAI_REVISE_LIMIT = 20000
 # 借鉴来源沿用 utils.py 顶部注释 (tianhm/ollama-batch-processor MIT)。
 # 业务层 + 前端层统一从 utils 导入, 避免 label/max_chars 漂移。
 
+# ====== 事件推送通道参数 (v5.4.3 F8 / D-10) ======
+# ⚠ 以下三个数均为**初始拍定值, 未做真实样本校准** (AGENTS.md §34 口径)。
+#    严禁在文档/注释里编造"实测平均 N"之类不存在的校准数据来源。
+#
+# flush 节流间隔: 33ms (30 FPS), 沿用 v4.1.4 起的不变值, F8 不改。
+_PUSH_FLUSH_INTERVAL = 0.033
+# 推送失败重试预算 (每批次数)。evaluate_js 抛异常时把该批放回重试槽,
+# 超过预算则丢弃 + logger.error。设 2 而非 1: pywebview 在窗口
+# 最小化/后台切换的瞬间可能抛一次瞬时异常, 给一次机会又不至于拖成风暴。
+_PUSH_RETRY_BUDGET = 2
+# buffer 上限 (条)。超出时优先丢最旧的 onLog (纯日志, 丢一两条无伤);
+# 全是离散事件时丢最旧的一条并 logger.error 留痕。
+_PUSH_MAX_BUFFER = 2000
+# 连续 flush 失败达此次数即熔断本会话的推送通道 (替代旧版不可达的
+# `self._window is None` 守卫 —— 真实故障态是"window 还在但 WebView 已死",
+# evaluate_js 持续抛异常)。熔断后 _push 直接丢弃, 只在首次记 error。
+_PUSH_FAIL_STREAK_MAX = 5
+
 
 class Backend:
     """暴露给 JS 的 Python 方法集合 (window.pywebview.api.xxx)。"""
@@ -122,6 +140,15 @@ class Backend:
         self._last_push_time = 0.0
         self._push_buffer: list[tuple[str, object]] = []
         self._push_pending = False
+        # v5.4.3 (F8): 失败重投状态。旧版 clear() 后再序列化, evaluate_js 抛
+        # 异常就永久丢事件 (丢 onTaskComplete → isProcessing 永不复位, 按钮永久禁用),
+        # 且 json.dumps 在 try 之外, 序列化失败会连累整条通道。
+        # 重投批次单独放 _push_retry_slot, **不混回 _push_buffer** ——
+        # 混回会让新事件排在旧事件前面, 且 buffer 随每次重试单调增长 (O(n²))。
+        self._push_retry_slot: list[tuple[str, object]] | None = None
+        self._push_retry_count = 0      # 当前批次已重试次数
+        self._push_fail_streak = 0      # 连续失败次数 (熔断用)
+        self._push_disabled = False     # 熔断后不再推送 (本会话)
         # DeAI 3 步工作流任务跟踪
         self._deai_tasks: dict[str, dict] = {}
         self._deai_lock = threading.Lock()
@@ -1855,18 +1882,64 @@ class Backend:
         - v4.0/v4.1.0: 50ms (20 FPS)
         - v4.1.1/v4.1.2/v4.1.3 (I2): 100ms (10 FPS) — 用户报告"刷出来"感
         - v4.1.4: 33ms (30 FPS) — 平衡流畅度 + 跨线程 evaluate_js 压力
+
+        v5.4.3 (F8): buffer 加长度上限, 超出优先丢最旧的 onLog
+        (见 _PUSH_MAX_BUFFER 的口径注释)。
         """
         with self._push_throttle_lock:
-            self._push_buffer.append((event_name, data))
-            if self._push_pending:
+            if self._push_disabled:
+                # 熔断中: evaluate_js 已连续失败到上限, WebView 基本已死。
+                # 继续攒 buffer 只会无界增长 (每次 flush 失败又把批次塞回来)。
                 return
+            self._push_buffer.append((event_name, data))
+            if len(self._push_buffer) > _PUSH_MAX_BUFFER:
+                self._trim_push_buffer_locked()
             # v4.1.8.2 (审计 B5): 删除旧的"距上次 flush 已过 33ms 立即同步 flush"
             # 分支 — 它在当前控制流下不可达 (依赖 _last_push_time 每次清零的脆弱
             # 不变量), 且分支体内持非重入锁调 _flush() 会同线程自死锁. 统一走
             # Timer 延迟 flush, 行为不变, 拆掉死锁地雷.
-            self._push_pending = True
-            self._last_push_time = time.time()
-            threading.Timer(0.033, self._flush).start()
+            self._arm_push_timer_locked()
+
+    def _arm_push_timer_locked(self):
+        """在**已持有** _push_throttle_lock 时 arm 一次 flush Timer (幂等).
+
+        v5.4.3 (F8): _push 与 _flush 的失败回灌路径共用这一个 arm 点。
+        旧版回灌只是 `buffer[:0] = events`, 而 Timer 只在 _push 里创建 ——
+        若失败的正是最后一批 (onTaskComplete), 之后再无 _push, 事件永不送达,
+        正是本项要修的 bug。调用方必须已持锁 (本方法不自己加锁, 避免同线程死锁)。
+        """
+        if self._push_pending:
+            return          # 已有 Timer 在飞, 不能再起一个, 否则双重 flush
+        self._push_pending = True
+        self._last_push_time = time.time()
+        threading.Timer(_PUSH_FLUSH_INTERVAL, self._flush).start()
+
+    def _trim_push_buffer_locked(self):
+        """buffer 超上限时裁剪 (在**已持有** _push_throttle_lock 时调用).
+
+        优先丢最旧的 onLog —— 纯日志, 丢一两条不改变状态机; 全是离散事件时
+        丢最旧的一条并 logger.error 留痕 (不能静默, 否则丢 onTaskComplete
+        会让 isProcessing 永不复位, 而现场没有任何线索)。
+        """
+        overflow = len(self._push_buffer) - _PUSH_MAX_BUFFER
+        if overflow <= 0:
+            return
+        # 第一个非 onLog 的下标: 之前的都可以丢
+        first_non_log = 0
+        while first_non_log < len(self._push_buffer) \
+                and self._push_buffer[first_non_log][0] == "onLog":
+            first_non_log += 1
+        drop_log = min(overflow, first_non_log)
+        if drop_log:
+            del self._push_buffer[:drop_log]
+            logger.warning(f"[push] buffer 超 {_PUSH_MAX_BUFFER} 条, 丢弃最旧 {drop_log} 条 onLog")
+        overflow -= drop_log
+        if overflow > 0:
+            del self._push_buffer[:overflow]
+            logger.error(
+                f"[push] buffer 超 {_PUSH_MAX_BUFFER} 条且无可丢日志, "
+                f"丢弃最旧 {overflow} 条事件 (含可能的离散事件点)"
+            )
 
     def _flush(self):
         """批量推送到前端.
@@ -1891,50 +1964,119 @@ class Backend:
             "onTaskComplete", "onDeaiComplete", "onDeaiError",
             "onHarnessWait",
             "onDeaiStream", "onFilesDropped", "onFetchModelsComplete",
+            # v5.4.3 (F9): 补 3 个离散事件点, 原先落"同名覆盖"类, 同 33ms 窗口
+            # 内只留最后一条:
+            #   onChunkProgress   — 每块完成的离散点 (不是状态快照), 丢了就跳格
+            #   onDeaiTextDrop    — 33ms 内连拖两份 → 前一份 paths 静默丢失;
+            #                       且 app.js:_applyDroppedText 非幂等, 重复投递
+            #                       会让同一段文本被追加两遍, 故必须只投一次
+            #   onSplitterProgress— 前端原本连 case 都没有 (死事件), 切分进度条
+            #                       只能从 0% 直接跳 100%
+            "onChunkProgress", "onDeaiTextDrop", "onSplitterProgress",
         }
         with self._push_throttle_lock:
-            if not self._push_buffer:
-                self._push_pending = False
-                return
-            merged: dict[str, object] = {}  # 覆盖类
-            multi: list[tuple[str, object]] = []  # 允许多个类, 顺序保留
-            for name, data in self._push_buffer:
-                if name in ACCUMULATE_EVENTS:
-                    # 累积拼接 (data 通常是 string)
-                    prev = merged.get(name)
-                    if prev is None:
-                        merged[name] = data if isinstance(data, str) else str(data)
-                    else:
-                        sep = "" if (isinstance(prev, str) and prev.endswith("\n")) else "\n"
-                        merged[name] = (
-                            (prev if isinstance(prev, str) else str(prev))
-                            + sep
-                            + (data if isinstance(data, str) else str(data))
-                        )
-                elif name in MULTI_ALLOWED:
-                    # 保留所有同名事件
-                    multi.append((name, data))
-                else:
-                    # 默认同名覆盖 (onStream, onStatsUpdate, onFetchModelsComplete 等)
-                    merged[name] = data
-            events = list(merged.items()) + multi
-            self._push_buffer.clear()
             self._push_pending = False
+            # v5.4.3 (F8): 重投槽优先 —— 它比 buffer 里的新事件更老,
+            # 且新事件只在 _push 里产生 (而 _push 一定会 arm 一个 Timer),
+            # 所以"只取重投槽、buffer 留到下一轮"不会造成滞留。
+            if self._push_retry_slot is not None:
+                events = self._push_retry_slot
+                self._push_retry_slot = None
+                # 重投: 沿用同一批的重试计数, **不**在此归零
+            else:
+                if not self._push_buffer:
+                    self._last_push_time = 0.0
+                    return
+                # 取一批全新的事件 → 重试预算重置。
+                # (漏了这一行的话: 某个批次耗尽预算被丢弃后 _push_retry_count
+                #  停在上限, 此后本会话每个新批次都只剩 1 次投递机会,
+                #  WebView 偶发瞬时异常再也得不到重试机会。)
+                self._push_retry_count = 0
+                merged: dict[str, object] = {}  # 覆盖类
+                multi: list[tuple[str, object]] = []  # 允许多个类, 顺序保留
+                for name, data in self._push_buffer:
+                    if name in ACCUMULATE_EVENTS:
+                        # 累积拼接 (data 通常是 string)
+                        prev = merged.get(name)
+                        if prev is None:
+                            merged[name] = data if isinstance(data, str) else str(data)
+                        else:
+                            sep = "" if (isinstance(prev, str) and prev.endswith("\n")) else "\n"
+                            merged[name] = (
+                                (prev if isinstance(prev, str) else str(prev))
+                                + sep
+                                + (data if isinstance(data, str) else str(data))
+                            )
+                    elif name in MULTI_ALLOWED:
+                        # 保留所有同名事件
+                        multi.append((name, data))
+                    else:
+                        # 默认同名覆盖 (onStream, onStatsUpdate 等)
+                        merged[name] = data
+                events = list(merged.items()) + multi
+                self._push_buffer.clear()
             self._last_push_time = 0.0
+
+        # webview 尚未注入 (main.py 先 Backend(window=None) 后 set_window) 时
+        # 重试无意义 —— 事件只可能来自本进程内的测试/离屏用法, 直接丢,
+        # 不进重试槽 (否则会凭空多跑 _PUSH_RETRY_BUDGET 轮 Timer)。
         if self._window is None:
             return
-        # 序列化 + 推 (v4.1 M4: 用 _serialize 替代 default=str,
-        # 能正确处理 Path / dataclass / Enum 等, 不再退化为 str repr)
-        payload = json.dumps(
-            events, ensure_ascii=False, default=self._serialize
-        )
+        # 序列化 (v4.1 M4: 用 _serialize 替代 default=str, 能正确处理
+        # Path / dataclass / Enum 等, 不再退化为 str repr)
+        try:
+            payload = json.dumps(
+                events, ensure_ascii=False, default=self._serialize
+            )
+        except Exception as e:
+            # v5.4.3 (F8): 序列化失败 = 毒丸批次 (自引用 -> Circular reference)。
+            # 旧版这一句在 try 之外, 异常直接穿出 _flush, 批次已被 clear() 掉,
+            # 缓冲里若还有事件则再也等不到 Timer (永久滞留)。
+            # 这里直接丢弃该批且**绝不放回重试槽** —— 放回去就永久毒住通道:
+            # 此后每次 flush 都在它上面失败, 整条事件通道对该会话死掉。
+            self._push_retry_count = 0
+            logger.error(
+                f"[push] 序列化失败, 丢弃该批 {len(events)} 条事件 (不重试): "
+                f"{type(e).__name__}: {e}"
+            )
+            return
         # 用 textContent 替代 innerHTML, 防 XSS
         js = f"window.app.handleEventBatch({payload})"
         try:
             self._window.evaluate_js(js)
         except Exception as e:
-            # evaluate_js 失败不致命 (比如 webview 关闭中)
-            logger.error(f"[push error] {type(e).__name__}: {e}")
+            # v5.4.3 (F8): 投递失败不致命 (webview 关闭中等), 但**不丢事件**:
+            # 丢 onTaskComplete / onFileDone 会让前端 isProcessing 永不复位、
+            # 开始按钮永久禁用, 正是本项要修的 bug。
+            with self._push_throttle_lock:
+                self._push_fail_streak += 1
+                if self._push_fail_streak >= _PUSH_FAIL_STREAK_MAX:
+                    # 连续失败到上限: WebView 基本已死, 熔断本会话的推送,
+                    # 避免重试槽 + buffer 无限打转。重启应用自然恢复。
+                    self._push_disabled = True
+                    self._push_retry_slot = None
+                    self._push_buffer.clear()
+                    logger.error(
+                        f"[push] 连续 {_PUSH_FAIL_STREAK_MAX} 次投递失败, "
+                        f"熔断本会话事件推送 (最后一次: {type(e).__name__}: {e})"
+                    )
+                    return
+                if self._push_retry_count < _PUSH_RETRY_BUDGET:
+                    self._push_retry_slot = events
+                    self._push_retry_count += 1
+                    # 关键: 回灌后必须重新 arm, 否则失败的若是最后一批
+                    # (onTaskComplete), 之后再无 _push -> 事件永不送达
+                    self._arm_push_timer_locked()
+                else:
+                    self._push_retry_slot = None
+                    logger.error(
+                        f"[push] 投递失败已达重试预算 {_PUSH_RETRY_BUDGET}, "
+                        f"丢弃该批 {len(events)} 条事件: {type(e).__name__}: {e}"
+                    )
+            return
+        # 成功: 清零失败计数
+        self._push_fail_streak = 0
+        self._push_retry_count = 0
 
     @staticmethod
     def _serialize(obj):
