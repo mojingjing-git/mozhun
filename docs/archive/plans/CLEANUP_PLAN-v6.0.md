@@ -4,6 +4,12 @@
 > Phase C0/C1 已完成；C2 `app.js`、C3 `style.css`、C4 `ARCHITECTURE.md`
 > 仍未执行。文中旧版本号、旧路径和测试基线仅保留为历史记录，
 > 当前状态以 `docs/ROADMAP.md` 为准。
+>
+> **分支 `cleanup/v6` 已于 2026-09-27 废弃并删除**。该分支 (tip `6921090`)
+> 是 master 的严格祖先 (`git rev-list master..cleanup/v6` = 0), 且是合并提交
+> `ea187e8` 的**第一父**, 内容与历史均已被 master 完整覆盖; 删除前已确认
+> 其 tip 有备份 tag `backup/pre-consolidation-cleanup-v6-20260926`。
+> 本文档 §2 Phase A-D 步骤表中出现的 `cleanup/v6` 属历史记录, 原文保留。
 
 > 本文档是 **执行 backlog**,不是自动执行脚本。每完成一个 Phase,需更新本文档对应章节的"状态"。
 >
@@ -211,7 +217,7 @@ test_web_backend.py: 779 pass
 
 **风险**: 🟢 低 — 改动小且边界清晰
 **耗时**: 15-30 min
-**状态**: 🟡 进行中 (2026-09-08 08:40)
+**状态**: ✅ 完成 (commit `9e0c0a4` 2026-09-08; 2026-09-27 核对回填 — `tests/` 与 `tools/` 目录均已就位)
 
 ### Phase C1: 拆 `test_web_backend.py`
 
@@ -237,7 +243,7 @@ test_web_backend.py: 779 pass
 
 **风险**: 🟢 低 — 拆完重跑,出问题好定位
 **耗时**: 1-2 h
-**状态**: ⬜ 待执行
+**状态**: ✅ 完成 (commit `9e0c0a4` 2026-09-08, 拆为 7 个 `test_web_backend_*.py`; 2026-09-27 核对回填 — 当前 master 上为 6 个, 后经 v5.3/v5.4 增补)
 
 ### Phase C2: 拆 `web/app.js`
 

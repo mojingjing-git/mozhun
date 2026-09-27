@@ -1,10 +1,18 @@
 # 墨准 v5.2b 小说切分 — 实施计划
 
 **版本**: v5.2b (独立发布, 与 v5.2 Word 友好分离)
-**分支**: cleanup/v6
-**状态**: ⏳ 执行中
+**分支**: master (原 cleanup/v6 — 该分支已于 2026-09-26 基线合并后废弃, 见 [archive/plans/PLAN-baseline-consolidation-2026-09-26.md](archive/plans/PLAN-baseline-consolidation-2026-09-26.md) §1.2 目标 2)
+**状态**: ✅ 已完成 (Session 1 / 3 / 4 已交付; **Session 2 未做** — 见下方"当前状态")
 **总工时**: 12-16h (2-2.5 人天)
-**最后更新**: 2026-09-13
+**最后更新**: 2026-09-27
+
+> **当前状态 (2026-09-27 核对)**
+> v5.2b 功能本身已全部落地: `app/novel_splitter.py` (983 行) + `web/views/novel-splitter.js` + Bridge 4 方法 + `tests/test_novel_splitter.py` (63 项) 均在 master 上。
+> **唯一未做的是 Session 2 (Phase C2 拆 `web/app.js`)** — 该项不是 v5.2b 的交付物,
+> 而是 CLEANUP_PLAN-v6.0 的 Phase C2, 至今仍未执行 (app.js 现 3297 行单文件)。
+> 本文档下方 §0 决策表 / §8 风险表 / §9 Session 划分 / §11 Checklist 中出现的
+> "Session 2 专做 C2" 属**当时的历史决策记录**, 原文保留不改 (遵循 AGENTS.md
+> "不改写历史条目" 约定), 仅在此处标注其当前归属。
 
 ---
 
