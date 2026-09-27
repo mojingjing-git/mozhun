@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import subprocess
 import sys
 import time
@@ -78,10 +79,37 @@ def info(msg: str) -> None:
 
 # ---------------- 环境检查 ----------------
 
-def find_python() -> tuple[str | None, str]:
+def _as_cmd(py: str | list[str]) -> list[str]:
+    """v5.4.3 (F11): 把解释器入参归一化成 argv 列表。
+
+    入参有两种来源:
+    - `find_python()` 返回 `list[str]` (如 `["py", "-3"]`)
+    - `VENV_PY` / `ensure_venv` 的返回值恒为 `str`
+    两者混用时, 下游按 `[py, "-m", ...]` 展开会在 py 是 str 时**逐字符**拆开
+    (str 也是可迭代的), 取 py[0] 拿到的是首字符 `'C'` —— 把 venv 启动路径
+    直接改坏。故在入口统一。
+    """
+    return py if isinstance(py, list) else [py]
+
+
+def _ver_ok(out: str) -> bool:
+    """v5.4.3 (F11): Python 版本闸门 (>= 3.10), 抽 helper 供三处共用。
+
+    旧版只判 `out.startswith("(3,")`, 会放行 3.0~3.9 —— 而本项目用了
+    `str | None` 这类 3.10+ 语法, 在 3.9 上是**导入期就 TypeError**, 根本
+    走不到运行期报错, 报错信息会指向莫名其妙的地方。
+    """
+    m = re.match(r"\((\d+),\s*(\d+)\)", out.strip())
+    return bool(m) and (int(m.group(1)), int(m.group(2))) >= (3, 10)
+
+
+def find_python() -> tuple[list[str] | None, str]:
     """定位可用解释器: venv (活性探测) -> python -> python3 -> py -3.
 
-    返回 (解释器, 来源说明). 找不到返回 (None, "").
+    返回 (argv 前缀, 来源说明). 找不到返回 (None, "").
+    v5.4.3 (F11): 三分支统一返回 `list[str]` —— 旧版第三分支返回字符串
+    "py -3", 下游 `subprocess.check_output([py, ...])` 会去找一个**名叫
+    "py -3" 的可执行文件**, 必然 FileNotFoundError。
     """
     if VENV_PY.exists():
         try:
@@ -89,7 +117,7 @@ def find_python() -> tuple[str | None, str]:
                 [str(VENV_PY), "-c", "print('ok')"],
                 stderr=subprocess.STDOUT, timeout=15,
             )
-            return str(VENV_PY), ".venv"
+            return [str(VENV_PY)], ".venv"
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
             warn(".venv 存在但 python.exe 失效 (base 解释器被升级/卸载?), 跳过")
     for name in ("python", "python3"):
@@ -98,8 +126,8 @@ def find_python() -> tuple[str | None, str]:
                 [name, "-c", "import sys; print(sys.version_info[:2])"],
                 stderr=subprocess.STDOUT, timeout=5,
             ).decode().strip()
-            if out.startswith("(3,"):
-                return name, "系统 PATH"
+            if _ver_ok(out):
+                return [name], "系统 PATH"
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired,
                 FileNotFoundError, ValueError):
             continue
@@ -108,16 +136,17 @@ def find_python() -> tuple[str | None, str]:
             ["py", "-3", "-c", "import sys; print(sys.version_info[:2])"],
             stderr=subprocess.STDOUT, timeout=5,
         ).decode().strip()
-        if out.startswith("(3,"):
-            return "py -3", "py launcher"
+        if _ver_ok(out):
+            return ["py", "-3"], "py launcher"
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired,
             FileNotFoundError, ValueError):
         pass
     return None, ""
 
 
-def ensure_venv(py: str) -> str:
+def ensure_venv(py: str | list[str]) -> str:
     """确保 .venv 可用 (坏则 --clear 重建), 返回 venv python 路径. (K8)"""
+    cmd = _as_cmd(py)
     if VENV_PY.exists():
         try:
             subprocess.check_output(
@@ -127,26 +156,31 @@ def ensure_venv(py: str) -> str:
             return str(VENV_PY)
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
             warn(".venv 失效, 用 --clear 重建 ...")
-            subprocess.check_call([py, "-m", "venv", "--clear", str(VENV_DIR)])
+            subprocess.check_call([*cmd, "-m", "venv", "--clear", str(VENV_DIR)])
     else:
         info(".venv 不存在, 创建中 ...")
-        subprocess.check_call([py, "-m", "venv", str(VENV_DIR)])
+        subprocess.check_call([*cmd, "-m", "venv", str(VENV_DIR)])
     if not VENV_PY.exists():
         raise RuntimeError("venv 创建后仍找不到 .venv\\Scripts\\python.exe")
     return str(VENV_PY)
 
 
-def deps_ok(py: str) -> tuple[bool, str]:
+def deps_ok(py: str | list[str]) -> tuple[bool, str]:
     """探测依赖是否齐全 (含 pywebview>=6.2 校验). (K2: 捕获超时)"""
     try:
         out = subprocess.check_output(
-            [py, "-c", _DEP_PROBE], stderr=subprocess.STDOUT, timeout=30,
+            [*_as_cmd(py), "-c", _DEP_PROBE], stderr=subprocess.STDOUT, timeout=30,
         ).decode(errors="replace").strip()
         return ("OK" in out), out[:200]
     except subprocess.TimeoutExpired:
         return False, "依赖探测超时 (杀软实时扫描/冷盘?), 建议重跑"
     except subprocess.CalledProcessError as e:
         return False, e.output.decode(errors="replace")[:200]
+    except (FileNotFoundError, OSError) as e:
+        # v5.4.3 (F11): 旧版只捕 TimeoutExpired/CalledProcessError, 解释器
+        # 路径不存在时 FileNotFoundError 逃逸 -> `start.py check` 直接 traceback,
+        # 而这里本该给一句人话。
+        return False, f"解释器不可用 ({type(e).__name__}: {e})"
 
 
 def webview2_ok() -> bool | None:
@@ -201,7 +235,7 @@ def cmd_check() -> int:
 
     py, src = find_python()
     if py:
-        ok(f"Python 3.10+ : {py}  ({src})")
+        ok(f"Python 3.10+ : {' '.join(_as_cmd(py))}  ({src})")
     else:
         fail("未找到 Python 3.10+ (试过 python / python3 / py -3)")
         print("      安装: https://www.python.org/downloads/ 并勾选 Add to PATH")
@@ -256,7 +290,7 @@ def cmd_dev() -> int:
     if not py:
         fail("未找到 Python 3.10+ (试过 python / python3 / py -3)")
         return 1
-    ok(f"Python: {py}  ({src})")
+    ok(f"Python: {' '.join(_as_cmd(py))}  ({src})")
 
     try:
         vpy = ensure_venv(py)
