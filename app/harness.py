@@ -43,8 +43,12 @@ PREVIEW_LIMIT = 80
 #   SKIPPED_CAP           超出单轮 50 条上限, 未应用
 #   SKIPPED_BAD_ARGS      tool_call 参数不是合法 JSON / 缺 old_text
 #   WARN_EDIT_CAP         整轮级: 存在超限未应用条目 (index=-1 汇总条目)
-#   WARN_RATIO            整轮级: 改动后文本与原文差异 >50% (不熔断, 只告警)
+#   WARN_RATIO            整轮级: 单条编辑替换了原文 >50% (不熔断, 只告警)
 RATIO_WARN_THRESHOLD = 0.5
+# v5.4.3 (F6): 覆盖率告警的**原文长度下限**。短文本上任何改动占比都接近 100%,
+# 阈值无意义 (改 1 个字就是 100%), 会把每次校对都刷成告警。
+# 200 = 初始拍定值, 未做真实样本校准 (AGENTS.md §34 口径)。
+RATIO_WARN_MIN_CHARS = 200
 
 # Edit 工具 OpenAI 兼容 schema (agent1 §3.2; 烟测证实 MiniMax-M3 接受)。
 # 单工具: LLM 的全部产出 = edit_text 调用数组; 每处错误一次调用。
@@ -188,6 +192,12 @@ def _make_audit(index: int, status: str, reason: str,
         "reason": reason or "",
         "old_preview": _preview(old),
         "new_preview": _preview(new),
+        # v5.4.3 (F6): 不截断的 old_len —— 边界 10 的覆盖率计算要用它。
+        # old_preview 仍截断 (前端只显示那么多), 拿预览长度算占比会失真。
+        # 多一个 key 对前端无害: app.js 的渲染只读 status/index/old_preview/
+        # new_preview/note/reason 六个字段; test_harness 的断言是包含式
+        # (`all(k in e ...)`), 加 key 不红; audit 是会话内存态不落断点, 无 schema 变更。
+        "old_len": len(old) if isinstance(old, str) else 0,
     }
     if note:
         entry["note"] = note
@@ -329,13 +339,34 @@ def apply_edits(original: str, edits: list[dict]) -> tuple[str, list[dict]]:
         ))
 
     # 边界 10: 改动比例异常告警 (不熔断 — LLM 删大段是合法操作)。
-    if applied and len(original) > 0:
-        diff_ratio = abs(len(corrected) - len(original)) / len(original)
-        if diff_ratio > RATIO_WARN_THRESHOLD:
-            audit.append(_make_audit(
-                -1, "WARN_RATIO",
-                f"应用后文本长度与原文差异 {diff_ratio:.0%} (>{RATIO_WARN_THRESHOLD:.0%}), 请人工核对",
-            ))
+    if applied and original:
+        # v5.4.3 (F6): 指标从「长度差」换成「单条最大替换占比」。
+        #
+        # 旧指标 abs(len(corrected) - len(original)) / len(original) 在**等长整体
+        # 重写**下恒为 0 —— 而那正是本项唯一要拦的场景 (模型无视工具纪律, 把半篇
+        # 塞进一条 tool_call)。实测 300 字原文被等长整体改写, 旧指标 audit 全 OK、
+        # 零告警。这是 harness 轨**唯一的兜底告警位**, 漏在这里等于没有兜底。
+        #
+        # 为什么取 max 而不是 sum: 重叠 edit 会被 sum 重复计入放大 (实测真实改动
+        # 0 个字符时 sum 给出 87.5%)。max 只看"最大的一条吞了多少", 对多条小改
+        # 零假阳性, 精确命中"一条 tool_call 吞掉半篇"。
+        # 为什么不用 difflib 真比例: 实测 6000 字 + 8 处小改 656ms, 50000 字
+        # (extra_large 档) 60.3 秒 —— 不可接受。
+        #
+        # 下限 len(original) >= 200: 短文本上任何改动占比都接近 100%, 阈值无意义。
+        # (200 = 初始拍定值, 未做真实样本校准, 见计划 §0.1)
+        if len(original) >= RATIO_WARN_MIN_CHARS:
+            max_replaced = max(
+                (e.get("old_len", 0) for e in audit if e.get("status") == "OK"),
+                default=0,
+            )
+            ratio = max_replaced / len(original)
+            if ratio > RATIO_WARN_THRESHOLD:
+                audit.append(_make_audit(
+                    -1, "WARN_RATIO",
+                    f"单条编辑替换了原文 {ratio:.0%} "
+                    f"(>{RATIO_WARN_THRESHOLD:.0%}), 请人工核对",
+                ))
 
     return corrected, audit
 

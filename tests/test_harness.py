@@ -678,6 +678,106 @@ def test_hash_and_config_roundtrip():
     check("旧断点缺字段兜底 False", r3.warnings is False)
 
 
+def test_v543_f6_ratio_metric_equal_length_rewrite():
+    """v5.4.3 (F6): 边界 10 指标从「长度差」换成「单条最大替换占比」。
+
+    旧指标 `abs(len(corrected) - len(original)) / len(original)` 在**等长整体
+    重写**下恒为 0, 而那正是本项唯一要拦的场景 (模型无视工具纪律把半篇塞进
+    一条 tool_call)。边界 10 是 harness 轨**唯一的兜底告警位**, 漏在这里等于
+    没有兜底。
+
+    夹具一律 >= RATIO_WARN_MIN_CHARS(200) 字: 低于下限会被整块跳过, 断言
+    空洞通过 (计划 v3 用的 136 字夹具就犯过这个错)。
+    """
+    print("\n--- v5.4.3 (F6): 等长整体重写必须告警 ---")
+    from app.harness import apply_edits, audit_has_warnings, RATIO_WARN_MIN_CHARS
+
+    original = "".join(f"第{i}句这是校对测试用的中文原文内容。" for i in range(1, 16))
+    check("夹具长度真的过下限 (否则整块被跳过, 断言空洞通过)",
+          len(original) >= RATIO_WARN_MIN_CHARS, f"len={len(original)}")
+
+    # 场景 1 (原 bug): 等长整体重写
+    corrected, audit = apply_edits(original, [
+        {"old_text": original, "new_text": "甲" * len(original), "reason": "整段重写"},
+    ])
+    warns = [e for e in audit if e["status"] == "WARN_RATIO"]
+    check("等长整体重写: 文本确实等长",
+          len(corrected) == len(original), f"{len(corrected)} vs {len(original)}")
+    check("等长整体重写: audit_has_warnings 为 True (原 bug 的正解)",
+          audit_has_warnings(audit) is True, str([e["status"] for e in audit]))
+    check("等长整体重写: 存在 WARN_RATIO 条目", len(warns) == 1,
+          str([e["status"] for e in audit]))
+    check("等长整体重写: WARN_RATIO index=-1", warns and warns[0]["index"] == -1)
+
+    # 场景 2: 单条替换 60%
+    seg = original[:190]
+    _, audit2 = apply_edits(original, [
+        {"old_text": seg, "new_text": "丙" * 190, "reason": "大段"},
+    ])
+    check("单条替换 60%: 告警",
+          any(e["status"] == "WARN_RATIO" for e in audit2),
+          str([e["status"] for e in audit2]))
+
+    # 场景 3: 多条小改 —— 验证取 max 而非 sum。
+    # 8 条各 18 字: max=18/276=6.5% (不告警), sum=144/276=52.2% (**越阈**)。
+    # 这条是 max-vs-sum 的**唯一**判别点: 只有 sum 会越阈。
+    # (原计划里的"重叠 edit"夹具不可用: 顺序 str.replace 下第二条必然被第一条
+    #  吞掉变成 SKIPPED, 不计入 old_len, sum 与 max 算出来一样 —— 变异实验照
+    #  出来才发现那条夹具没有区分度。)
+    small = []
+    for k in range(8):
+        i = k * 34
+        s = original[i:i + 18]
+        small.append({"old_text": s, "new_text": "乙" * 18, "reason": "小改"})
+    _, audit3 = apply_edits(original, small)
+    oks = [e for e in audit3 if e["status"] == "OK"]
+    check("多条小改: 8 条全部成功应用 (sum 才有意义)",
+          len(oks) == 8, str([e["status"] for e in audit3]))
+    total = sum(e["old_len"] for e in oks)
+    check("多条小改: sum 已越过阈值 (否则这条用例没有区分度)",
+          total / len(original) > 0.5,
+          f"sum={total/len(original):.1%} max={max((e['old_len'] for e in oks), default=0)/len(original):.1%}")
+    check("多条小改: 不告警 (多条分散改动是正常校对行为)",
+          not any(e["status"] == "WARN_RATIO" for e in audit3),
+          str([e["status"] for e in audit3]))
+
+    # 场景 3b: 单条刚好越阈 (验证阈值本身还活着, 不是恒不告警)
+    _, audit3b = apply_edits(original, [
+        {"old_text": original[:160], "new_text": "己" * 160, "reason": "越阈"},
+    ])
+    check("单条 58% 越阈: 告警",
+          any(e["status"] == "WARN_RATIO" for e in audit3b),
+          str([e["status"] for e in audit3b]))
+
+    # 场景 5: 短文本 (低于下限) 一律不告警 —— 有意的取舍, 短文本上该指标无意义
+    _, audit5 = apply_edits("错误甲。", [
+        {"old_text": "错误甲。", "new_text": "错误甲文。", "reason": "改"},
+    ])
+    check("短文本 (<下限) 不告警 (D-12 语义)",
+          not any(e["status"] == "WARN_RATIO" for e in audit5),
+          str([e["status"] for e in audit5]))
+
+
+def test_v543_f6_audit_carries_old_len():
+    """v5.4.3 (F6): audit 条目带不截断的 old_len, 且不破坏前端消费契约。"""
+    print("\n--- v5.4.3 (F6): audit 带 old_len ---")
+    from app.harness import apply_edits, _make_audit, _preview
+
+    long_old = "长" * 200
+    e = _make_audit(1, "OK", "理由", long_old, "新")
+    check("old_len 是不截断的真实长度", e["old_len"] == 200, str(e["old_len"]))
+    check("old_preview 仍截断 (前端只显示那么多)",
+          len(e["old_preview"]) <= len(_preview(long_old)) and len(e["old_preview"]) < 200,
+          str(len(e["old_preview"])))
+
+    # 前端只读六个字段, 多一个 key 无害 —— 这里锁住"别把已有字段改名/删掉"
+    for k in ("index", "status", "reason", "old_preview", "new_preview"):
+        check(f"audit 仍含前端消费的字段 {k}", k in e, str(sorted(e)))
+
+    # 非字符串 old 不应炸
+    check("old 非 str 时 old_len=0 (不抛)", _make_audit(0, "OK", "", None, "")["old_len"] == 0)
+
+
 def main():
     tests = [
         test_boundary_1_not_found,
@@ -688,6 +788,8 @@ def main():
         test_boundary_8_crlf_normalize,
         test_v543_f1_crlf_orphan_cr,
         test_boundary_10_ratio_warn,
+        test_v543_f6_ratio_metric_equal_length_rewrite,
+        test_v543_f6_audit_carries_old_len,
         test_boundary_11_all_failed_caller_semantics,
         test_boundary_12_partial_success,
         test_audit_structure_and_preview_cap,
