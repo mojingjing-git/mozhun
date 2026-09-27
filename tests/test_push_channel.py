@@ -76,8 +76,8 @@ def make_failing_window(attempts, exc_factory):
     return FailingWindow()
 
 
-def make_ok_window(calls, boom=None):
-    """建一个记录调用的 mock window; boom 若是 callable 则在序列化时炸。"""
+def make_ok_window(calls):
+    """建一个记录调用的 mock window (投递一律成功)。"""
     calls["js"] = []
     calls["count"] = 0
 
@@ -388,6 +388,122 @@ def test_f8_no_retry_for_corrupting_events():
     names = [n for n, _ in (b2._push_retry_slot or [])]
     check("混合批次重投时剔除不可重投事件",
           "onDeaiTextDrop" not in names and "onFileDone" in names, str(names))
+
+
+def test_f8_backoff_never_overflows():
+    """B2: 退避指数必须钳位 —— streak 无上界, 不钳会抛 OverflowError。
+
+    _push_fail_streak 只在**成功**时归零, 失败期单调增长。若直接算
+    `0.033 * (2 ** over)`, 到 over≈1024 就超出 float 范围抛 OverflowError;
+    而 16b016d 的 _arm_push_timer_locked 是"先置 _push_pending=True 再求值
+    Timer 参数", 于是异常发生在 Timer 建好之前 -> 通道永久焊死: 之后每个
+    _push 都在 _push_pending 短路, 事件只进 buffer 永不投递, 且**零日志**,
+    比原来的硬熔断还糟。
+    可达性: 每批 3 次失败, 2s 封顶, 约 34 分钟持续失败即触发。
+    """
+    from app.web_backend import (Backend, _PUSH_BACKOFF_MAX, _PUSH_BACKOFF_EXP_MAX)
+
+    b = Backend(window=None)
+    for s in (0, 5, 25, 1000, 1027, 1028, 2000, 10 ** 6):
+        b._push_fail_streak = s
+        try:
+            iv = b._flush_interval()
+        except Exception as e:
+            check(f"B2 streak={s} 不抛", False, f"{type(e).__name__}: {e}")
+            continue
+        # 低 streak 本来就不在退避态, 只要求"有界"; 深退避才要求已封顶
+        # 退避曲线: streak<5 -> 33ms; streak>=5 起按 2 的幂涨, streak>=10 撞上
+        # _PUSH_BACKOFF_MAX=2.0 封顶 (0.033 * 2**6 = 2.112 >= 2.0)
+        capped = s >= 10
+        want = _PUSH_BACKOFF_MAX if capped else (0.033 if s < 5 else 0.033 * 2 ** (s - 4))
+        check(f"B2 streak={s} 不抛且间隔有界", iv == want, f"iv={iv} 期望={want}")
+    check("B2 指数钳位常量是 32", _PUSH_BACKOFF_EXP_MAX == 32, str(_PUSH_BACKOFF_EXP_MAX))
+
+
+def test_f8_pending_never_stuck_on_arm_failure():
+    """不变量: _push_pending 为 True <=> 确实有一个 Timer 在飞。
+
+    arm 路径上一旦抛异常又没回滚, 通道就永久焊死 (B2 的机理)。
+    这里让 Timer.start() 直接抛, 检查 _push 仍能继续 arm、事件仍能送出。
+    """
+    from app.web_backend import Backend
+
+    b = Backend(window=None)
+    calls = {}
+    b._window = make_ok_window(calls)
+
+    import threading as _t
+    real_timer = _t.Timer
+    boom = {"on": True}
+
+    class BoomTimer(real_timer):
+        def start(self):
+            if boom["on"]:
+                raise RuntimeError("无法起线程")
+            super().start()
+
+    b._push_fail_streak = 5000        # 退避深处, 确保会走 arm
+    import app.web_backend as wbmod
+    orig = wbmod.threading.Timer
+    wbmod.threading.Timer = BoomTimer
+    try:
+        boom["on"] = True
+        b._push("onLog", "arm-失败")
+        check("B2 arm 抛异常后 _push_pending 已回滚", b._push_pending is False,
+              f"pending={b._push_pending} (True = 通道焊死)")
+        check("B2 arm 抛异常后事件仍在 buffer (没被吞)", len(b._push_buffer) == 1,
+              str(b._push_buffer))
+        boom["on"] = False            # 恢复正常
+        b._push_fail_streak = 0       # 退出退避, 让 flush 很快发生
+        b._push("onTaskComplete", {"task_id": "AFTER"})
+        check("B2 恢复后能重新 arm", b._push_pending is True, str(b._push_pending))
+    finally:
+        wbmod.threading.Timer = orig
+    time.sleep(0.3)
+    check("B2 恢复后事件真的送达",
+          calls["count"] >= 1 and '"AFTER"' in calls["js"][-1],
+          f"count={calls['count']}")
+
+
+def test_f8_arm_is_idempotent():
+    """L7: arm 幂等守卫要有**定向**断言, 不能只靠 buffer 上限用例顺带撞到。
+
+    守卫生效: 已 pending 时不再起第二个 Timer。反例: 去掉守卫后同一批
+    会被两个 Timer 各投一次 -> 前端收到重复的离散事件。
+    """
+    from app.web_backend import Backend
+    import app.web_backend as wbmod
+
+    b = Backend(window=None)
+    b._window = make_failing_window({}, lambda: RuntimeError("dead"))
+    # 必须用**真** _arm_push_timer_locked —— 幂等守卫生存在它内部, 替换掉
+    # 就等于把被测对象一起删了。改为拦截 Timer 的**构造**来数 arm 次数,
+    # 且不真的 start (免得真去 flush)。
+    built = []
+    orig = wbmod.threading.Timer
+
+    class CountingTimer(orig):
+        def __init__(self, *a, **kw):
+            built.append(a)
+            super().__init__(*a, **kw)
+
+        def start(self):
+            pass                  # 故意不启动: 本用例只关心"有没有建 Timer"
+
+    wbmod.threading.Timer = CountingTimer
+    try:
+        b._push("onLog", "A")
+        first = len(built)
+        b._push("onLog", "B")     # 已 pending -> 守卫应短路
+    finally:
+        wbmod.threading.Timer = orig
+
+    check("L7 首次 push 建了 1 个 Timer", first == 1, f"建了 {first} 个")
+    check("L7 已 pending 时不重复 arm",
+          len(built) == 1,
+          f"累计建了 {len(built)} 个 Timer (2 = 幂等守卫失效, 同一批会被两个 Timer 各投一次)")
+    check("L7 B 仍留在 buffer 等这一轮一起送",
+          b._push_buffer == [("onLog", "A"), ("onLog", "B")], str(b._push_buffer))
 
 
 def test_f8_backoff_not_hard_disable():

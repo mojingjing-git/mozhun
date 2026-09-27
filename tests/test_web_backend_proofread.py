@@ -607,6 +607,26 @@ def test_v414_throttle_33ms():
           flush_count < n)
 
 # === test_v414_throttle_constants ===
+def _py_code_only(src: str) -> str:
+    """去掉 Python 的 # 行注释与三引号 docstring, 只留可执行代码。
+
+    v5.4.3 (复审 L6): 源码子串断言若含 docstring, 将来 docstring 里写一句
+    "见 _flush_interval()" 就会让对应断言**自我满足** —— 测的是注释, 不是代码。
+    这里必须先剥掉再断言。(与 test_push_channel.py 里的 code_only() 同思路,
+    各自就地实现, 未抽公共模块: 只有两处调用, 抽出来反而多一层耦合。)
+    """
+    import re as _re
+    src = _re.sub(r'"""(?:.|\n)*?"""', "", src)
+    src = _re.sub(r"'''(?:.|\n)*?'''", "", src)
+    out = []
+    for line in src.splitlines():
+        i = line.find("#")
+        if i >= 0:
+            line = line[:i]
+        out.append(line)
+    return "\n".join(out)
+
+
 def test_v414_throttle_constants():
     """v4.1.4: _push 节流间隔是 0.033 秒 (33ms), 不是旧版 0.1 (100ms).
 
@@ -623,9 +643,10 @@ def test_v414_throttle_constants():
 
     check("节流间隔常量是 0.033 秒 (33ms)", _PUSH_FLUSH_INTERVAL == 0.033,
           str(_PUSH_FLUSH_INTERVAL))
-    arm_src = inspect.getsource(Backend._arm_push_timer_locked)
-    iv_src = inspect.getsource(Backend._flush_interval)
-    push_src = inspect.getsource(Backend._push)
+    # 全部走 _py_code_only: docstring 里出现同名符号不再能让断言自我满足
+    arm_src = _py_code_only(inspect.getsource(Backend._arm_push_timer_locked))
+    iv_src = _py_code_only(inspect.getsource(Backend._flush_interval))
+    push_src = _py_code_only(inspect.getsource(Backend._push))
     # 链路: _push -> _arm_push_timer_locked -> _flush_interval -> 常量。
     # 三处都要查, 否则常量可能变成一个没人用的死数字 (F8 复审时正是这样
     # 把 Timer 抽成了单独的方法, 只查 _push 源码会漏)。

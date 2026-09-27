@@ -106,7 +106,7 @@ _DEAI_REVISE_LIMIT = 20000
 # 业务层 + 前端层统一从 utils 导入, 避免 label/max_chars 漂移。
 
 # ====== 事件推送通道参数 (v5.4.3 F8 / D-10) ======
-# ⚠ 以下三个数均为**初始拍定值, 未做真实样本校准** (AGENTS.md §34 口径)。
+# ⚠ 以下**五个**数均为**初始拍定值, 未做真实样本校准** (AGENTS.md §34 口径)。
 #    严禁在文档/注释里编造"实测平均 N"之类不存在的校准数据来源。
 #
 # flush 节流间隔: 33ms (30 FPS), 沿用 v4.1.4 起的不变值, F8 不改。
@@ -128,6 +128,13 @@ _PUSH_MAX_BUFFER = 2000
 _PUSH_FAIL_STREAK_MAX = 5
 # 退避后的 flush 间隔上限 (秒)。33ms -> 66 -> 132 ... 到顶后按此频率慢速重试。
 _PUSH_BACKOFF_MAX = 2.0
+# 退避指数的上限钳位。_push_fail_streak 只在**成功**时归零, 失败期单调增长无上界;
+# 而 0.033 * (2 ** 1024) 已经超出 float 可表示范围 -> OverflowError。
+# 该异常会发生在 _arm_push_timer_locked 已把 _push_pending 置 True **之后**
+# (Timer 还没建), 于是通道被永久焊死且零日志 —— 比原来的硬熔断还糟。
+# 指数超过 6 时 min() 本来就取到 _PUSH_BACKOFF_MAX 了, 所以钳到 32 既安全
+# 又完全不影响实际退避曲线 (纯属防御, 不改变任何可观察行为)。
+_PUSH_BACKOFF_EXP_MAX = 32
 
 # 重复投递即损坏、**不可重投**的事件 (v5.4.3 复审 M2)。
 # evaluate_js 抛异常时无法区分"JS 根本没跑"和"JS 跑完了、只是返回值回传失败",
@@ -1922,6 +1929,9 @@ class Backend:
         if self._push_fail_streak < _PUSH_FAIL_STREAK_MAX:
             return _PUSH_FLUSH_INTERVAL
         over = self._push_fail_streak - _PUSH_FAIL_STREAK_MAX + 1
+        # 钳位: streak 只在成功时归零, 失败期单调增长无上界;
+        # 不钳的话 2 ** 1024 已经超出 float 范围 -> OverflowError
+        over = min(over, _PUSH_BACKOFF_EXP_MAX)
         return min(_PUSH_BACKOFF_MAX, _PUSH_FLUSH_INTERVAL * (2 ** over))
 
     def _arm_push_timer_locked(self):
@@ -1931,12 +1941,24 @@ class Backend:
         旧版回灌只是 `buffer[:0] = events`, 而 Timer 只在 _push 里创建 ——
         若失败的正是最后一批 (onTaskComplete), 之后再无 _push, 事件永不送达,
         正是本项要修的 bug。调用方必须已持锁 (本方法不自己加锁, 避免同线程死锁)。
+
+        状态更新严格排在 Timer 建好之后, 且 start 失败会回滚 _push_pending ——
+        维持不变量「_push_pending 为 True <=> 确实有一个 Timer 在飞」。
+        顺序写反 (先置 True 再求值参数) 时, 参数求值一旦抛异常, 通道会被永久
+        焊死: 之后每个 _push 都在 _push_pending 短路, 事件只进 buffer 永不投递,
+        且全程零日志。这个顺序是 16b016d 的 BLOCKER B2, 已加回归锁死。
         """
         if self._push_pending:
             return          # 已有 Timer 在飞, 不能再起一个, 否则双重 flush
+        interval = self._flush_interval()      # 先求值: 抛异常则状态纹丝不动
         self._push_pending = True
         self._last_push_time = time.time()
-        threading.Timer(self._flush_interval(), self._flush).start()
+        try:
+            threading.Timer(interval, self._flush).start()
+        except Exception as e:
+            self._push_pending = False         # 回滚: 绝不能停在"已 arm 但无 Timer"
+            logger.error(f"[push] flush Timer 启动失败, 通道保持可用: "
+                         f"{type(e).__name__}: {e}")
 
     def _trim_push_buffer_locked(self):
         """buffer 超上限时裁剪 (在**已持有** _push_throttle_lock 时调用).
