@@ -1,9 +1,9 @@
 """
 tests/test_harness_split.py — Harness / 重写 双轨配置 单元 + 集成测试 (v5.2c+)
 
-按 docs/.workbuddy/plan-v5.2c-harness-split.md §5.1 + §5.2 测试分块清单.
+按已封存的 v5.2c 双轨配置 plan §5.1 + §5.2 测试分块清单 (见 docs/archive/README.md 第三节).
 
-覆盖: 12 单元 (字段默认值 / from_dict 老配置迁移 / from_dict 新配置 / to_dict 32 字段
+覆盖: 12 单元 (字段默认值 / from_dict 老配置迁移 / from_dict 新配置 / to_dict 29 字段
        / compute_prompt_hash 4 字段 / 引擎 helper / _stream_single 派生 / _call_api_stream 派生
        / _harness_active 复用 / 兼容字段同步写) + 3 集成 (端到端 harness / 端到端 rewrite
        / 跨模式切换 hash 变化)
