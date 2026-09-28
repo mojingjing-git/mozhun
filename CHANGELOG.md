@@ -2,7 +2,32 @@
 
 > **曾用名**: 新时代校对大师 (v3.0 — v4.4.2 期间, 2024 → 2026-09 改名为墨准)。历史 CHANGELOG 条目保留原名, 详见 README.md 与 AGENTS.md。
 >
-> 当前产品: **墨准 (MoZhun)** v5.4.3 — 本地标点修复 + LLM 批量校对 + 去 AI 味 + 小说切分, 支持任意 OpenAI 兼容 API; 模型思维链一律丢弃。
+> 当前产品: **墨准 (MoZhun)** v5.4.4 — 本地标点修复 + LLM 批量校对 + 去 AI 味 + 小说切分, 支持任意 OpenAI 兼容 API; 模型思维链一律丢弃。
+
+## v5.4.4 (2026-09-29) — 死代码净化 + 文档归档封存
+
+**性质**: 只做清理, 不加功能. 业务语义 / Prompt / 输出形态零改动.
+
+全仓静态扫描 (AST 定义抽取 + 标识符引用计数 + Bridge 双向匹配 + DOM/CSS 可达性) 发现四类问题: 死代码、过时兼容字段、过时 hash 规则、前后端重复派生逻辑。经两路独立 agent 只读评估 + 两路 verifier 复审, 分 4 批次执行, 每批次独立门禁.
+
+### 死代码删除
+- Python: `output_format` / `output_dir` / `ProjectConfig.schema_version` 三字段 (字段数 32 → 29; `FileResult.schema_version` 承担真实断点迁移, 保留); `_BULLET_RES` / `_RETRYABLE_ERRORS` / `SELF_AUDIT_AXES` 三符号
+- 前端: 8 个零引用 `.type-*` 类 + 10 个零引用 CSS token + 3 个 motion token + 6 个 `.elevation-*` 类 + 2 个孤儿 DOM id
+- 位置传参: `start_proofread` 第 4 位废弃形参传 `''` 占位 (删位会让 `forceRerun`/`workflow` 静默错位 → 缓存永远被绕过)
+
+### Bug 修复: 重复 DOM id
+`web/index.html` 存在两个 `id="cfg-timeout"`, `getElementById` 恒命中校对面 → DeAI 兼容区的超时控件**完全不可操作**, 且 change 同步反向污染逐条校对字段. 改名为 `cfg-timeout-compat` + 补 `setVal` 填充; `app.js:706`/`:2433` 按设计不动 (多改会把逐条字段变成哑控件).
+
+### 文档归档
+封存 12 个 `docs/` 文件 + 18 个 `.workbuddy/` 条目 → `docs-archive-20260928.zip` (282.6 KB); 新增 `docs/archive/README.md` 封存索引; 修 13 个文件的失效引用 (源码注释 5 + 测试 docstring 8). 保留 `THIRD_PARTY_NOTICES.md` (唯一合规副本) / `ROADMAP.md` (活文档) / `Windows11-设计原则.md` (出处凭据). CHANGELOG 内的历史路径保留原样 (史实不改写).
+
+### 验证
+`run_all_tests.py` **1896 通过 / 0 失败** (21 套件; 较基线 −4 均为计划内删除的断言, 非回归); `tools/smoke_ui.py` **117 通过 / 0 失败**, 与基线持平. 回滚 tag `backup/pre-cleanup-20260928`.
+
+### 明确不做
+`harness_enabled` / `chunking_preset` / `|chunk=` hash 规则 / E 组四组前后端派生 / `get_distill_status` — 需先出迁移方案或定 Bridge 只读 API, 见 `docs/PLAN-deadcode-cleanup-2026-09-28.md` §3.
+
+---
 
 ## v5.4.3 (2026-09-27/28) — 缺陷治理批次 0 / 1 / 2a / 2b
 
