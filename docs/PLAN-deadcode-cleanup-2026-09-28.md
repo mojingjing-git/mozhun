@@ -1,6 +1,6 @@
 # 墨准 死代码净化 + 文档归档计划（2026-09-28）
 
-> 状态：**复审通过，按 v2 执行中**（2026-09-28）
+> 状态：**已完成**（2026-09-29）
 > 基线版本：v5.4.3（commit `5a46b34`）
 > 性质：**只做清理，不加功能**。本计划不改变任何业务语义、Prompt、输出形态。
 > 关联：`AGENTS.md` §31（ink skin 镜像不变量）、§37/§39（workflow 双轨）、§46（UI 冒烟门禁）
@@ -15,6 +15,27 @@
 > - Phase 4 归档清单**剔除 ROADMAP.md**（活文档，用户裁定）
 > - Phase 4 归档清单**新增 `.workbuddy/`**（用户裁定；该目录不在 git 历史，原「决策记录随压缩包保存」是虚假承诺）
 > - Phase 4 **保留 `Windows11-设计原则.md`**（THIRD_PARTY_NOTICES:590,596 以其为出处凭据，归档会自断合规链）
+>
+> **执行记录（2026-09-29 全部完成）**
+>
+> | 批次 | commit | 门禁结果 |
+> |---|---|---|
+> | Phase 1-3 | `74d2a10` | 1896 pass / 0 fail（−4 均为计划内删除的断言，非回归）；smoke 117 pass / 0 fail，与基线持平 |
+> | Phase 4 | `6794a9c` | 1896 pass / 0 fail（与上持平） |
+>
+> **回滚锚点**：tag `backup/pre-cleanup-20260928` → `5a46b34`。
+> `docs/` 下 12 个文件可 `git checkout 5a46b34 -- docs/` 整体取回；
+> **`.workbuddy/` 18 个条目从未入库，只存在于 `.local/docs-archive-20260928.zip`**
+> （282.6 KB，SHA256 前缀 `26cffbc22700fb04`）——**移出仓库另行保存**。
+>
+> **执行中对计划的修正**：
+> - Phase 4 实际删除 **12 个 `docs/` 文件**（4 实施计划 + `plans/` 8 个），非初稿所写的 7 个 —— 子目录整体计入
+> - 引用修复实际波及 **13 个文件**（源码注释 5 + 测试 docstring 8），比计划估的 10 处多 —— 复审只统计了 `.py` 注释行，漏了测试 docstring
+> - `CHANGELOG.md` 的历史路径**有意不改**（史实记录不应被回溯改写）
+> - Worker 现场发现的计划漏项：`web/index.html:12`（与 `:19` 同款失实描述，已一并改）；`app/utils.py` 中「字段数 27→31 / 31→32」注释属版本史陈述，保留
+> - 初稿沿用 AGENTS.md 表述称有 `TaskResult.schema_version` —— **本仓库不存在该类**，只有 `FileResult`
+>
+> **明确未做**（见 §3 挂起清单）：`chunking_preset`/`timeout`/`|chunk=` 原子批次、`harness_enabled`、E 组四组前后端派生、`get_distill_status`、marked.js 章节重排。
 
 ---
 
