@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """v5.4 思维链剥离测试套件 (app/think_strip.py).
 
-覆盖 PLAN-think-strip-v5.4.md §3.2 边界表 T1-T28 + §3.3 流式契约:
+覆盖 docs/archive/README.md 第二节 (已封存) §3.2 边界表 T1-T28 + §3.3 流式契约:
 - 全切点遍历 (所有 2 段切点 + 3 段抽样): 完整性 / 前缀单调 / 切分无关
 - 纯正文 property: 逐字节不变 (过滤器不能动正常结果)
 - 惰性 / 幂等 / 性能 / has_think_residue (D9)

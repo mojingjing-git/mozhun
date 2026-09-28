@@ -173,7 +173,7 @@ class TaskStatus(Enum):
 
 
 # === v5.3.0: 工作流 (workflow) 一等身份 ===
-# 设计见 docs/PLAN-workflow-split-v5.3.md §2 D4 / §3.4:
+# 设计见 docs/archive/README.md 第二节 (已封存) §2 D4 / §3.4:
 # - workflow_mode 是唯一真值; "" = 未显式指定, 按 v5.2c 之前的旧逻辑派生
 #   (兼容老配置文件, 以及测试里大量出现的 ProjectConfig(prompt_mode=...) 直接构造)
 # - harness_enabled 降级为兼容镜像: 老 API 客户端仍可写, 由 set_config 单向映射过来
@@ -396,7 +396,7 @@ class ProjectConfig:
     chunking_preset_rewrite: str = "balanced"     # 整篇重写模式分块档 (默认 3000, 含原 chunking_preset 兼容迁移)
     harness_request_timeout: int = 180            # harness 模式 timeout (秒, 3 分钟)
     rewrite_request_timeout: int = 120            # 整篇重写 timeout (秒, 沿用原 timeout)
-    # v5.3.0: 工作流一等身份 (PLAN-workflow-split-v5.3.md §2 D4)。
+    # v5.3.0: 工作流一等身份 (docs/archive/README.md 第二节 (已封存) §2 D4)。
     # "" = 未显式指定 → 按旧逻辑派生 (兼容老配置与直接构造); 合法值 ∈ {harness, rewrite}。
     # 字段数 31→32; 参与 compute_prompt_hash (|wm=, 传 effective 值)。
     workflow_mode: str = ""

@@ -34,7 +34,7 @@ from app.utils import (
     CHUNKING_PRESETS,
     CHUNKING_PRESETS_MAP,
     DEFAULT_CHUNK_PRESET,
-    # v5.3.0: workflow 一等身份 + 按轨派生 (PLAN-workflow-split-v5.3.md §2 D4/D7)
+    # v5.3.0: workflow 一等身份 + 按轨派生 (docs/archive/README.md 第二节 (已封存) §2 D4/D7)
     WORKFLOW_HARNESS,
     WORKFLOW_MODES,
     effective_workflow,
@@ -56,7 +56,7 @@ from app.templates import (
 # (3 个 deai_* 开关不进 compute_prompt_hash, 裁定见 AGENTS.md §35)
 from app.ai_score_local import ai_score as _ai_score_local, REVISE_THRESHOLD
 from app.md_strip import strip_markdown
-# v5.4 (PLAN-think-strip-v5.4.md): 思维链剥离 — DeAI 三处流式产出侧唯一单点
+# v5.4 (docs/archive/README.md 第二节 (已封存)): 思维链剥离 — DeAI 三处流式产出侧唯一单点
 from app.think_strip import ThinkFilter, count_reasoning_fields
 from app.style_profiles.loader import StyleProfileLoader, MIN_SAMPLES_FOR_DISTILL
 
@@ -583,7 +583,7 @@ class Backend:
         解决"已完成文件删掉重加被缓存秒标完成、前端无重跑通道"的问题;
         返回 dict 新增 cached_files 字段, 前端据此提示哪些文件命中缓存.
 
-        v5.3.0 (PLAN-workflow-split-v5.3.md §2 D4): 追加第 6 位 workflow
+        v5.3.0 (docs/archive/README.md 第二节 (已封存) §2 D4): 追加第 6 位 workflow
         ("harness"/"rewrite", 空 = 用当前配置)。**必须追加在 force_rerun 之后** —
         前 5 个位置参数与老调用保持一一对应。第 4 个 chunking_preset 参数已废弃:
         它从前写的是 DeAI 专用的兼容字段, 会连带改掉 DeAI 后续的分块 (§5-9),

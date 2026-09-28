@@ -1,7 +1,7 @@
 """
 tests/test_novel_splitter.py — 小说切分核心 单元 + E2E 测试 (v5.2b+)
 
-按 docs/PLAN-splitter-v5.2b.md §7 测试分块清单.
+按 docs/archive/README.md 第二节 (已封存) §7 测试分块清单.
 
 基线: 1334 (v5.1.0) → ~1385 (v5.2b 增量约 51)
 """

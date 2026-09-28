@@ -35,7 +35,7 @@ from app.logger import setup_logging
 from app.templates import PROMPT_MODES
 from app.punct_fix import fix_punctuation_ex
 from app.md_strip import strip_markdown
-# v5.4 (PLAN-think-strip-v5.4.md): 思维链剥离 — 流式产出侧剥离入口
+# v5.4 (docs/archive/README.md 第二节 (已封存)): 思维链剥离 — 流式产出侧剥离入口
 from app.think_strip import ThinkFilter, count_reasoning_fields, has_think_residue
 # v5.1.0: harness 化 — Edit 工具链 (LLM 返回编辑建议, 客户端精确匹配应用)
 from app.harness import (
@@ -64,7 +64,7 @@ from app.utils import (
     split_text,
     CHUNKING_PRESETS_MAP,
     DEFAULT_CHUNK_PRESET,
-    # v5.3.0: workflow 一等身份 + 按轨派生 (PLAN-workflow-split-v5.3.md §2 D4/D7)
+    # v5.3.0: workflow 一等身份 + 按轨派生 (docs/archive/README.md 第二节 (已封存) §2 D4/D7)
     WORKFLOW_HARNESS,
     effective_workflow,
     workflow_allows_tools,

@@ -9,8 +9,8 @@
 
 ## ✅ 已完成: v5.4 思维链剥离 (2026-09-26)
 
-计划文件: [`PLAN-think-strip-v5.4.md`](PLAN-think-strip-v5.4.md) (v2.1, 已并入两轮审计阻塞项 B1-B5 + V1/V2)
-审核报告 (本地, 不入库): `.workbuddy/reviews/review-think-strip-v5.4-plan.md` / `review2-think-strip-v5.4-plan.md`
+计划文件: 已封存, 见 [`archive/README.md`](archive/README.md) 第二节 (v2.1, 已并入两轮审计阻塞项 B1-B5 + V1/V2)
+审核报告: 随 `docs-archive-20260928.zip` 封存 (本地, 从未入库)
 
 - 现状: 代码目录**零**思维链处理 —— harness 不读 content、流式三处只取 `delta.content`, 靠"厂商把思维链放独立字段"侥幸不漏
 - 漏点 (按路径限定): 内联式 `<think>…` 只污染**整篇校对轨 + DeAI** (harness 轨 content 不参与结果) —— diff / 复制 / 导出 / 断点 / 评分全链路
@@ -23,8 +23,8 @@
 
 ## ✅ 已完成: v5.3.0 工作流双入口 (2026-09-26 批准并当日完成)
 
-计划文件: [`PLAN-workflow-split-v5.3.md`](PLAN-workflow-split-v5.3.md)（§12 执行记录表已回填）
-审核报告: `.workbuddy/reviews/review-v5.3-workflow-split-plan.md` (本地, 不入库)
+计划文件: 已封存, 见 [`archive/README.md`](archive/README.md) 第二节（§12 执行记录表已回填）
+审核报告: 随 `docs-archive-20260928.zip` 封存 (本地, 从未入库)
 
 - 侧边栏拆出「逐条校对 / 整篇校对」两个入口，「重写 → 去 AI 味」父子项，新增「工具」组；7 个视图 id 不变
 - `extra_large=50000` 并入为逐条轨专属正式档（用户烟测: 50K 通过、10 万档才失误）；整篇轨误配自动回退 `large`
@@ -61,7 +61,7 @@
 
 ## 🚧 待重排: Word / docx 友好一揽子小幅修
 
-> 原 v5.2 编号已与线上 v5.2b/c 冲突。本计划保留在本地 `.workbuddy/plans/`，
+> 原 v5.2 编号已与线上 v5.2b/c 冲突。本计划已随 `docs-archive-20260928.zip` 封存，
 > 尚未纳入版本控制，启动前需要重新编号并核对当前 v5.2c 基线。
 > v1 → v2 修复: C-1 虚拟落断点 / C-2 python-docx>=1.1 / C-3 跨段选(c) / C-4 XML escape / C-5 audit 默认 None / C-6 uuid 唯一化
 > 工时: 3-4 → 4.5-4.75 人天

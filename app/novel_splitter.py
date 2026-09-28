@@ -36,7 +36,7 @@ app/novel_splitter.py — 小说切分核心 (v5.2b+)
   - infer_book_name(file_path) -> str: 从文件名推断书名
   - _book_name_to_slug(book_name) -> str: 书名 → 目录名 slug
 
-模块组织 (按 docs/PLAN-splitter-v5.2b.md §5.1):
+模块组织 (按 docs/archive/README.md 第二节 (已封存) §5.1):
   L1-50   借鉴头 8 段
   L51-75  import + 模块常量
   L76-130 数据类 3 个

@@ -1209,7 +1209,7 @@ def test_v502_deai_switches_roundtrip():
 def test_v530_workflow_nav():
     """v5.3.0: 侧边栏双入口 (逐条校对/整篇校对) + 「重写 › 去 AI 味」父子项 + 工具组。
 
-    静态核验 DOM / CSS / JS 三件套 (PLAN-workflow-split-v5.3.md §3.1/§3.5/§6.1):
+    静态核验 DOM / CSS / JS 三件套 (docs/archive/README.md 第二节 (已封存) §3.1/§3.5/§6.1):
     7 个视图 id 不变, 激活态改用唯一 data-nav-key, 图标/分组/展开箭头结构正确。
     """
     print()

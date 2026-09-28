@@ -1,7 +1,7 @@
 """
 v5.4.3 (F8 / F9 / F15) 事件推送通道 + 视图事件委派 + 命名空间回归。
 
-背景 (PLAN-defect-fix-2026-09-27.md §F8 / §F9 / §F15):
+背景 (docs/archive/README.md 第二节 (已封存) §F8 / §F9 / §F15):
 
 F8 — `Backend._flush` 丢事件
     旧版先 `clear()` buffer 再序列化, 且 `json.dumps` 在 `try` 之外。

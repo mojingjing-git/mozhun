@@ -244,7 +244,7 @@ v5.2c 起，校对参数页把两条轨的 chunking 与 timeout 分开保存：�
 ├── tools/smoke_ui.py       # v5.3+ Playwright 三视口 UI 冒烟（布局 + 截图）
 ├── tests/                  # 19 个测试套件
 ├── docs/                   # 文档
-│   ├── archive/plans/      # 历史升级 plan 归档
+│   ├── archive/             # 封存索引 (历史 plan + 已完成实施计划)
 │   ├── ROADMAP.md          # 当前路线图与跨会话待办
 │   ├── THIRD_PARTY_NOTICES.md  # 借鉴来源 + LICENSE
 │   └── Windows11-设计原则.md   # v4.1.8 重构参考 (Microsoft Learn 本地副本)

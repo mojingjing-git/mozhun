@@ -345,7 +345,7 @@ class TestCrossModeHashChanges(unittest.TestCase):
 
 
 # ============================================================
-# v5.3.0: workflow 一等身份 (PLAN-workflow-split-v5.3.md §2 D4/D7)
+# v5.3.0: workflow 一等身份 (docs/archive/README.md 第二节 (已封存) §2 D4/D7)
 # ============================================================
 
 class TestWorkflowModeV530(unittest.TestCase):

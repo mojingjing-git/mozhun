@@ -14,7 +14,7 @@ harness 化核心思想: LLM 不再整篇重输出, 而是返回"编辑建议"�
 
 # 借鉴自 Claude Code Edit 工具 (https://code.claude.com/docs/, Anthropic 文档)
 # 借鉴内容: old_text/new_text 精确字符串匹配 + 全局唯一性要求 + 逐条状态回执的
-#           Edit 工具设计范式 (12 条边界表见 .workbuddy/research/agent1-tech-feasibility.md §3.3)
+#           Edit 工具设计范式 (12 条边界表见 (已遗失 — 见 docs/archive/README.md「已知断裂的引用」) §3.3)
 # 借鉴方式: 思路借鉴,无代码复制
 # Copyright (c) 2026 Anthropic PBC
 # 致谢说明 (同 THIRD_PARTY_NOTICES §10 Microsoft 先例): 借鉴设计思路而非代码,
