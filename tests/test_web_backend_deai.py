@@ -1189,7 +1189,7 @@ def test_v502_deai_switches_roundtrip():
           cfg.deai_strip_after is True and cfg.deai_ai_score is True
           and cfg.deai_revise is False)
     d = cfg.to_dict()
-    check("to_dict 字段数 32", len(d) == 32, str(len(d)))  # v5.1.0: + harness_enabled; v5.2c: + 4 双轨字段; v5.3.0: + workflow_mode
+    check("to_dict 字段数 29", len(d) == 29, str(len(d)))  # v5.1.0: + harness_enabled; v5.2c: + 4 双轨字段; v5.3.0: + workflow_mode; 死字段清理: - output_format / - output_dir / - schema_version
     cfg2 = ProjectConfig.from_dict({**d, "deai_strip_after": False,
                                     "deai_ai_score": False, "deai_revise": True})
     check("from_dict 往返保留修改",

@@ -5,18 +5,17 @@
   借鉴自 https://learn.microsoft.com/zh-cn/windows/apps/design/ (Microsoft Terms of Use, 文档非版权材料) - 5 设计原则 + 7 签名体验
   借鉴自 https://fluent2.microsoft.design/ (MIT) 的设计令牌命名
   借鉴自 https://github.com/google/diff-match-patch (Apache-2.0) - 已包含完整 LICENSE
-  借鉴自 https://github.com/markedjs/marked (MIT) - 已包含完整 LICENSE
   借鉴自 https://github.com/microsoft/fluentui-system-icons (MIT) - 1px 单线 SVG 风格
   借鉴自 https://pywebview.flowrl.com/ (BSD-3-Clause) - Bridge 模式
 
   v4.1.8 重构要点:
-  1. Token 体系 v2: 17 Win11 色板 + 5 accent + 6 阴影(elevation 1/2/8/16/32/128) + 9 type ramp + 5 动画 + 3 圆角
+  1. Token 体系 v2: 17 Win11 色板 + 5 accent + 阴影档 --shadow-* (elevation 6 档) + 9 type ramp + 3 动画曲线 + 3 时长 + 3 圆角
   2. 完整暗色模式: @media (prefers-color-scheme: dark) + data-theme=auto/light/dark 三态切换
   3. Acrylic (.acrylic) + Smoke (.smoke-overlay) 材料类
   4. 12 SVG 重画为 1px 单线 stroke=currentColor 风格 (路径全部项目语言手写)
   5. 按钮语义化: .btn + .btn-standard/.btn-accent/.btn-subtle/.btn-icon-only
   6. 可访问性: diff 加 border-left 形状标记(色盲补救), 11px -> 12px 字号修正, F5/F6/F7 修补
-  7. type ramp 应用: type-caption/body/body-strong/body-large/subtitle/title 等
+  7. type ramp 应用: 页头/卡片/结果区按层级取 --fontSize* + --lineHeight* token (零引用类已清理)
 -->
 <html lang="zh-CN" data-theme="auto" data-skin="ink">
 <head>
@@ -29,7 +28,7 @@
 <body>
   <div class="app">
     <!-- 侧边栏 - Fluent 200px 固定 -->
-    <nav class="sidebar" id="sidebar">
+    <nav class="sidebar">
       <div class="sidebar-title type-body-large-strong">墨准</div>
       <div class="nav-group">工作区</div>
       <!-- v5.3.0: 两个独立入口共用 view-home — 靠 data-workflow 决定运行轨 (harness=逐条编辑 / rewrite=整篇输出)。
@@ -394,16 +393,16 @@
           <!-- v5.2c: 兼容字段 (老用户 + DeAI 视图) - C-3 修法: 保留控件, 不删;
                v5.3.0: DeAI 与整篇校对共用 rewrite 轨, 改这里等于改整篇轨 -->
           <details class="compat-section">
-            <summary>DeAI / 整篇校对 共用分块与超时 (折叠, 与上方整篇字段联动)</summary>
+            <summary>DeAI / 整篇校对 共用分块与超时 (折叠; 改这里单向同步到上方整篇字段)</summary>
             <div class="form-hint">DeAI 视图与「整篇校对」入口共用这两个值: 改动会同步到上方的整篇字段, 不影响逐条校对字段。</div>
             <div class="form-row">
               <label>原 chunking_preset (DeAI / 整篇)</label>
-              <select id="cfg-chunking-preset" data-scope="deai"
+              <select id="cfg-chunking-preset"
                       title="DeAI / 整篇校对共用, 改时同步给 chunking_preset_rewrite"></select>
             </div>
             <div class="form-row">
               <label>原 timeout (DeAI / 整篇)</label>
-              <input id="cfg-timeout" type="number" min="10" max="300" step="10" data-scope="deai"
+              <input id="cfg-timeout-compat" type="number" min="10" max="300" step="10"
                      title="DeAI / 整篇校对共用, 改时同步给 rewrite_request_timeout">
             </div>
           </details>
@@ -501,7 +500,7 @@
             </select>
           </div>
           <!-- v5.0.2: rewrite 步后置处理参数 (默认收起, 持久化到 ProjectConfig.deai_*) -->
-          <details class="deai-params" id="deai-params">
+          <details class="deai-params">
             <summary>后处理参数 (改写完成后: 剥离标记 / 本地评分 / 自动修订)</summary>
             <div class="form-row checkbox-row">
               <label class="checkbox-label">

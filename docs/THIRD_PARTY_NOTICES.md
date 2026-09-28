@@ -426,6 +426,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 - **License**: **MIT License**
 - **Copyright**: (c) 2018+, MarkedJS; (c) 2011-2018, Christopher Jeffrey
 - **引用方式**: 前端 JS 库（`web/lib/marked.min.js`），直接使用，LICENSE 完整保留
+- 状态：已不直接使用（v5.0.x 起移除 `web/lib/marked.min.js`），本节仅保留 LICENSE 备查
 - **项目简介**: marked.js 是 3KB 的 Markdown 解析器，把 Markdown 文本转成 HTML。链式 API 简单高效，浏览器 / Node 通用。校对结果用 Markdown 渲染增强可读性。
 
 ### MIT License 全文 (marked.js 部分)

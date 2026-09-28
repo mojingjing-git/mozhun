@@ -1,6 +1,7 @@
 # AGENTS.md — 项目约定
 
-> **历史升级 plan 归档于 [`docs/archive/plans/`](docs/archive/plans/README.md)** (v3.0 — v4.1.7 完成态存档,与当前 v5.1.0 架构脱节,仅追溯用)。
+> **历史升级 plan 与已完成的实施计划已封存** — 索引见 [`docs/archive/README.md`](docs/archive/README.md)
+> (v3.0 — v5.4.3 完成态存档，与当前架构脱节，仅追溯用；原始文件在 `docs-archive-20260928.zip`)。
 
 ## 技术栈
 
@@ -67,7 +68,7 @@ main.py (webview.start)
 20. **8 轴自评** (v4.1.7+): 单模型场景用内联 8 轴 1-5 评分 + 摘出戏句 替代 jianshuo 推荐的"独立判官盲测" (本项目无异模型, 满足度足够)
 
 ### v4.1.8 新增（前端按 Win11 Fluent 2 完整重构）
-21. **Win11 设计原则落地** (v4.1.8+): 按 [Microsoft Learn 设计原则文档](https://learn.microsoft.com/zh-cn/windows/apps/design/) (Microsoft Terms of Use, 致谢非协议) 的 5 原则 + 7 签名体验**完全重构**前端 — 17 Win11 色板 token + 5 accent 档 + 6 阴影档 (elevation 1/2/8/16/32/128) + 3 圆角 token (`--controlCornerRadius=4px` / `--overlayCornerRadius=8px` / `--radiusSmall=2px`) + 9 type ramp + 5 动画曲线 + 4 时长 + 完整暗色模式 (`@media (prefers-color-scheme: dark)` 独立块) + Acrylic (`.acrylic` `backdrop-filter: blur(20px) saturate(180%)`) + Smoke (`.smoke-overlay` `rgba(0,0,0,0.32)`)。12 SVG 全部重画为 1px 单线 `stroke="currentColor"` Segoe Fluent Icons 风格 (path 全部项目语言手写)。Settings 页加三态主题切换 (auto/light/dark)。可访问性: diff 加 `border-left` 形状标记 (色盲补救 §3.1.4), 11px → 12px 字号修正, F5/F6/F7 修补 (italic/Bold/border-left)。业务逻辑 0 改动。
+21. **Win11 设计原则落地** (v4.1.8+): 按 [Microsoft Learn 设计原则文档](https://learn.microsoft.com/zh-cn/windows/apps/design/) (Microsoft Terms of Use, 致谢非协议) 的 5 原则 + 7 签名体验**完全重构**前端 — 17 Win11 色板 token + 5 accent 档 + 阴影档 token (`--shadow-1/2/8/16/32/128`, 对应 Win11 elevation 6 档) + 3 圆角 token (`--controlCornerRadius=4px` / `--overlayCornerRadius=8px` / `--radiusSmall=2px`) + 9 type ramp + 3 动画曲线 + 3 时长 + 完整暗色模式 (`@media (prefers-color-scheme: dark)` 独立块) + Acrylic (`.acrylic` `backdrop-filter: blur(20px) saturate(180%)`) + Smoke (`.smoke-overlay` `rgba(0,0,0,0.32)`)。12 SVG 全部重画为 1px 单线 `stroke="currentColor"` Segoe Fluent Icons 风格 (path 全部项目语言手写)。Settings 页加三态主题切换 (auto/light/dark)。可访问性: diff 加 `border-left` 形状标记 (色盲补救 §3.1.4), 11px → 12px 字号修正, F5/F6/F7 修补 (italic/Bold/border-left)。业务逻辑 0 改动。
 
 ### v4.1.9 新增（Win11 视觉完全体：材料/动效/个性化落地）
 22. **三种材料真实使用** (v4.1.9+): Mica 以中性色 radial-gradient 近似（body 基层，侧边栏=基层/卡片=内容层，Card 阴影升 shadow-8）；Acrylic 用于文件右键菜单（`.menu-flyout.acrylic`）；Smoke + ContentDialog 替代原生 confirm（底部等宽双按钮 + shadow-128）
@@ -153,7 +154,7 @@ main.py (webview.start)
   - v4.4.2+ 测试: `test_md_strip.py`（Markdown 清洗全规则回归，含幂等双跑/围栏保护/引擎 md_local 分支端到端/空结果兜底）
   - v5.0.2+ 测试: `test_ai_score.py`（客户端 AI 味评分回归，含权重和=100/各维命中/幂等/offenders 截断/空文本）
   - v5.1.0+ 测试: `test_harness.py`（harness Edit 工具链回归，含 12 边界逐条/\r\n 归一/≤50 cap/引擎端到端 strict/polish/custom/harness_enabled=False/全失败 FAILED/warnings 置位/多 chunk audit 合并）
-  - v5.3.0+ 测试: `tests/test_harness_split.py`（workflow 派生/矩阵/按轨取档/字段数 32）+ `tests/test_web_backend_deai.py` 的 `test_v530_workflow_nav` / `test_v530_provenance_static`（导航 DOM + 来源标注静态断言）+ `tests/test_web_backend_files.py::test_v530_get_file_char_counts`
+  - v5.3.0+ 测试: `tests/test_harness_split.py`（workflow 派生/矩阵/按轨取档/字段数 29）+ `tests/test_web_backend_deai.py` 的 `test_v530_workflow_nav` / `test_v530_provenance_static`（导航 DOM + 来源标注静态断言）+ `tests/test_web_backend_files.py::test_v530_get_file_char_counts`
   - v5.4.0+ 测试: `tests/test_think_strip.py`（思维链剥离全表 T1-T28 + 全切点/纯正文 property + 惰性/幂等/性能 + D9）+ `test_components.py` 流式剥离 + `test_chunk_lifecycle.py::test_m6_think_only_output_failed` + `tests/test_web_backend_deai.py::test_v540_deai_think_strip` + `tests/test_web_backend_proofread.py::test_v540_think_residue_cache`
 - 一键跑: `run_all_tests.py`
 - UI 冒烟: `tools/smoke_ui.py`（v5.3.0+, Playwright 三视口; 改侧边栏/布局后必跑, 截图落 `.local/smoke-ui-v5.3/`）
@@ -170,7 +171,6 @@ main.py (webview.start)
 前端层（4 项，v4.0 新增）：
 - Bridge 模式: https://pywebview.flowrl.com/ (BSD-3-Clause)
 - 字符级 diff: https://github.com/google/diff-match-patch (Apache-2.0)
-- Markdown 渲染: https://github.com/markedjs/marked (MIT)
 - 设计令牌: https://fluent2.microsoft.design/ (MIT)
 - SVG 图标: https://github.com/microsoft/fluentui-system-icons (MIT)
 
@@ -197,10 +197,9 @@ DeAI 后置层（3 项，v3.0/v4.1.7 起借鉴，v5.0.2 补登记 LICENSE）：
 - `CHANGELOG.md` — 版本日志
 - `docs/THIRD_PARTY_NOTICES.md` — 借鉴来源 + LICENSE 全文 (§12-15: typeset/autocorrect/macro-correct/排版指北)
 - `docs/ROADMAP.md` — 路线图与跨会话待办
-- `docs/PLAN-workflow-split-v5.3.md` — v5.3.0 工作流双入口实施计划 (§12 为执行记录表, 每个 session 完成回填)
-- `docs/PLAN-think-strip-v5.4.md` — v5.4 思维链剥离实施计划 (§12 为执行记录表; v2.1 两轮审计·并入 B1-B5+V1/V2, 已开工)
-- `docs/PLAN-splitter-v5.2b.md` — v5.2b 小说切分计划
-- `docs/archive/plans/` — 历史升级 plan 归档 (v3.0 — v4.1.7 完成态存档,见 `README.md`)
+- `docs/Windows11-设计原则.md` — v4.1.8 Win11 重构的设计原则出处 (`THIRD_PARTY_NOTICES.md` §6 的凭据)
+- `docs/archive/README.md` — **封存索引**：历史升级 plan (v3.0 — v4.1.7) + 已完成的实施计划
+  (v5.2b/5.3/5.4/5.5 批次) + 从未入库的 agent 评审产物 (`docs-archive-20260928.zip`)
 
 ## import 顺序约定
 

@@ -580,7 +580,10 @@ const App = {
       from.addEventListener('change', () => { to.value = from.value; });
     };
     sync('cfg-chunking-preset', 'cfg-chunking-preset-rewrite');
-    sync('cfg-timeout', 'cfg-rewrite-request-timeout');
+    // v5.4.4 (Phase 2 修): 源必须是 cfg-timeout-compat —— 原先两处都叫 cfg-timeout,
+    // getElementById 恒命中校对参数·超时那个 (:351), 导致本控件从不 populate/collect
+    // 且用户改校对面超时会反向改写整篇轨。改名后单向同步 (只 compat -> rewrite)。
+    sync('cfg-timeout-compat', 'cfg-rewrite-request-timeout');
     // v5.3.0: prompt_mode 变化 → 页头说明重算 (入口不再由这个字段切换)
     const pm = document.getElementById('cfg-prompt-mode');
     if (pm) pm.addEventListener('change', () => this._refreshTrackHeader());
@@ -704,6 +707,10 @@ const App = {
     this.setVal('cfg-concurrency', this.config.concurrency);
     this.setVal('cfg-max-retries', this.config.max_retries);
     this.setVal('cfg-timeout', this.config.timeout);
+    // v5.4.4 (Phase 2 修): 兼容面板的 timeout input (原名与上面的 cfg-timeout 撞 id,
+    // 从不回填) 改名后必须显式填充, 否则永远是空白 —— cfg-chunking-preset 走 fillSelect,
+    // 这个 input 没有对应填充路径, 两者不对称。
+    this.setVal('cfg-timeout-compat', this.config.timeout);
     this.setVal('cfg-context-max-chars', this.config.context_max_chars);
     this.setVal('cfg-context-max-chunks', this.config.context_max_chunks);
     this.setVal('cfg-custom-prompt', this.config.custom_prompt);
@@ -1453,7 +1460,12 @@ const App = {
         paths,
         this.config.prompt_mode || 'strict',
         this.config.custom_prompt || '',
-        preset,
+        '',  // v5.4.4 清理: 第 4 位 chunking_preset 已废弃 (后端保留形参只为不破坏老调用,
+              // 不再写盘)。**必须传 '' 占位, 不能删这一行** — pywebview 是 func(*params)
+              // 纯位置传参, 删位会让 forceRerun 落进 chunking_preset 槽、
+              // cur 落进 force_rerun 槽 (truthy 字符串) => 缓存永远被绕过且轨道丢失。
+              // 实际生效档由后端按 workflow 派生 (resolve_chunk_preset), 前端 preset
+              // 变量仍在 :1448 日志用。
         forceRerun ? true : false,
         cur
       );

@@ -48,11 +48,11 @@ class TestProjectConfigDefaults(unittest.TestCase):
         self.assertEqual(cfg.harness_request_timeout, 180)
         self.assertEqual(cfg.rewrite_request_timeout, 120)
 
-    def test_field_count_32(self):
-        """ProjectConfig 字段数 27→31→32 (v5.3.0 + workflow_mode)"""
+    def test_field_count_29(self):
+        """ProjectConfig 字段数 27→31→32→29 (死字段清理: -output_format/-output_dir/-schema_version)"""
         cfg = ProjectConfig()
         d = cfg.to_dict()
-        self.assertEqual(len(d), 32)
+        self.assertEqual(len(d), 29)
 
     def test_new_fields_in_to_dict(self):
         """4 字段都在 to_dict 里"""

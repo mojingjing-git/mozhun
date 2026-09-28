@@ -44,11 +44,10 @@
   --overlayCornerRadius: 8px;
   --radiusSmall: 2px;  /* 内部小元素 (badge, log chip) */
 
-  /* 间距 (4 模数, 12 档) */
+  /* 间距 (4 模数, 8 档: --space-1..7/9; 8/10/11/12 零引用已于 v5.4.4 清理) */
   --space-1: 4px;   --space-2: 8px;   --space-3: 12px;
   --space-4: 16px;  --space-5: 20px;  --space-6: 24px;
-  --space-7: 32px;  --space-8: 40px;  --space-9: 48px;
-  --space-10: 56px; --space-11: 64px; --space-12: 80px;
+  --space-7: 32px;  --space-9: 48px;
 
   /* 阴影 (Win11 §3.2 elevation 6 档: 1/2/8/16/32/128) */
   --shadow-1: 0 0 1px rgba(0,0,0,0.05);                                    /* Layer */
@@ -73,16 +72,14 @@
   --fontWeightRegular: 400;
   --fontWeightSemibold: 600;
 
-  /* 动画 (Win11 §3.7.2 5 类 cubic-bezier + 4 时长) */
+  /* 动画 (Win11 §3.7.2 3 类 cubic-bezier + 3 时长;
+     fastOut / linear / durationSlow 零引用, v5.4.4 清理) */
   --curveFastIn: cubic-bezier(0, 0, 0, 1);
   --curvePointToPoint: cubic-bezier(0.55, 0.55, 0, 1);
-  --curveFastOut: cubic-bezier(0, 0, 0, 1);  /* 同 fastIn, 组合 fadeOut */
   --curveSoftOut: cubic-bezier(1, 0, 1, 1);
-  --curveLinear: linear;
   --durationSubtle: 83ms;
   --durationFast: 167ms;
   --durationNormal: 250ms;
-  --durationSlow: 333ms;
 
   /* 字体族 */
   --fontFamilyBase: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
@@ -95,14 +92,6 @@
 
   /* v4.4.0: Acrylic 底色令牌化 (原 4 处硬编码 rgba, 皮肤/主题双轴都需要调) */
   --colorAcrylicBg: rgba(255, 255, 255, 0.70);
-
-  /* 派生快捷 token */
-  --colorCard: var(--colorNeutralBackground3);
-  --colorText: var(--colorNeutralForeground1);
-  --colorTextSecondary: var(--colorNeutralForeground2);
-  --colorTextTertiary: var(--colorNeutralForeground3);
-  --colorBorder: var(--colorNeutralStroke2);
-  --colorBorderSubtle: var(--colorNeutralStroke1);
 }
 
 /* ===== 暗色 token (完整档) — 独立 :root 块, F1 硬约束: 不能嵌在 :root 内 ===== */
@@ -636,13 +625,7 @@ body {
               border-color var(--durationNormal) var(--curvePointToPoint);
 }
 
-/* Elevation 6 档 (Win11 §3.2.1) */
-.elevation-1   { box-shadow: var(--shadow-1); }
-.elevation-2   { box-shadow: var(--shadow-2); }
-.elevation-8   { box-shadow: var(--shadow-8); }
-.elevation-16  { box-shadow: var(--shadow-16); }
-.elevation-32  { box-shadow: var(--shadow-32); }
-.elevation-128 { box-shadow: var(--shadow-128); }
+/* 阴影档由 --shadow-* token 直接取用 (elevation 1/2/8/16/32/128 六个零引用类 v5.4.4 清理) */
 
 .card h2 {
   font-size: var(--fontSizeBodyStrong);
@@ -750,15 +733,7 @@ body {
 .btn-icon-only:active { background: var(--colorNeutralBackground1); }
 
 /* ===== Type ramp 应用 (Win11 §3.6.6) ===== */
-.type-caption          { font-size: var(--fontSizeCaption);          line-height: var(--lineHeightCaption); }
-.type-body             { font-size: var(--fontSizeBody);             line-height: var(--lineHeightBody); }
-.type-body-strong      { font-size: var(--fontSizeBodyStrong);       line-height: var(--lineHeightBodyStrong); font-weight: var(--fontWeightSemibold); }
-.type-body-large       { font-size: var(--fontSizeBodyLarge);        line-height: var(--lineHeightBodyLarge); }
 .type-body-large-strong{ font-size: var(--fontSizeBodyLargeStrong);  line-height: var(--lineHeightBodyLargeStrong); font-weight: var(--fontWeightSemibold); }
-.type-subtitle         { font-size: var(--fontSizeSubtitle);         line-height: var(--lineHeightSubtitle); font-weight: var(--fontWeightSemibold); }
-.type-title            { font-size: var(--fontSizeTitle);            line-height: var(--lineHeightTitle); font-weight: var(--fontWeightSemibold); }
-.type-title-large      { font-size: var(--fontSizeTitleLarge);       line-height: var(--lineHeightTitleLarge); font-weight: var(--fontWeightSemibold); }
-.type-display          { font-size: var(--fontSizeDisplay);          line-height: var(--lineHeightDisplay); font-weight: var(--fontWeightSemibold); }
 
 /* 空状态: type ramp 化, 不用 italic (F5 修补) */
 .type-emptystate {

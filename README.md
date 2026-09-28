@@ -292,10 +292,10 @@ python check_exe.py   # 校验 exe 内 web/ 资源与 style_profiles 完整性
 
 ## 借鉴来源
 
-v3.0 → v5.2c 共借鉴 **23 个开源项目 / 文档**，全部思路借鉴，代码自写：
+v3.0 → v5.2c 共借鉴 **22 个开源项目 / 文档**，全部思路借鉴，代码自写：
 
 - **业务层 (v3.0)**：tianhm/ollama-batch-processor / shreyan241/gpt-proofreader / Xueheng-Li/proofreading (MIT) + qasync (BSD-2)
-- **GUI 层 (v4.0)**：pywebview (BSD-3) + diff-match-patch (Apache-2.0) + marked.js (MIT) + Fluent UI System Icons (MIT)
+- **GUI 层 (v4.0)**：pywebview (BSD-3) + diff-match-patch (Apache-2.0) + Fluent UI System Icons (MIT)
 - **DeAI 升级 (v4.1.7)**：jianshuo/claude-skills (MIT) — 9 轴风格指纹 + 事实骨架 + AI 6 处反制 + 8 轴自评
 - **Win11 重构 (v4.1.8)**：[Microsoft Learn 设计原则文档](https://learn.microsoft.com/zh-cn/windows/apps/design/)（致谢非协议）+ Fluent UI System Icons
 - **标点修复调研 (v4.3.4)**：[woct0rdho/typeset](https://github.com/woct0rdho/typeset) (MIT) + [huacnlee/autocorrect](https://github.com/huacnlee/autocorrect) (MIT) + [yongzhuo/macro-correct](https://github.com/yongzhuo/macro-correct) (Apache-2.0) + [sparanoid/chinese-copywriting-guidelines](https://github.com/sparanoid/chinese-copywriting-guidelines) (MIT) + GB/T 15834-2011《标点符号用法》

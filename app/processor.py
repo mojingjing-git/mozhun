@@ -88,8 +88,6 @@ _NON_RETRYABLE_ERRORS = (
     AuthenticationError, PermissionDeniedError, NotFoundError, BadRequestError,
     _FileTooLargeError,
 )
-# 可重试错误: 速率限制/超时/网络中断
-_RETRYABLE_ERRORS = (RateLimitError,)
 
 logger = setup_logging()
 

@@ -54,13 +54,13 @@ def test_utils():
     c = ProjectConfig(
         api_base="http://test", api_key="sk-123", model="gpt-4",
         timeout=60, max_retries=5, concurrency=8,
-        output_format="json", prompt_mode="polish",
+        prompt_mode="polish",
         custom_prompt="custom system prompt", temperature=0.3,
     )
     d = c.to_dict()
     c2 = ProjectConfig.from_dict(d)
     check("ProjectConfig 往返完整", c == c2)
-    check("ProjectConfig 包含所有字段", len(d) == 32)  # v5.1.0: + harness_enabled; v5.2c: + 4 双轨字段; v5.3.0: + workflow_mode
+    check("ProjectConfig 包含所有字段", len(d) == 29)  # v5.1.0: + harness_enabled; v5.2c: + 4 双轨字段; v5.3.0: + workflow_mode; 死字段清理: - output_format / - output_dir / - schema_version
 
     # ProjectConfig 边界值
     c_empty = ProjectConfig()
@@ -478,8 +478,6 @@ def test_v500_legacy_mode_migration():
     for old, expect in _LEGACY_MODE_MAP.items():
         c = ProjectConfig.from_dict({"prompt_mode": old})
         check(f"归一化 {old} -> {expect}", c.prompt_mode == expect)
-    check("schema v2 旧文件加载即升 3",
-          ProjectConfig.from_dict({"prompt_mode": "strict", "schema_version": 2}).schema_version == 3)
     check("保留模式不受影响 (strict)",
           ProjectConfig.from_dict({"prompt_mode": "strict"}).prompt_mode == "strict")
     check("保留模式不受影响 (punct_local)",

@@ -162,9 +162,6 @@ _MD_LINE_RES = [
     re.compile(r"\[[^\]\n]*\]\([^)\n]*\)"),         # 链接/图片
     re.compile(r"^\s*\|.+\|\s*$"),                  # 表格行
 ]
-_BULLET_RES = [
-    re.compile(r"^ {0,3}(?:\d+\.|[-*+])\s"),        # 列表行 (有序/无序)
-]
 
 
 def _count_matches(text: str, regex: re.Pattern) -> int:

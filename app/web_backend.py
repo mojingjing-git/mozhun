@@ -624,7 +624,6 @@ class Backend:
         wf = normalize_workflow(workflow) or effective_workflow(self._config)
         self._config.workflow_mode = wf
         self._config.harness_enabled = (wf == WORKFLOW_HARNESS)
-        self._config.output_format = "txt"
 
         # v4.1 (M3): task_id 用 uuid 避免硬编码 "1" (并发/多任务时唯一)
         task_id = f"proof_{uuid.uuid4().hex[:8]}"

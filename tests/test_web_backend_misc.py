@@ -149,20 +149,24 @@ def test_v418_corner_radius_tokens():
 
 # === test_v418_motion_tokens ===
 def test_v418_motion_tokens():
-    """v4.1.8: 5 类动画曲线 + 4 时长 (Win11 §3.7.2)."""
-    print("\n--- v4.1.8: 动画曲线 5 类 + 4 时长 ---", flush=True)
+    """v4.1.8: 3 类动画曲线 + 3 时长 (Win11 §3.7.2).
+
+    v5.4.4 清理: --curveFastOut / --curveLinear / --durationSlow 零引用已删,
+    连带删除本函数对应的 3 条字面量断言。
+    注: 下面 curveFastIn 断言的是字面值 `cubic-bezier(0, 0, 0, 1)`, 而被删的
+    --curveFastOut 值与之完全相同 —— 它属**巧合存活**, 不是"曲线还在用"。
+    将来谁删 --curveFastIn, 这条断言会跟着红。
+    """
+    print("\n--- v4.1.8: 动画曲线 3 类 + 3 时长 ---", flush=True)
     css = _read_style_css()
-    # 5 cubic-bezier
+    # 3 cubic-bezier
     check("curveFastIn", "cubic-bezier(0, 0, 0, 1)" in css)
     check("curvePointToPoint", "cubic-bezier(0.55, 0.55, 0, 1)" in css)
-    check("curveFastOut", "--curveFastOut:" in css)
     check("curveSoftOut", "cubic-bezier(1, 0, 1, 1)" in css)
-    check("curveLinear", "--curveLinear: linear" in css)
-    # 4 时长
+    # 3 时长
     check("durationSubtle=83ms", "--durationSubtle: 83ms" in css)
     check("durationFast=167ms", "--durationFast: 167ms" in css)
     check("durationNormal=250ms", "--durationNormal: 250ms" in css)
-    check("durationSlow=333ms", "--durationSlow: 333ms" in css)
 
 # === test_v418_dark_mode_tokens ===
 def test_v418_dark_mode_tokens():

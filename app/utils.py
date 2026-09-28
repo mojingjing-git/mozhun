@@ -364,13 +364,10 @@ class ProjectConfig:
     timeout: int = 120
     max_retries: int = 3
     concurrency: int = 2
-    output_format: str = "txt"
     prompt_mode: str = "strict"
     custom_prompt: str = ""
     temperature: float = 0.1
-    output_dir: str = ""
     chunking_preset: str = "balanced"  # NEW (v3.0+): chunking 档位 (fast/balanced/high_context/large/whole_file)
-    schema_version: int = 3  # v3.0+ 配置 schema 版本号; v5.0.0: 2→3 (模式精简+归一化)
     context_max_chars: int = 800   # NEW (v3.0+): 跨段上下文最大字符数
     context_max_chunks: int = 2    # NEW (v3.0+): 跨段上下文取最近几个 chunk
     ui_theme: str = "auto"  # NEW (v4.1.9): 主题三态 (auto/light/dark), Win11 §2.3 个人原则 — 主题持久化
@@ -412,13 +409,10 @@ class ProjectConfig:
             "timeout": self.timeout,
             "max_retries": self.max_retries,
             "concurrency": self.concurrency,
-            "output_format": self.output_format,
             "prompt_mode": self.prompt_mode,
             "custom_prompt": self.custom_prompt,
             "temperature": self.temperature,
-            "output_dir": self.output_dir,
             "chunking_preset": self.chunking_preset,
-            "schema_version": self.schema_version,
             "context_max_chars": self.context_max_chars,
             "context_max_chunks": self.context_max_chunks,
             "ui_theme": self.ui_theme,
@@ -453,13 +447,10 @@ class ProjectConfig:
             timeout=int(d.get("timeout") or 120),
             max_retries=int(d.get("max_retries") or 3),
             concurrency=int(d.get("concurrency") or 2),
-            output_format=d.get("output_format", "txt"),
             prompt_mode=_normalize_legacy_mode(d.get("prompt_mode") or "strict"),
             custom_prompt=d.get("custom_prompt", ""),
             temperature=float(d.get("temperature") if d.get("temperature") is not None else 0.1),
-            output_dir=d.get("output_dir", ""),
             chunking_preset=d.get("chunking_preset") or "balanced",
-            schema_version=3,  # v5.0.0: 旧文件 (值 2) 加载即升级, to_dict 落盘 3
             context_max_chars=int(d.get("context_max_chars") or 800),
             context_max_chunks=int(d.get("context_max_chunks") or 2),
             ui_theme=d.get("ui_theme") or "auto",
