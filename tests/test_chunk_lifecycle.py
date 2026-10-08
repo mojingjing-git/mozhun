@@ -702,6 +702,68 @@ def test_v530_preserve_done_and_force_rerun():
     check("强制重跑仍能覆盖 (出口没被堵死)", overwritten)
 
 
+def test_v550_truncated_not_reused_d9_kept():
+    """v5.5 (I-3): 截断结果**不复用**, 但 **D9 判据不被削弱**。
+
+    两条必须同时成立:
+      1. load_checkpoint 见 truncated=True → None (视为未完成, 下次重跑);
+      2. _checkpoint_is_done 仍认它是"有成功结果" → 后续失败/取消收尾的
+         preserve_done 不会把它冲掉 (D9 保护"另一条轨的好结果")。
+    只做 1 不做 2 会把 D9 打掉; 只做 2 不做 1 则截断结果永久锁死。
+    """
+    print("\n--- v5.5: 截断结果 × D9 保护 ---")
+    import json
+    import tempfile
+    from pathlib import Path
+    from app.utils import (
+        FileResult, FileTask, ProjectConfig, TaskStatus,
+        _checkpoint_file, _checkpoint_is_done, compute_prompt_hash_for_config,
+        load_checkpoint, save_checkpoint,
+    )
+
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False,
+                                     encoding='utf-8') as f:
+        f.write('原文' * 50)
+        tmp = Path(f.name)
+    try:
+        cfg = ProjectConfig(api_base='http://x', model='m', harness_enabled=False)
+        h = compute_prompt_hash_for_config(cfg)
+        cp_file = _checkpoint_file(tmp)
+
+        # 1) 截断但成功的断点
+        save_checkpoint(tmp, FileTask(
+            file_path=tmp, status=TaskStatus.COMPLETED, original_text='原文' * 50,
+            result=FileResult(original='原文' * 50, corrected='半篇结果',
+                              prompt_hash=h, truncated=True),
+        ))
+        check("截断结果不复用 (load_checkpoint → None)",
+              load_checkpoint(tmp, expected_hash=h) is None)
+        check("D9 判据仍认它 (有成功结果)", _checkpoint_is_done(cp_file) is True)
+
+        # 2) 失败/取消收尾 (preserve_done=True) 不得覆盖它
+        save_checkpoint(tmp, FileTask(
+            file_path=tmp, status=TaskStatus.CANCELLED, original_text='原文' * 50,
+            result=FileResult(original='原文' * 50, corrected='', error='已取消',
+                              prompt_hash=h),
+        ), preserve_done=True)
+        data = json.loads(cp_file.read_text(encoding='utf-8'))
+        check("取消收尾未覆盖截断结果",
+              data["status"] == "completed"
+              and data["result"]["corrected"] == "半篇结果", str(data.get("status")))
+
+        # 3) 成功写点仍可覆盖 (下次真跑完能落新结果)
+        save_checkpoint(tmp, FileTask(
+            file_path=tmp, status=TaskStatus.COMPLETED, original_text='原文' * 50,
+            result=FileResult(original='原文' * 50, corrected='新结果', prompt_hash=h),
+        ))
+        check("成功结果仍可覆盖截断结果",
+              load_checkpoint(tmp, expected_hash=h) is not None)
+        check("覆盖后不再标截断",
+              load_checkpoint(tmp, expected_hash=h).result.truncated is False)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
 def main():
     print("=" * 60)
     print("  chunk 级别 lifecycle 测试")
@@ -723,6 +785,7 @@ def main():
         test_m6_think_only_output_failed,           # v5.4 D5: 剥后为空 → FAILED
         test_m5_backoff_cancel_interrupts,          # v4.1.8.1 M5
         test_v530_preserve_done_and_force_rerun,    # v5.3.0 D9 + 强制重跑出口
+        test_v550_truncated_not_reused_d9_kept,     # v5.5 I-3: 截断 × D9
     ]
     for t in tests:
         try:

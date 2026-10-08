@@ -163,6 +163,23 @@ def compute_prompt_hash_for_config(cfg: "ProjectConfig") -> str:
     )
 
 
+def compute_source_hash(text: str) -> str:
+    """输入身份指纹 (v5.5 I-1): 由**已解码的原文文本**算 16 位 sha256 前缀。
+
+    与 compute_prompt_hash 的分工: 后者是"配置指纹"(生成条件), 本函数是
+    "输入指纹"(被校对的内容本身)。断点可复用要求两者同时匹配 —— 旧断点只有
+    配置指纹, 于是"改了文件 / 删了文件仍命中旧结果"(外部复核 M06)。
+
+    入参是已解码文本而非原始字节: 调用方 prepare_tasks 本来就要读文件 (读失败
+    要走 FAILED 占位分支), 先读后算让命中与未命中两条路径都**只读一次**;
+    若按原始字节哈希, 两条路径都会变成两次读。
+
+    返回值恒为非空 (空文本也有稳定哈希) —— 空文件是合法输入身份, 不能与
+    "算不出来"混为一谈。
+    """
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
 class TaskStatus(Enum):
     PENDING = "pending"
     RUNNING = "running"
@@ -246,6 +263,16 @@ class FileResult:
     # v5.1.0: harness 部分成功标记 (边界 12) — 存在未生效的编辑建议/整轮级
     # 告警时置位, UI 显示"完成（部分建议未采纳）"。不新增 TaskStatus 枚举。
     warnings: bool = False
+    # v5.5 (I-1): 输入身份指纹 (utils.compute_source_hash) — 与 prompt_hash 一起
+    # 决定断点可复用性。旧断点缺该键读作 "" (from_dict 默认值), load_checkpoint
+    # 在 expected_source_hash 非空时一律判不匹配 → 老断点一次性重跑 (属预期)。
+    # 新字段一律追加在末尾, 避免破坏既有的位置传参调用。
+    source_hash: str = ""
+    # v5.5 (I-3): 模型输出触顶 (finish_reason=length) — "结果不完整"标记。
+    # 语义边界: **不可作为缓存复用** (load_checkpoint 拒绝), 但仍是"已完成结果",
+    # 故 _checkpoint_is_done 保持"有成功结果"不变 —— D9 的 preserve_done 仍要
+    # 保护它不被后续失败/取消收尾覆盖。
+    truncated: bool = False
 
     @property
     def is_chunked(self) -> bool:
@@ -278,6 +305,8 @@ class FileResult:
             "failed_chunks": list(self.failed_chunks),
             "schema_version": self.schema_version,
             "warnings": self.warnings,
+            "source_hash": self.source_hash,
+            "truncated": self.truncated,
         }
 
     @classmethod
@@ -293,6 +322,8 @@ class FileResult:
             failed_chunks=list(d.get("failed_chunks", [])),
             schema_version=d.get("schema_version", 2),
             warnings=bool(d.get("warnings", False)),
+            source_hash=d.get("source_hash", ""),
+            truncated=bool(d.get("truncated", False)),
         )
 
 
@@ -798,10 +829,20 @@ def save_checkpoint(file_path: Path, task: FileTask, preserve_done: bool = False
         logger.error(f"保存断点失败 [{file_path}]: {e}")
 
 
-def load_checkpoint(file_path: Path, expected_hash: Optional[str] = None) -> FileTask | None:
+def load_checkpoint(
+    file_path: Path,
+    expected_hash: Optional[str] = None,
+    expected_source_hash: Optional[str] = None,
+) -> FileTask | None:
     """加载断点缓存。
     expected_hash: 若提供,则与缓存中 result.prompt_hash 比对,不匹配视为无缓存
     (返回 None),避免 prompt 改了之后旧缓存无声复用。
+    expected_source_hash (v5.5 I-1): 输入指纹。语义与 expected_hash 不同, 两档:
+      - `None` (默认) = **跳过输入指纹校验** —— 只有"不关心输入身份"的调用方
+        (旧测试直调) 才该传; 生产路径 prepare_tasks 一律传实算值。
+      - 非 None = 必须比对。**空串视为"身份不可判定", 一律判不可复用** (不能因为
+        "两边都是空"就放行: 旧断点的 source_hash 默认就是空串, 那正是
+        "删文件仍命中"的老 bug 形态)。
 
     v3.0 schema v2:
     - 自动 v1 → v2 迁移(FileResult.to_dict/from_dict 已兼容旧 dict 缺新字段)
@@ -835,12 +876,28 @@ def load_checkpoint(file_path: Path, expected_hash: Optional[str] = None) -> Fil
                     f"[断点] {file_path.name}: 上次被取消,强制重跑"
                 )
                 return None
+            # v5.5 (I-3): 截断结果不复用 (与 CANCELLED 同构, 但不改 _checkpoint_is_done
+            # —— 那个判据属于 D9, 保护"另一条轨的好结果"不被失败/取消收尾覆盖)。
+            if task.result is not None and getattr(task.result, "truncated", False):
+                logger.info(
+                    f"[断点] {file_path.name}: 上次结果被输出上限截断, 不复用, 重新处理"
+                )
+                return None
             if expected_hash is not None and task.result is not None:
                 if task.result.prompt_hash != expected_hash:
                     logger.info(
                         f"缓存 prompt 不匹配 [{file_path}]: "
                         f"old={task.result.prompt_hash or '(empty)'} "
                         f"new={expected_hash},将重新处理"
+                    )
+                    return None
+            if expected_source_hash is not None and task.result is not None:
+                cached_src = task.result.source_hash or ""
+                if not expected_source_hash or cached_src != expected_source_hash:
+                    logger.info(
+                        f"缓存输入不匹配 [{file_path}]: "
+                        f"old={cached_src or '(empty/legacy)'} "
+                        f"new={expected_source_hash or '(unavailable)'}, 将重新处理"
                     )
                     return None
             return task

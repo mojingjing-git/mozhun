@@ -281,9 +281,14 @@ def test_parse_tool_calls():
     msg = SimpleNamespace(tool_calls=[good, bad, nonobj, other, None])
     edits, parse_audit = parse_tool_calls(msg)
     check("合法调用解析出 1 条", len(edits) == 1 and edits[0]["old_text"] == "甲")
-    check("坏 JSON 2 条进 parse_audit", len(parse_audit) == 2)
+    # v5.5 (I-2): 未注册工具名不再静默丢弃 → other_tool 也进 parse_audit, 2 → 3 条
+    check("parse_audit 3 条 (坏 JSON 2 + 未注册工具 1)", len(parse_audit) == 3,
+          str([e["status"] for e in parse_audit]))
     check("坏 JSON 状态 SKIPPED_BAD_ARGS",
-          all(e["status"] == "SKIPPED_BAD_ARGS" for e in parse_audit))
+          [e["status"] for e in parse_audit].count("SKIPPED_BAD_ARGS") == 2,
+          str(parse_audit))
+    check("未注册工具状态 SKIPPED_UNKNOWN_TOOL",
+          any(e["status"] == "SKIPPED_UNKNOWN_TOOL" for e in parse_audit), str(parse_audit))
     check("非 edit_text 被忽略", all("other" not in json.dumps(e, default=str) for e in edits))
     # 无 tool_calls (无需修改场景)
     edits2, pa2 = parse_tool_calls(SimpleNamespace(tool_calls=None))
@@ -321,9 +326,10 @@ def test_order_and_overlap():
 class _FakeCompletion:
     """非流式 ChatCompletion 替身 (harness 路径)."""
 
-    def __init__(self, tool_calls=None, content="", total_tokens=42):
+    def __init__(self, tool_calls=None, content="", total_tokens=42, finish_reason=None):
         message = SimpleNamespace(tool_calls=tool_calls or [], content=content)
-        self.choices = [SimpleNamespace(message=message)]
+        # v5.5 (I-3): finish_reason 显式可注入 —— harness 截断语义要有用例锁定
+        self.choices = [SimpleNamespace(message=message, finish_reason=finish_reason)]
         self.usage = SimpleNamespace(total_tokens=total_tokens) if total_tokens else None
 
 
@@ -884,6 +890,187 @@ def test_v543_f6_audit_carries_old_len():
     check("old 非 str 时 old_len=0 (不抛)", _make_audit(0, "OK", "", None, "")["old_len"] == 0)
 
 
+def test_v550_required_fields_apply_edits():
+    """v5.5 (I-2): 缺必填字段 → SKIPPED_BAD_ARGS 且**不改正文**; 显式空串仍删除。
+
+    锁外部复核 M04: 旧实现 `e.get("new_text", "")` 让"缺字段"等价于"改成空串",
+    实测把 '他表视很好。' 变成 '他很好。' 且 audit 报 OK。
+    """
+    print("\n--- v5.5 I-2: 必填字段 ---")
+    from app.harness import apply_edits, audit_has_warnings
+
+    def st(audit):
+        return audit[0]["status"] if audit else None
+
+    # 1) 缺 new_text —— 本项核心回归
+    c, a = apply_edits("他表视很好。", [{"old_text": "表视"}])
+    check("缺 new_text: 正文不变 (不删原文)", c == "他表视很好。", repr(c))
+    check("缺 new_text: SKIPPED_BAD_ARGS", st(a) == "SKIPPED_BAD_ARGS", str(a))
+    check("缺 new_text: 理由点名字段", "new_text" in a[0]["reason"], a[0]["reason"])
+
+    # 2) 缺 old_text
+    c, a = apply_edits("他表视很好。", [{"new_text": "表示"}])
+    check("缺 old_text: 正文不变", c == "他表视很好。", repr(c))
+    check("缺 old_text: SKIPPED_BAD_ARGS", st(a) == "SKIPPED_BAD_ARGS", str(a))
+
+    # 3) 显式空串仍是合法删除 —— 必须与"缺字段"区分
+    c, a = apply_edits("他表视很好。", [{"old_text": "表视", "new_text": ""}])
+    check("显式 new_text='' 仍删除", c == "他很好。", repr(c))
+    check("显式删除 audit=OK", st(a) == "OK", str(a))
+
+    # 4) null / 非字符串
+    c, a = apply_edits("他表视很好。", [{"old_text": None, "new_text": "表示"}])
+    check("old_text=null → BAD_ARGS 且不改正文",
+          st(a) == "SKIPPED_BAD_ARGS" and c == "他表视很好。", f"{st(a)} {c!r}")
+    c, a = apply_edits("他表视很好。", [{"old_text": "表视", "new_text": 123}])
+    check("new_text 非字符串 → BAD_ARGS 且不改正文",
+          st(a) == "SKIPPED_BAD_ARGS" and c == "他表视很好。", f"{st(a)} {c!r}")
+
+    # 5) 一条 OK + 一条缺字段 → 部分成功 + warnings
+    c, a = apply_edits("他表视很好。", [
+        {"old_text": "表视", "new_text": "表示"},
+        {"old_text": "很好"},
+    ])
+    check("混合: OK 生效", c == "他表示很好。", repr(c))
+    check("混合: 缺字段条 BAD_ARGS", any(e["status"] == "SKIPPED_BAD_ARGS" for e in a), str(a))
+    check("混合: warnings=True", audit_has_warnings(a) is True)
+
+    # 6) 多余键忽略 (不因 schema 外字段误判)
+    c, a = apply_edits("他表视很好。", [{"old_text": "表视", "new_text": "表示", "extra": "x"}])
+    check("多余键被忽略 (仍 OK)", c == "他表示很好。" and st(a) == "OK", f"{c!r} {st(a)}")
+
+    # 7) 对照: 全部 NOT_FOUND 语义不变 (调用方判 FAILED)
+    c, a = apply_edits("他表视很好。", [{"old_text": "不存在", "new_text": "x"}])
+    check("对照: NOT_FOUND 不变",
+          st(a) == "SKIPPED_NOT_FOUND" and c == "他表视很好。", f"{st(a)} {c!r}")
+
+
+def test_v550_unknown_tool_and_raw_count():
+    """v5.5 (I-2): 未注册工具名进 audit; count_raw_tool_calls 提供原始条数。"""
+    print("\n--- v5.5 I-2: 未注册工具名 + raw 计数 ---")
+    from app.harness import count_raw_tool_calls, parse_tool_calls
+
+    def tc(name, args):
+        return SimpleNamespace(function=SimpleNamespace(name=name, arguments=args))
+
+    msg = SimpleNamespace(tool_calls=[
+        tc("no_change", "{}"),
+        tc("edit_text", json.dumps({"old_text": "甲", "new_text": "乙"}, ensure_ascii=False)),
+    ])
+    edits, audit = parse_tool_calls(msg)
+    check("已注册工具仍解析", len(edits) == 1 and edits[0]["old_text"] == "甲")
+    check("未注册工具进 audit",
+          any(e["status"] == "SKIPPED_UNKNOWN_TOOL" for e in audit), str(audit))
+    check("未注册工具留名", any("no_change" in e.get("reason", "") for e in audit), str(audit))
+    check("raw 计数 = 2", count_raw_tool_calls(msg) == 2)
+    check("raw 计数: None message → 0", count_raw_tool_calls(None) == 0)
+    check("raw 计数: 无 tool_calls → 0",
+          count_raw_tool_calls(SimpleNamespace(tool_calls=None)) == 0)
+
+
+def test_engine_v550_protocol_error_warns():
+    """有 tool_calls 但零条可应用 → 有界核查 → 放行 + WARN_PROTOCOL_NOOP (不判 FAILED)。
+
+    姊妹计划不变量 I2: 任何新路径都不会把"零改动"变成 FAILED。
+    """
+    print("\n--- 引擎 v5.5: 协议错误有界核查 ---")
+    from app.utils import ProjectConfig, TaskStatus
+
+    # a) max_retries=1: 首次可疑 → 重试一轮; 二次仍可疑 → 放行
+    client = _FakeHarnessClient([
+        _FakeCompletion(tool_calls=[_tool(name="no_change", old_text="表视")]),
+        _FakeCompletion(tool_calls=[_tool(name="no_change", old_text="表视")]),
+    ])
+    cfg = ProjectConfig(api_base="http://x", api_key="k", model="m",
+                        prompt_mode="strict", max_retries=1)
+    engine, done, key = _run_engine(cfg, "他表视很好。", client)
+    task = engine.tasks[key]
+    audits = engine.file_audits.get(key, [])
+    check("协议错误: 终态 COMPLETED (不 FAILED)", task.status == TaskStatus.COMPLETED, str(task.status))
+    check("协议错误: 正文不变", task.result.corrected == "他表视很好。", repr(task.result.corrected))
+    check("协议错误: 重试了一轮 (2 次调用)", len(client.calls) == 2, str(len(client.calls)))
+    check("协议错误: 落 WARN_PROTOCOL_NOOP",
+          any(e["status"] == "WARN_PROTOCOL_NOOP" for e in audits), str(audits))
+    check("协议错误: warnings=True", task.result.warnings is True)
+    check("协议错误: 未注册工具条目也在 audit",
+          any(e["status"] == "SKIPPED_UNKNOWN_TOOL" for e in audits), str(audits))
+
+    # b) max_retries=0 → 首轮即放行 (不烧重试)
+    client0 = _FakeHarnessClient([_FakeCompletion(tool_calls=[_tool(name="no_change", old_text="表视")])])
+    cfg0 = ProjectConfig(api_base="http://x", api_key="k", model="m",
+                         prompt_mode="strict", max_retries=0)
+    engine0, _, key0 = _run_engine(cfg0, "他表视很好。", client0)
+    check("预算 0 → 首轮即放行",
+          engine0.tasks[key0].status == TaskStatus.COMPLETED and len(client0.calls) == 1,
+          str(len(client0.calls)))
+    check("预算 0 → 仍有 WARN_PROTOCOL_NOOP",
+          any(e["status"] == "WARN_PROTOCOL_NOOP" for e in engine0.file_audits.get(key0, [])),
+          str(engine0.file_audits.get(key0)))
+
+
+def test_engine_v550_missing_new_text_not_silently_deleted():
+    """缺 new_text 端到端: 不得产出"已完成但正文被删"的结果。
+
+    语义: 该编辑是**已解析但不可应用** → 走边界 11 (全部未生效 → raise → 重试链耗尽
+    → FAILED)。判 FAILED 而不是静默成功, 是既有决策 (与 API 返回空内容同语义);
+    关键保证是**正文没有被删成半截**。
+    """
+    print("\n--- 引擎 v5.5: 缺 new_text 端到端 ---")
+    from app.utils import ProjectConfig, TaskStatus
+
+    client = _FakeHarnessClient([
+        _FakeCompletion(tool_calls=[_tool(old_text="表视")]),
+    ])
+    cfg = ProjectConfig(api_base="http://x", api_key="k", model="m",
+                        prompt_mode="strict", max_retries=0)
+    engine, done, key = _run_engine(cfg, "他表视很好。", client)
+    task = engine.tasks[key]
+    audits = engine.file_audits.get(key, [])
+    check("缺 new_text: 判 FAILED (不静默成功)", task.status == TaskStatus.FAILED, str(task.status))
+    check("缺 new_text: 结果 corrected 为空 (绝不留半截文本)",
+          task.result.corrected == "", repr(task.result.corrected))
+    check("缺 new_text: 有 SKIPPED_BAD_ARGS 审计",
+          any(e["status"] == "SKIPPED_BAD_ARGS" for e in audits), str(audits))
+
+
+def test_engine_v550_harness_truncation_not_reusable():
+    """harness 非流式 finish_reason=length → warnings + truncated=True + 断点不可复用。"""
+    print("\n--- 引擎 v5.5: harness 截断 ---")
+    from app.utils import (
+        ProjectConfig, TaskStatus, _checkpoint_file, _checkpoint_is_done,
+        compute_prompt_hash_for_config, load_checkpoint,
+    )
+
+    client = _FakeHarnessClient([
+        _FakeCompletion(tool_calls=[_tool(old_text="表视", new_text="表示")],
+                        finish_reason="length"),
+    ])
+    cfg = ProjectConfig(api_base="http://x", api_key="k", model="m",
+                        prompt_mode="strict", max_retries=0)
+    engine, done, key = _run_engine(cfg, "他表视很好。", client)
+    task = engine.tasks[key]
+    check("截断: 仍 COMPLETED (保留已得文本)", task.status == TaskStatus.COMPLETED, str(task.status))
+    check("截断: 编辑仍应用", task.result.corrected == "他表示很好。", repr(task.result.corrected))
+    check("截断: warnings=True", task.result.warnings is True)
+    check("截断: FileResult.truncated=True", task.result.truncated is True)
+
+    src = Path(key)
+    cp_file = _checkpoint_file(src)
+    check("截断: 断点存在", cp_file.exists())
+    check("截断: 断点不复用 (load_checkpoint → None)",
+          load_checkpoint(src, expected_hash=compute_prompt_hash_for_config(cfg)) is None)
+    check("截断: _checkpoint_is_done 仍为 True (D9 判据未削弱)",
+          _checkpoint_is_done(cp_file) is True)
+
+    # 对照: 未截断的结果照常可复用
+    client2 = _FakeHarnessClient([
+        _FakeCompletion(tool_calls=[_tool(old_text="表视", new_text="表示")]),
+    ])
+    engine2, _, key2 = _run_engine(cfg, "他表视很好。", client2)
+    check("对照: 未截断结果可复用",
+          load_checkpoint(Path(key2), expected_hash=compute_prompt_hash_for_config(cfg)) is not None)
+
+
 def main():
     tests = [
         test_boundary_1_not_found,
@@ -915,6 +1102,11 @@ def main():
         test_engine_harness_chunked_audit_merge,
         test_engine_retry_rebuilds_audit,
         test_hash_and_config_roundtrip,
+        test_v550_required_fields_apply_edits,
+        test_v550_unknown_tool_and_raw_count,
+        test_engine_v550_protocol_error_warns,
+        test_engine_v550_missing_new_text_not_silently_deleted,
+        test_engine_v550_harness_truncation_not_reusable,
     ]
     for t in tests:
         try:

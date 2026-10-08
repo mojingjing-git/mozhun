@@ -224,7 +224,9 @@ def test_processor():
     check("prepare_tasks 读取文本", engine2.tasks[str(tmp)].original_text == "test content for prepare")
 
     # prepare_tasks 断点缓存
-    from app.utils import save_checkpoint, compute_prompt_hash_for_config
+    from app.utils import (
+        save_checkpoint, compute_prompt_hash_for_config, compute_source_hash,
+    )
     with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8') as f:
         f.write("cached content")
         tmp = Path(f.name)
@@ -236,6 +238,9 @@ def test_processor():
     task.result = FileResult(
         original="cached content", corrected="fixed",
         prompt_hash=compute_prompt_hash_for_config(cfg),  # v5.0.1 (审计 I-3)
+        # v5.5 (I-1): 命中还要求输入指纹匹配 —— 断点 fixture 必须带当前原文的指纹,
+        # 否则(与真实旧断点同形)被判不可复用, 本用例会退化成"未命中"路径
+        source_hash=compute_source_hash("cached content"),
     )
     save_checkpoint(tmp, task)
     engine3 = ProcessingEngine(cfg)

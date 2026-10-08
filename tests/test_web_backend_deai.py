@@ -888,12 +888,18 @@ def test_v431_force_rerun_and_progress():
     from app.web_backend import Backend
 
     def _make_cache(fp: Path, cfg: ProjectConfig) -> None:
-        """参照 test_components.py: 造一个带正确指纹的 COMPLETED 断点缓存."""
+        """参照 test_components.py: 造一个带正确指纹的 COMPLETED 断点缓存.
+
+        v5.5 (I-1): 指纹现在是"配置指纹 + 输入指纹"双条件; 本 helper 的三个调用点
+        (a/b/c) 都写 "cached content", 故输入指纹按该文本算。
+        """
+        from app.utils import compute_source_hash  # v5.5 (I-1)
         task = FileTask(file_path=fp, original_text="cached content")
         task.status = TaskStatus.COMPLETED
         task.result = FileResult(
             original="cached content", corrected="cached fixed",
             prompt_hash=compute_prompt_hash_for_config(cfg),  # v5.0.1 (审计 I-3)
+            source_hash=compute_source_hash("cached content"),  # v5.5 (I-1)
         )
         save_checkpoint(fp, task)
 

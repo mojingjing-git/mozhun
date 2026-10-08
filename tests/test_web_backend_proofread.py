@@ -839,7 +839,7 @@ def test_v530_start_proofread_workflow():
     from app.processor import ProcessingEngine
     from app.utils import (
         FileResult, FileTask, TaskStatus,
-        compute_prompt_hash_for_config, save_checkpoint,
+        compute_prompt_hash_for_config, compute_source_hash, save_checkpoint,
     )
 
     with tempfile.TemporaryDirectory(prefix="v530_sp_") as tmp:
@@ -870,9 +870,11 @@ def test_v530_start_proofread_workflow():
 
         # 3) 老 5 参数调用仍绑定 force_rerun (第 6 位追加不破坏既有位置)
         h = compute_prompt_hash_for_config(b._config)
+        from app.utils import compute_source_hash  # v5.5 (I-1)
         save_checkpoint(src, FileTask(
             file_path=src, status=TaskStatus.COMPLETED, original_text="原文内容。" * 50,
-            result=FileResult(original="原文内容。" * 50, corrected="改好了", prompt_hash=h),
+            result=FileResult(original="原文内容。" * 50, corrected="改好了", prompt_hash=h,
+                              source_hash=compute_source_hash("原文内容。" * 50)),
         ))
         with patch.object(ProcessingEngine, "run_async", new=AsyncMock(return_value=None)):
             r_force = b.start_proofread([str(src)], "strict", "", "balanced", True)
@@ -894,7 +896,7 @@ def test_v540_think_residue_cache():
     from app.processor import ProcessingEngine
     from app.utils import (
         FileResult, FileTask, TaskStatus,
-        compute_prompt_hash_for_config, save_checkpoint,
+        compute_prompt_hash_for_config, compute_source_hash, save_checkpoint,
     )
 
     with tempfile.TemporaryDirectory(prefix="v540_think_") as tmp:
@@ -909,10 +911,12 @@ def test_v540_think_residue_cache():
         h = compute_prompt_hash_for_config(b._config)
 
         # 1) 原文干净 + corrected 含思维链残留 → 忽略缓存强制重跑
+        # v5.5 (I-1): 输入指纹带上 —— 本用例要验证的失效原因是"思维链残留",
+        # 不能让输入指纹不匹配成为另一个(也会让断言通过的)原因
         save_checkpoint(src, FileTask(
             file_path=src, status=TaskStatus.COMPLETED, original_text=body,
             result=FileResult(original=body, corrected=f"<think>推理</think>{body}",
-                              prompt_hash=h),
+                              prompt_hash=h, source_hash=compute_source_hash(body)),
         ))
         with patch.object(ProcessingEngine, "run_async", new=AsyncMock(return_value=None)):
             r_dirty = b.start_proofread([str(src)], "strict")
@@ -921,9 +925,13 @@ def test_v540_think_residue_cache():
 
         # 2) 原文自身含行首块 (corrected=原文) → 不重跑, 缓存照常命中
         body2 = f"<think>推理</think>{body}"
+        # v5.5 (I-1): 命中现在要求断点与磁盘原文一致 —— 本用例语义是"原文自带残留",
+        # 所以磁盘也要换成 body2。旧版缓存完全不看输入内容, 掩盖了这处 fixture 不自洽。
+        src.write_text(body2, encoding="utf-8")
         save_checkpoint(src, FileTask(
             file_path=src, status=TaskStatus.COMPLETED, original_text=body2,
-            result=FileResult(original=body2, corrected=body2, prompt_hash=h),
+            result=FileResult(original=body2, corrected=body2, prompt_hash=h,
+                              source_hash=compute_source_hash(body2)),  # v5.5 (I-1)
         ))
         with patch.object(ProcessingEngine, "run_async", new=AsyncMock(return_value=None)):
             r_self = b.start_proofread([str(src)], "strict")

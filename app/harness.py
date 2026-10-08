@@ -270,6 +270,20 @@ def apply_edits(original: str, edits: list[dict]) -> tuple[str, list[dict]]:
         new = e.get("new_text", "")
         reason = e.get("reason", "")
 
+        # v5.5 (I-2): **必填键存在性**先于类型检查。EDIT_TOOLS schema 里
+        # old_text / new_text 都是 required, 但旧实现用 e.get(key, "") 取默认值,
+        # 于是"缺 new_text"与"显式 new_text=''"不可区分 —— 前者会把命中的 old_text
+        # **整段删掉**, 而 audit 仍报 OK (外部复核 M04: '他表视很好。' → '他很好。')。
+        # 显式空串保留删除语义 (模型主动要求删除), 这里只拦"键根本不存在"。
+        _missing = [k for k in ("old_text", "new_text") if k not in e]
+        if _missing:
+            audit.append(_make_audit(
+                i, "SKIPPED_BAD_ARGS",
+                f"缺必填字段 {'/'.join(_missing)} (old_text / new_text 均为 required)",
+                str(old)[:PREVIEW_LIMIT], str(new)[:PREVIEW_LIMIT],
+            ))
+            continue
+
         # v5.4.2 (全量扫描 E5): 非字符串参数必须在类型边界上拦住。旧实现直通到
         # str.count/replace → TypeError 冒出 apply_edits, 违反本模块"apply 不抛
         # 异常"的契约, 且会在上层被当成通用失败烧掉整文件重试额度。
@@ -402,19 +416,41 @@ def audit_has_warnings(audit: list[dict]) -> bool:
     return False
 
 
+def count_raw_tool_calls(message) -> int:
+    """v5.5 (I-2): message 里 tool_calls 的**原始条数** (不看工具名、不看能否解析)。
+
+    与 parse_tool_calls 分开, 是为了不动它的 2 元组签名 (既有解包与用例依赖)。
+    processor 用它区分两种"零 edits":
+      - raw == 0 → 模型没走工具链 (F10 的可疑 content 路径, 归第 2 组扩展)
+      - raw > 0  → **协议错误** (工具名未注册 / 参数非法), 必须留痕
+    """
+    return len(getattr(message, "tool_calls", None) or [])
+
+
 def parse_tool_calls(message) -> tuple[list[dict], list[dict]]:
     """从 OpenAI 兼容响应的 message 中解析 edit_text 调用。
 
     返回 (edits, parse_audit): edits 是可直接喂给 apply_edits 的 dict 列表;
-    parse_audit 是参数解析失败的条目 (SKIPPED_BAD_ARGS), 由调用方并入
-    整轮 audit。忽略非 edit_text 的工具调用 (当前只暴露这一个工具)。
+    parse_audit 是参数解析失败/未注册工具的条目 (SKIPPED_BAD_ARGS /
+    SKIPPED_UNKNOWN_TOOL), 由调用方并入整轮 audit。
+
+    v5.5 (I-2): 未注册的工具名**不再静默 continue** —— 模型调了工具却一条都没生效时
+    必须留下可见痕迹 (否则前端只看到绿色"完成、零改动", 见外部复核 R03_unknown_tool)。
+    签名保持 2 元组不变 (既有解包与测试依赖); raw 条数另由 count_raw_tool_calls 提供。
     """
     edits: list[dict] = []
     parse_audit: list[dict] = []
     tool_calls = getattr(message, "tool_calls", None) or []
     for tc in tool_calls:
         fn = getattr(tc, "function", None)
-        if fn is None or getattr(fn, "name", "") != "edit_text":
+        if fn is None:
+            continue
+        tool_name = getattr(fn, "name", "") or ""
+        if tool_name != "edit_text":
+            parse_audit.append(_make_audit(
+                len(edits) + len(parse_audit), "SKIPPED_UNKNOWN_TOOL",
+                f"未注册的工具名 {tool_name or '(空)'} (只接受 edit_text)",
+            ))
             continue
         raw = getattr(fn, "arguments", "") or ""
         try:

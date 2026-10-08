@@ -42,6 +42,7 @@ from app.harness import (
     PREVIEW_LIMIT as _PREVIEW_LIMIT,   # v5.4.3 (F10): 放行告警的 note 截断长度
     _make_audit,
     content_suspicious_noop,
+    count_raw_tool_calls,
     CHUNK_SCOPE_NOTE,
     EDIT_TOOLS,
     TOOL_CHOICE,
@@ -50,7 +51,7 @@ from app.harness import (
     audit_has_warnings,
     parse_tool_calls,
 )
-from app.utils import compute_prompt_hash_for_config
+from app.utils import compute_prompt_hash_for_config, compute_source_hash
 from app.utils import (
     FileTask,
     FileResult,
@@ -176,6 +177,10 @@ class ProcessingEngine:
         # ⚠ 必须按 task_key 索引, **不能用引擎级布尔** —— 否则并发校对多个文件时,
         #   文件 B 会继承文件 A 已经用掉的预算, 首次可疑就直接放行 (等于没有兜底)。
         self._harness_suspect: dict[str, int] = {}
+        # v5.5 (I-1): 本次 prepare 读到的输入身份指纹 (file_key -> sha256 前缀)。
+        # 与 cached_files 同层: 会话内存态, 每次 prepare_tasks 重置; 结果组装
+        # (:581 附近) 从这里取 source_hash 落进 FileResult/断点。
+        self._source_hashes: dict[str, str] = {}
 
         self.on_file_done: Optional[Callable[[str, str], None]] = None
         self.on_file_start: Optional[Callable[[str], None]] = None
@@ -308,6 +313,8 @@ class ProcessingEngine:
         """
         # v4.3.1 (UX #7): 每次调用重置, cached_files 只反映本次 prepare 的命中
         self.cached_files = []
+        # v5.5 (I-1): 输入身份指纹与 cached_files 同层重置 —— 只反映本次 prepare
+        self._source_hashes = {}
         # 缓存 prompt/配置指纹 (后续 _process_file_async 写入 FileResult.prompt_hash 复用)
         # v4.1.8.1 (审计 C2): 纳入 chunking/context/temperature 等影响生成结果的字段
         # v4.1.8.2 (审计 E16): 补纳 api_base
@@ -317,25 +324,11 @@ class ProcessingEngine:
 
         for fp in file_paths:
             key = str(fp)
-            # v4.1.8.1 (审计 C5): 传 expected_hash, 由 load_checkpoint 统一做指纹比对.
-            # 空 hash 的 v1 旧断点在校验下自然失效 (强制重跑); 原 prepare_tasks 手动
-            # 二次校验 (Bug#3) 与 load_checkpoint 内部逻辑重复, 已删除.
-            # v4.3.1 (UX #7): force_rerun 时整体跳过缓存查找.
-            cached = None if force_rerun else load_checkpoint(
-                fp, expected_hash=self._current_prompt_hash
-            )
-            # v5.4 (PLAN §2 D9): 旧断点定向失效 — corrected 含思维链残留 (原文自身不含)
-            # 时忽略缓存强制重跑; 只烧脏文件, 不动 prompt_hash/schema (v2.1 复审口径)。
-            if cached and cached.is_done and has_think_residue(cached.result):
-                self._log(f"[思维链] {fp.name}: 旧断点含思维链残留, 忽略缓存强制重跑")
-                cached = None
-            if cached and cached.is_done:
-                self.tasks[key] = cached
-                # v4.3.1 (UX #7): 记录缓存命中, bridge 把它上报给前端
-                self.cached_files.append(key)
-                self._log(f"[缓存] {fp.name}: 已有校对结果，跳过")
-                continue
-
+            # v5.5 (I-1) 顺序变更: **先读文件, 再查缓存**。
+            # 旧顺序 (先查缓存后读文件) 的后果: ① 文件内容改了、甚至文件被删除,
+            # 都仍命中旧断点 (内容与存在性完全不参与判定); ② 没有原文可算输入指纹。
+            # 现在读失败直接落到下面的 FAILED 占位分支, 不再查缓存 —— 用户看到的是
+            # "读取失败", 而不是被旧结果冒充成"已完成"。
             try:
                 text = read_file_text(fp)
             except Exception as e:
@@ -355,6 +348,34 @@ class ProcessingEngine:
                 placeholder.end_time = time.time()
                 self.tasks[key] = placeholder
                 continue
+
+            # v5.5 (I-1): 输入身份指纹 (已解码原文) — 与配置指纹一起决定断点可复用性
+            src_hash = compute_source_hash(text)
+            self._source_hashes[key] = src_hash
+
+            # v4.1.8.1 (审计 C5): 传 expected_hash, 由 load_checkpoint 统一做指纹比对.
+            # 空 hash 的 v1 旧断点在校验下自然失效 (强制重跑); 原 prepare_tasks 手动
+            # 二次校验 (Bug#3) 与 load_checkpoint 内部逻辑重复, 已删除.
+            # v4.3.1 (UX #7): force_rerun 时整体跳过缓存查找.
+            # v5.5 (I-1): 一并传 expected_source_hash —— 旧断点无 source_hash 字段,
+            # 一律判不匹配 (一次性重跑, 属预期, 与 |he= / |wm= 指纹变更同质)。
+            cached = None if force_rerun else load_checkpoint(
+                fp,
+                expected_hash=self._current_prompt_hash,
+                expected_source_hash=src_hash,
+            )
+            # v5.4 (PLAN §2 D9): 旧断点定向失效 — corrected 含思维链残留 (原文自身不含)
+            # 时忽略缓存强制重跑; 只烧脏文件, 不动 prompt_hash/schema (v2.1 复审口径)。
+            if cached and cached.is_done and has_think_residue(cached.result):
+                self._log(f"[思维链] {fp.name}: 旧断点含思维链残留, 忽略缓存强制重跑")
+                cached = None
+            if cached and cached.is_done:
+                self.tasks[key] = cached
+                # v4.3.1 (UX #7): 记录缓存命中, bridge 把它上报给前端
+                self.cached_files.append(key)
+                self._log(f"[缓存] {fp.name}: 已有校对结果，跳过")
+                continue
+
             # v4.3.3: 本地标点修复 (开关见 ProjectConfig.punct_fix) — 半角引号/
             # 逗号等确定性错误用脚本修, 不消耗 LLM; 修复计入指纹 (改开关自动重跑)
             # v4.3.3 (评审 E-1): 「仅标点修复」模式不在预处理阶段修 — 原文保持
@@ -576,6 +597,16 @@ class ProcessingEngine:
 
                 # Phase 3: chunks_results 累积到整文件 result
                 failed_chunks = [i for i, c in enumerate(chunks_results) if c.error]
+                # v5.5 (I-1): 输入指纹取自 prepare 批次表。取不到时会落盘空串 →
+                # 该结果此后**永不命中缓存**(每次重跑烧 token), 属静默劣化, 故留痕。
+                # 生产路径 (web_backend 每次新建 engine 且只 prepare 一次) 不可达;
+                # 引擎被跨批次复用时才可能出现 (tests 里 eng.tasks[k]=task 的形态)。
+                _src_hash = self._source_hashes.get(key, "")
+                if not _src_hash:
+                    self._log(
+                        f"[警告] {task.file_path.name}: 本次缺少输入指纹, "
+                        f"结果将被判为不可缓存 (下次仍会重跑)"
+                    )
                 # v5.1.0: harness 部分成功 (边界 12) — 有未生效的编辑建议或
                 # 整轮级告警时置 warnings (不新增 TaskStatus 枚举)
                 result = FileResult(
@@ -587,6 +618,11 @@ class ProcessingEngine:
                     chunks_results=chunks_results,
                     failed_chunks=failed_chunks,
                     schema_version=2,
+                    # v5.5 (I-1): 输入身份指纹随结果落盘 —— 下次命中要求它与当前原文一致
+                    source_hash=_src_hash,
+                    # v5.5 (I-3): 触顶截断 → 结果不完整, 不可作为缓存复用 (load_checkpoint
+                    # 拒绝), 但状态仍是 COMPLETED + warnings, D9 保护不受影响
+                    truncated=(key in self.truncated_keys),
                     warnings=(
                         audit_has_warnings(self.file_audits.get(key, []))
                         # v5.3.0: 模型输出触顶 (finish_reason=length) 也算告警
@@ -984,6 +1020,16 @@ class ProcessingEngine:
 
         token_count = completion.usage.total_tokens if getattr(completion, "usage", None) else 0
         message = completion.choices[0].message
+        # v5.5 (I-3): 非流式路径同样要读 finish_reason —— 旧版只有流式路径读
+        # (:913-932), harness 被输出上限截断时结果照旧标 COMPLETED、写成功断点、
+        # 可被缓存命中, 用户拿到的是"半篇 + 绿色完成"。
+        _finish_reason = getattr(completion.choices[0], "finish_reason", None)
+        if _finish_reason == "length":
+            self.truncated_keys.add(task_key)
+            self._log(
+                f"[截断] {name}: 模型输出触顶 (finish_reason=length), "
+                f"编辑建议可能不完整 (结果标记为不可复用)"
+            )
         edits, parse_audit = parse_tool_calls(message)
 
         # v5.4.1 (用户烟测 Q1): 0 tool_calls 防误报守卫 — 推理模型偶发不产
@@ -998,7 +1044,36 @@ class ProcessingEngine:
         noop_audit: Optional[dict] = None      # v5.4.3 (F10) 放行时的告警条目
         if not edits:
             _content = getattr(message, "content", None) or ""
-            if content_suspicious_noop(_content):
+            # v5.5 (I-2): **协议错误** —— 模型确实发起了工具调用, 却一条都没能变成
+            # 可应用的 edit (未注册工具名 / 参数非法)。这与"审过了没发现错"是两回事:
+            # 不判 FAILED (姊妹计划不变量 I2 + F10 既有取舍), 但必须留痕 + 有界重试。
+            _raw_calls = count_raw_tool_calls(message)
+            if _raw_calls > 0:
+                _retry_budget = max(0, int(self.config.max_retries or 0))
+                _suspect = self._harness_suspect.get(task_key, 0)
+                _statuses = "/".join(
+                    sorted({e.get("status", "") for e in parse_audit})
+                ) or "(无审计条目)"
+                if _suspect < _retry_budget:
+                    self._harness_suspect[task_key] = _suspect + 1
+                    self._log(
+                        f"[harness] {name}: 收到 {_raw_calls} 个工具调用但无一条可应用 "
+                        f"({_statuses}), 第 {_suspect + 1} 次可疑 → 重试"
+                    )
+                    raise ValueError(
+                        f"harness 协议错误: {_raw_calls} 个 tool_calls 全部无法应用 "
+                        f"({_statuses}) — 疑似未注册工具名或参数非法"
+                    )
+                self._log(
+                    f"[harness] {name}: 连续 {_suspect} 次协议错误 "
+                    f"({_raw_calls} 个 tool_calls, {_statuses}), 放行不判失败"
+                )
+                noop_audit = _make_audit(
+                    -1, "WARN_PROTOCOL_NOOP",
+                    f"模型提交了 {_raw_calls} 个工具调用但无一条可应用 ({_statuses}), "
+                    f"已放行不判失败",
+                )
+            elif content_suspicious_noop(_content):
                 preview = _content.strip().replace("\n", " ")[:80]
                 # 重试预算 = 实际可用的重试次数。
                 # ⚠ 计划 v2 这里写的是 max(1, max_retries) —— 那样 max_retries=0
