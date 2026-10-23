@@ -43,6 +43,17 @@ _RE_UNIT_OK = re.compile(r"^OK(?:\s|$)", re.MULTILINE)   # 只认 OK, 不认 FAI
 #   (旧版 (OK|FAILED) 会让失败套件也走 pass_n = ran_n, 虚增通过数)
 _RE_UNIT_FAILED = re.compile(r"^FAILED \((?:failures|errors)=(\d+)", re.MULTILINE)
 
+# 失败细节行: unittest 的 "FAIL: xxx" / "ERROR: xxx" 标题, 以及
+# AssertionError / Traceback 原文。
+# 为什么需要它: 子进程输出走 capture_output, 门禁原本只回显每个套件的
+# 最后 3 行, 于是一次失败在 CI 日志里只剩一行 "x pass, y fail" ——
+# 到底是哪条断言挂了无从判断 (2026-10-24 的 test_push_channel flaky
+# 就是这么查了半天). 失败时把细节行一并打出来, CI 日志自带诊断信息.
+_RE_FAIL_DETAIL = re.compile(
+    r"^\s*(?:FAIL|ERROR):|AssertionError|Traceback \(most recent",
+    re.MULTILINE,
+)
+
 total_pass = 0
 total_fail = 0
 results = []
@@ -128,6 +139,17 @@ try:
             extra_tail = [ln for ln in err.splitlines()
                           if _RE_RAN.match(ln) or _RE_UNIT_OK.match(ln)
                           or _RE_UNIT_FAILED.match(ln)]
+
+            # 失败时回显细节行 (stdout + stderr 都扫) —— 断言挂在哪、
+            # 抛的什么异常, 一眼可见, 不用再去本地复现猜。
+            if fail_n > 0:
+                detail = [ln for ln in (out.splitlines() + err.splitlines())
+                          if _RE_FAIL_DETAIL.search(ln)]
+                if detail:
+                    print(f"  --- 失败细节 ({t}) ---", flush=True)
+                    for line in detail[:60]:
+                        print(f"  | {line}", flush=True)
+                    print(f"  --- 失败细节结束 ({t}) ---", flush=True)
             seen = set()
             for line in tail + extra_tail:
                 if line in seen:
