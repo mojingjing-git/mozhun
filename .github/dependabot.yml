@@ -10,7 +10,15 @@ updates:
     labels:
       - "dependencies"
     groups:
+      # 补 patterns: 之前只写了 update-types, 分组没有真正生效 ——
+      # 2026-09-08 那批 pip 升级 (clr_loader / requests / pythonnet /
+      # comtypes 四个 minor) 仍然各开了一个独立 PR, 而不是合并成一个。
+      # patterns 显式写 "*" 后, 所有 pip 依赖的 minor/patch 升级会打进
+      # 同一个 PR; major 升级 (如 openai 1.x -> 3.x) 不在本组, 仍单独开,
+      # 需要人工看 breaking change。
       python-minor:
+        patterns:
+          - "*"
         update-types:
           - "minor"
           - "patch"
