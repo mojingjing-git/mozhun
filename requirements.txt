@@ -6,7 +6,7 @@ openai>=3.8.0,<4.0
 requests>=2.34.2
 # v4.1.1 显式声明: pywebview 6.x edgechromium 后端依赖这三个调 Win32 .NET / COM
 # 之前只依赖 pywebview 自动拉, 实测 comtypes 没自动装上, 导致 webview.start() 挂
-pythonnet>=3.0
+pythonnet>=3.1.0
 clr_loader>=0.3.1
 comtypes>=1.2
 
