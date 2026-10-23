@@ -10,6 +10,13 @@ jobs:
   smoke:
     name: Import smoke (${{ matrix.python-version }})
     runs-on: windows-latest
+    # CI 修复: 整个 job 统一 UTF-8.
+    # runner 的 locale 是 en-US (codepage 1252), Python 的 stdout 默认跟随它,
+    # 测试脚本 print 中文时 UnicodeEncodeError -> 套件 rc=1 -> 门禁误判为失败.
+    # run_all_tests.py 里也给子进程显式下发了同一个变量, 这里是 job 级的
+    # 统一兜底 (compileall / import 等其他步骤的输出同样受益).
+    env:
+      PYTHONIOENCODING: utf-8
     strategy:
       fail-fast: false
       matrix:

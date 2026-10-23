@@ -58,11 +58,22 @@ try:
         home = tempfile.mkdtemp(prefix="mozhun_gate_")
         try:
             print(f"\n{'='*60}\n  {t}\n{'='*60}", flush=True)
+            # CI 修复: 子进程 stdout 必须显式给 UTF-8.
+            # 文件顶部的 sys.stdout.reconfigure 只作用于**父进程**自己;
+            # 子进程的 stdout 编码走它自己的 locale 默认值 —— GitHub Windows
+            # runner 的 locale 是 en-US (codepage 1252), print 中文直接
+            # UnicodeEncodeError -> 子进程 rc=1 -> 门禁把整个套件判成 FAIL
+            # (2026-09-27 起 master CI 持续红, 与业务代码无关).
+            # subprocess 的 encoding="utf-8" 只管**解码**方向 (父读子),
+            # 不管子进程的**编码**方向 (子写stdout), 所以必须走 env 下发.
+            # 显式写进 env 而不是靠 os.environ 继承: 不依赖调用方是否设了
+            # PYTHONIOENCODING, 任何环境 (本地 / CI / 别人机器) 都一致.
             result = subprocess.run(
                 [sys.executable, 'tests/' + t],
                 cwd=str(Path(__file__).parent),
                 env={**os.environ, 'PYTHONPATH': str(Path(__file__).parent),
-                     'PROOFREADER_HOME': home},
+                     'PROOFREADER_HOME': home,
+                     'PYTHONIOENCODING': 'utf-8'},
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
