@@ -1,3 +1,3 @@
 # v4.1.8.2 (审计 K5): 打包工具链声明 — 此前构建依赖用户全局解释器里的
 # PyInstaller, 版本未钉住且新环境无法复现. build.spec 使用的参数以 6.x 验证.
-pyinstaller>=6.15,<7
+pyinstaller>=6.22.3,<7
