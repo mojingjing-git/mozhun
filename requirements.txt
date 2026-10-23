@@ -8,7 +8,7 @@ requests>=2.34.2
 # 之前只依赖 pywebview 自动拉, 实测 comtypes 没自动装上, 导致 webview.start() 挂
 pythonnet>=3.1.0
 clr_loader>=0.3.1
-comtypes>=1.2
+comtypes>=1.4.16
 
 # === 构建依赖 (v4.1.8.2 审计 K5): 打包工具此前完全未声明, 换机器无法复现 ===
 # 安装: pip install -r requirements.txt -r requirements-build.txt
